@@ -6207,7 +6207,8 @@ router.get('/proxy/*', async (req, res) => {
       responseType: 'stream',
       timeout: 15000 
     });
-
+res.setHeader('Access-Control-Allow-Origin', 'https://nexsignfrontend.vercel.app');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     // ৩. প্রয়োজনীয় হেডার সেট করা (এটি পিডিএফ রেন্ডারিংয়ের জন্য অত্যন্ত গুরুত্বপূর্ণ)
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
