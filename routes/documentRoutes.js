@@ -6451,7 +6451,6 @@
 // });
 
 // module.exports = router;
-
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 const express = require('express');
 const router = express.Router();
@@ -6468,6 +6467,9 @@ const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
 });
+
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
 
 // ২. হেল্পার: স্বাক্ষর মার্জ করা (PDF-Lib)
 const mergeSignatures = async (doc) => {
@@ -6550,6 +6552,8 @@ const sendSigningEmail = async (party, docTitle, token) => {
 };
 
 // --- ROUTES ---
+
+// ১. ড্যাশবোর্ড ডাটা (শুধুমাত্র ওনারের ডাটা দেখাবে)
 router.get('/', auth, async (req, res) => {
   try {
     const docs = await Document.find({ owner: req.user.id }).sort({ updatedAt: -1 });
@@ -6558,6 +6562,38 @@ router.get('/', auth, async (req, res) => {
     res.status(500).json({ error: "ডকুমেন্ট লোড করা যায়নি।" });
   }
 });
+
+// ২. পিডিএফ আপলোড রাউট
+router.post('/upload', auth, upload.single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { resource_type: "raw", folder: "nexsign_docs", format: 'pdf' },
+        (err, res) => err ? reject(err) : resolve(res)
+      );
+      stream.end(req.file.buffer);
+    });
+
+    const newDoc = new Document({
+      title: req.body.title || 'Untitled Document',
+      fileUrl: result.secure_url,
+      fileId: result.public_id,
+      owner: req.user.id,
+      status: 'draft',
+      parties: JSON.parse(req.body.parties || '[]'),
+      fields: []
+    });
+
+    await newDoc.save();
+    res.json(newDoc);
+  } catch (err) {
+    res.status(500).json({ error: "আপলোড ব্যর্থ হয়েছে।" });
+  }
+});
+
+// ৩. সাইনিং লিঙ্ক পাঠানো
 router.post('/send', auth, async (req, res) => {
   try {
     const doc = await Document.findOne({ _id: req.body.id, owner: req.user.id });
@@ -6567,7 +6603,7 @@ router.post('/send', auth, async (req, res) => {
     doc.parties[0].token = token;
     doc.parties[0].status = 'sent';
     doc.status = 'in_progress';
-    doc.currentPartyIndex = 0; // প্রথম সাইনার দিয়ে শুরু
+    doc.currentPartyIndex = 0;
     doc.markModified('parties');
     await doc.save();
     await sendSigningEmail(doc.parties[0], doc.title, token);
@@ -6575,6 +6611,7 @@ router.post('/send', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ৪. সিগনেচার সাবমিট ও পরবর্তী সাইনার লজিক
 router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields } = req.body;
@@ -6593,12 +6630,12 @@ router.post('/sign/submit', async (req, res) => {
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
-      doc.currentPartyIndex = idx + 1; // 🌟 এখানে ইনডেক্স আপডেট করা হয়েছে
+      doc.currentPartyIndex = idx + 1;
       await doc.save();
       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
       res.json({ next: true });
     } else {
-      doc.currentPartyIndex = idx; // শেষ সাইনার
+      doc.currentPartyIndex = idx;
       await doc.save();
       await generateAndSendFinalDoc(doc);
       res.json({ completed: true });
@@ -6606,13 +6643,17 @@ router.post('/sign/submit', async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Submit failed" }); }
 });
 
+// ৫. সাইনিং পেজের ডাটা লোড
 router.get('/sign/:token', async (req, res) => {
-  const doc = await Document.findOne({ "parties.token": req.params.token });
-  if (!doc) return res.status(404).json({ error: "Invalid link" });
-  const party = doc.parties.find(p => p.token === req.params.token);
-  res.json({ document: doc, party: { ...party.toObject(), index: doc.parties.indexOf(party) } });
+  try {
+    const doc = await Document.findOne({ "parties.token": req.params.token });
+    if (!doc) return res.status(404).json({ error: "Invalid link" });
+    const party = doc.parties.find(p => p.token === req.params.token);
+    res.json({ document: doc, party: { ...party.toObject(), index: doc.parties.indexOf(party) } });
+  } catch (err) { res.status(500).json({ error: "Error fetching signing session" }); }
 });
 
+// ৬. পিডিএফ প্রক্সি (CORS ফিক্স)
 router.get('/proxy/*', async (req, res) => {
   try {
     const path = req.params[0];
