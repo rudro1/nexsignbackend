@@ -6677,6 +6677,11 @@ const nodemailer = require('nodemailer');
 const Document = require('../models/Document');
 const auth = require('../middleware/auth');
 
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 // ১. কনফিগারেশন
 const transporter = nodemailer.createTransport({
   service: 'gmail',
@@ -6775,30 +6780,73 @@ router.get('/', auth, async (req, res) => {
 });
 
 // ২. আপলোড রাউট
+// router.post('/upload', auth, upload.single('pdf'), async (req, res) => {
+//   try {
+//     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+//     const result = await new Promise((resolve, reject) => {
+//       const stream = cloudinary.uploader.upload_stream(
+//         { resource_type: "raw", folder: "nexsign_docs", format: 'pdf' },
+//         (err, res) => err ? reject(err) : resolve(res)
+//       );
+//       stream.end(req.file.buffer);
+//     });
+//     const newDoc = new Document({
+//       title: req.body.title || 'Untitled Document',
+//       fileUrl: result.secure_url,
+//       fileId: result.public_id,
+//       owner: req.user.id,
+//       status: 'draft',
+//       parties: JSON.parse(req.body.parties || '[]'),
+//       fields: []
+//     });
+//     await newDoc.save();
+//     res.json(newDoc);
+//   } catch (err) { res.status(500).json({ error: "Upload failed" }); }
+// });
 router.post('/upload', auth, upload.single('pdf'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+    // ১. ক্লাউডিনারি আপলোড স্ট্রিম (উন্নত এরর হ্যান্ডলিং সহ)
     const result = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { resource_type: "raw", folder: "nexsign_docs", format: 'pdf' },
-        (err, res) => err ? reject(err) : resolve(res)
+        { 
+          resource_type: "raw", 
+          folder: "nexsign_docs", 
+          format: 'pdf',
+          access_mode: 'public' 
+        },
+        (err, res) => {
+          if (err) return reject(err);
+          resolve(res);
+        }
       );
       stream.end(req.file.buffer);
     });
+
+    // ২. পার্টজ (Parties) হ্যান্ডলিং
+    let partiesData = [];
+    try {
+      partiesData = typeof req.body.parties === 'string' ? JSON.parse(req.body.parties) : (req.body.parties || []);
+    } catch (e) { partiesData = []; }
+
     const newDoc = new Document({
       title: req.body.title || 'Untitled Document',
       fileUrl: result.secure_url,
       fileId: result.public_id,
       owner: req.user.id,
       status: 'draft',
-      parties: JSON.parse(req.body.parties || '[]'),
+      parties: partiesData,
       fields: []
     });
+
     await newDoc.save();
     res.json(newDoc);
-  } catch (err) { res.status(500).json({ error: "Upload failed" }); }
+  } catch (err) {
+    console.error("Upload Error Details:", err);
+    res.status(500).json({ error: "Upload failed on server", details: err.message });
+  }
 });
-
 // ৩. সাইনিং লিঙ্ক পাঠানো
 router.post('/send', auth, async (req, res) => {
   try {
