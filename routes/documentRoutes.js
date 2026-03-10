@@ -6550,7 +6550,14 @@ const sendSigningEmail = async (party, docTitle, token) => {
 };
 
 // --- ROUTES ---
-
+router.get('/', auth, async (req, res) => {
+  try {
+    const docs = await Document.find({ owner: req.user.id }).sort({ updatedAt: -1 });
+    res.json(docs);
+  } catch (err) {
+    res.status(500).json({ error: "ডকুমেন্ট লোড করা যায়নি।" });
+  }
+});
 router.post('/send', auth, async (req, res) => {
   try {
     const doc = await Document.findOne({ _id: req.body.id, owner: req.user.id });
