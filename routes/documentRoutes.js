@@ -5803,6 +5803,15 @@ const nodemailer = require('nodemailer');
 const Document = require('../models/Document');
 const auth = require('../middleware/auth');
 
+
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 } 
+});
+
+
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -5820,7 +5829,42 @@ cloudinary.config({
 
 // });
 
+// নিশ্চিত করুন ফাইলের শুরুতে 'upload' ডিফাইন করা আছে (আগের বার যেমন দেখিয়েছিলাম)
+router.post('/upload', [auth, upload.single('file')], async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
 
+    const publicId = `nexsign_docs/${Date.now()}`;
+    
+    // ক্লাউডিনারিতে বাফার স্ট্রিম করা
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { resource_type: "raw", public_id: publicId, format: 'pdf' }, 
+        (err, res) => {
+          if (err) return reject(err);
+          resolve(res);
+        }
+      );
+      stream.end(req.file.buffer);
+    });
+
+    // ডাটাবেসে ডকুমেন্ট তৈরি
+    const newDoc = new Document({ 
+      title: req.file.originalname.replace('.pdf', ''), 
+      fileUrl: result.secure_url, 
+      fileId: result.public_id, 
+      owner: req.user.id 
+    });
+
+    await newDoc.save();
+    res.json(newDoc);
+  } catch (err) {
+    console.error("Upload Error:", err);
+    res.status(500).json({ error: "File upload failed", details: err.message });
+  }
+});
 // const transporter = nodemailer.createTransport({
 //   host: "smtp.gmail.com",
 //   port: 587,
@@ -6060,19 +6104,19 @@ router.get('/', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Fetch error" }); }
 });
 
-router.post('/upload', [auth, upload.single('file')], async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).send("No file");
-    const publicId = `nexsign_docs/${Date.now()}`;
-    const result = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream({ resource_type: "raw", public_id: publicId, format: 'pdf' }, (err, res) => err ? reject(err) : resolve(res));
-      stream.end(req.file.buffer);
-    });
-    const newDoc = new Document({ title: req.file.originalname.replace('.pdf', ''), fileUrl: result.secure_url, fileId: result.public_id, owner: req.user.id });
-    await newDoc.save();
-    res.json(newDoc);
-  } catch (err) { res.status(500).send("Error"); }
-});
+// router.post('/upload', [auth, upload.single('file')], async (req, res) => {
+//   try {
+//     if (!req.file) return res.status(400).send("No file");
+//     const publicId = `nexsign_docs/${Date.now()}`;
+//     const result = await new Promise((resolve, reject) => {
+//       const stream = cloudinary.uploader.upload_stream({ resource_type: "raw", public_id: publicId, format: 'pdf' }, (err, res) => err ? reject(err) : resolve(res));
+//       stream.end(req.file.buffer);
+//     });
+//     const newDoc = new Document({ title: req.file.originalname.replace('.pdf', ''), fileUrl: result.secure_url, fileId: result.public_id, owner: req.user.id });
+//     await newDoc.save();
+//     res.json(newDoc);
+//   } catch (err) { res.status(500).send("Error"); }
+// });
 //✅ ইমেইল পাঠানোর রাউট (এটি যোগ করুন)
 // ✅ ইমেইল পাঠানোর রাউট - এটি অবশ্যই /:id এর উপরে রাখবেন
 // router.post('/send', auth, async (req, res) => {
