@@ -6451,123 +6451,22 @@
 // });
 
 // module.exports = router;
-const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const axios = require('axios');
 const { v2: cloudinary } = require('cloudinary');
-const crypto = require('crypto');
-const nodemailer = require('nodemailer');
 const Document = require('../models/Document');
 const auth = require('../middleware/auth');
-
-// ১. কনফিগারেশন
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-});
 
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// ২. হেল্পার: স্বাক্ষর মার্জ করা (PDF-Lib)
-const mergeSignatures = async (doc) => {
-  const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
-  const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
-  const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
-  const pages = pdfDoc.getPages();
-
-  for (const f of doc.fields) {
-    try {
-      const fd = typeof f === 'string' ? JSON.parse(f) : f;
-      if (fd.value && fd.filled) {
-        const pageIndex = Number(fd.page) - 1;
-        if (pageIndex < 0 || pageIndex >= pages.length) continue;
-
-        const page = pages[pageIndex];
-        const { width, height } = page.getSize();
-        
-        const drawW = (Number(fd.width) * width) / 100;
-        const drawH = (Number(fd.height) * height) / 100;
-        const drawX = (Number(fd.x) * width) / 100;
-        const drawY = height - ((Number(fd.y) * height) / 100) - drawH;
-
-        if (fd.value.startsWith('data:image')) {
-          const base64Data = fd.value.split(',')[1];
-          const sigImg = await pdfDoc.embedPng(Buffer.from(base64Data, 'base64'));
-          page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
-        } else {
-          page.drawText(String(fd.value), {
-            x: drawX + 2, y: drawY + (drawH / 4),
-            size: 11, font: timesFont, color: rgb(0, 0, 0),
-          });
-        }
-      }
-    } catch (e) { continue; }
-  }
-  return await pdfDoc.save();
-};
-
-// ৩. হেল্পার: ফাইনাল ডকুমেন্ট জেনারেট ও ক্লাউডিনারি আপডেট
-const generateAndSendFinalDoc = async (doc) => {
-  try {
-    const pdfBytes = await mergeSignatures(doc);
-    const pdfBuffer = Buffer.from(pdfBytes);
-    const publicId = `completed/final_${doc._id}_${Date.now()}`;
-
-    const uploadResult = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        { resource_type: "raw", public_id: publicId, format: 'pdf' },
-        (err, res) => err ? reject(err) : resolve(res)
-      );
-      stream.end(pdfBuffer);
-    });
-
-    doc.fileUrl = uploadResult.secure_url;
-    doc.status = 'completed';
-    await doc.save();
-
-    const recipients = doc.parties.map(p => p.email);
-    await transporter.sendMail({
-      from: `"NexSign" <${process.env.EMAIL_USER}>`,
-      to: recipients.join(','),
-      subject: `Completed: ${doc.title}`,
-      html: `<h3>Signing Complete!</h3><p>The final signed version of <b>${doc.title}</b> is attached.</p>`,
-      attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer }]
-    });
-  } catch (err) { console.error("Finalize Error:", err); }
-};
-
-// ৪. হেল্পার: সাইনিং লিঙ্ক ইমেইল
-const sendSigningEmail = async (party, docTitle, token) => {
-  const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
-  const signLink = `${baseUrl}/sign?token=${token}`;
-  return transporter.sendMail({
-    from: `"NexSign" <${process.env.EMAIL_USER}>`,
-    to: party.email,
-    subject: `Signature Request: ${docTitle}`,
-    html: `<p>Please sign the document here: <a href="${signLink}">${signLink}</a></p>`
-  });
-};
-
-// --- ROUTES ---
-
-// ১. ড্যাশবোর্ড ডাটা (শুধুমাত্র ওনারের ডাটা দেখাবে)
-router.get('/', auth, async (req, res) => {
-  try {
-    const docs = await Document.find({ owner: req.user.id }).sort({ updatedAt: -1 });
-    res.json(docs);
-  } catch (err) {
-    res.status(500).json({ error: "ডকুমেন্ট লোড করা যায়নি।" });
-  }
-});
-
-// ২. পিডিএফ আপলোড রাউট
+// ২. পিডিএফ আপলোড রাউট (ফিক্সড)
 router.post('/upload', auth, upload.single('pdf'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    if (!req.file) return res.status(400).json({ error: "ফাইল পাওয়া যায়নি।" });
 
+    // ক্লাউডিনারি আপলোড
     const result = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         { resource_type: "raw", folder: "nexsign_docs", format: 'pdf' },
@@ -6582,86 +6481,31 @@ router.post('/upload', auth, upload.single('pdf'), async (req, res) => {
       fileId: result.public_id,
       owner: req.user.id,
       status: 'draft',
-      parties: JSON.parse(req.body.parties || '[]'),
+      // ফ্রন্টএন্ড থেকে আসা parties স্ট্রিং হলে পার্স করবে
+      parties: typeof req.body.parties === 'string' ? JSON.parse(req.body.parties) : [],
       fields: []
     });
 
     await newDoc.save();
     res.json(newDoc);
   } catch (err) {
-    res.status(500).json({ error: "আপলোড ব্যর্থ হয়েছে।" });
+    console.error("Upload Error:", err);
+    res.status(500).json({ error: "সার্ভার এরর: আপলোড ব্যর্থ হয়েছে।" });
   }
 });
 
-// ৩. সাইনিং লিঙ্ক পাঠানো
-router.post('/send', auth, async (req, res) => {
+// ৩. আপডেট ড্রাফট (ফিক্সড)
+router.put('/:id', auth, async (req, res) => {
   try {
-    const doc = await Document.findOne({ _id: req.body.id, owner: req.user.id });
-    if (!doc) return res.status(404).json({ error: "Not found" });
-
-    const token = crypto.randomBytes(32).toString('hex');
-    doc.parties[0].token = token;
-    doc.parties[0].status = 'sent';
-    doc.status = 'in_progress';
-    doc.currentPartyIndex = 0;
-    doc.markModified('parties');
-    await doc.save();
-    await sendSigningEmail(doc.parties[0], doc.title, token);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// ৪. সিগনেচার সাবমিট ও পরবর্তী সাইনার লজিক
-router.post('/sign/submit', async (req, res) => {
-  try {
-    const { token, fields } = req.body;
-    const doc = await Document.findOne({ "parties.token": token });
-    if (!doc) return res.status(404).json({ error: "Invalid link" });
-
-    const idx = doc.parties.findIndex(p => p.token === token);
-    doc.parties[idx].status = 'signed';
-    doc.parties[idx].signedAt = new Date();
-    doc.fields = fields; 
-    
-    doc.markModified('fields'); 
-    doc.markModified('parties');
-
-    if (idx + 1 < doc.parties.length) {
-      const nextToken = crypto.randomBytes(32).toString('hex');
-      doc.parties[idx + 1].token = nextToken;
-      doc.parties[idx + 1].status = 'sent';
-      doc.currentPartyIndex = idx + 1;
-      await doc.save();
-      await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
-      res.json({ next: true });
-    } else {
-      doc.currentPartyIndex = idx;
-      await doc.save();
-      await generateAndSendFinalDoc(doc);
-      res.json({ completed: true });
-    }
-  } catch (err) { res.status(500).json({ error: "Submit failed" }); }
-});
-
-// ৫. সাইনিং পেজের ডাটা লোড
-router.get('/sign/:token', async (req, res) => {
-  try {
-    const doc = await Document.findOne({ "parties.token": req.params.token });
-    if (!doc) return res.status(404).json({ error: "Invalid link" });
-    const party = doc.parties.find(p => p.token === req.params.token);
-    res.json({ document: doc, party: { ...party.toObject(), index: doc.parties.indexOf(party) } });
-  } catch (err) { res.status(500).json({ error: "Error fetching signing session" }); }
-});
-
-// ৬. পিডিএফ প্রক্সি (CORS ফিক্স)
-router.get('/proxy/*', async (req, res) => {
-  try {
-    const path = req.params[0];
-    const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${path}`;
-    const response = await axios.get(url, { responseType: 'stream' });
-    res.setHeader('Content-Type', 'application/pdf');
-    response.data.pipe(res);
-  } catch (err) { res.status(404).send("File not found"); }
+    const updatedDoc = await Document.findOneAndUpdate(
+      { _id: req.params.id, owner: req.user.id },
+      { $set: req.body },
+      { new: true }
+    );
+    res.json(updatedDoc);
+  } catch (err) {
+    res.status(500).json({ error: "সেভ করতে সমস্যা হয়েছে।" });
+  }
 });
 
 module.exports = router;
