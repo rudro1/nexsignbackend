@@ -5838,21 +5838,50 @@ cloudinary.config({
 //   socketTimeout: 40000,
 // });
 // routes/documentRoutes.js ফাইলে গিয়ে এই অংশটি পরিবর্তন করুন
+// ১. ট্রান্সপোর্টার সেটআপ (ফিক্সড)
 const transporter = nodemailer.createTransport({
   host: "smtp-relay.brevo.com",
   port: 587,
   secure: false, 
   auth: { 
-    user: "a478c8001@smtp-brevo.com", // এটি সরাসরি থাকতে পারে
-    pass: process.env.BREVO_API_KEY  // পাসওয়ার্ডটি অবশ্যই এনভ থেকে নিতে হবে
+    user: "a478c8001@smtp-brevo.com", // আপনার ব্রেভো লগইন আইডি
+    pass: process.env.BREVO_API_KEY  // আপনার নতুন জেনারেট করা কী
   }
 });
 
+// ২. ইমেইল পাঠানোর ফাংশন (ফিক্সড)
+const sendSigningEmail = async (party, docTitle, token, req) => {
+  const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
+  const signLink = `${baseUrl}/sign?token=${token}`;
 
+  const mailOptions = {
+    // 🌟 ব্রেভো শুধুমাত্র ভেরিফাইড সেন্ডার থেকে মেইল পাঠাতে দেয় 🌟
+    // আপনার ব্রেভো একাউন্টে যে ইমেইলটি ভেরিফাই করেছেন সেটিই এখানে দিন
+    from: '"NexSign" <bisalsaha42@gmail.com>', 
+    to: party.email,
+    subject: `Signature Request: ${docTitle}`,
+    html: `
+      <div style="font-family:sans-serif;padding:20px;border:1px solid #eee;border-radius:10px;max-width:500px;">
+        <h2 style="color:#0ea5e9;margin-bottom:20px;">Signature Request</h2>
+        <p>Hello <b>${party.name}</b>,</p>
+        <p>You have been invited to sign the document: <b>${docTitle}</b></p>
+        <div style="margin-top:30px;">
+          <a href="${signLink}" style="background:#0ea5e9;color:white;padding:14px 28px;text-decoration:none;border-radius:8px;display:inline-block;font-weight:bold;">Sign Document Now</a>
+        </div>
+        <p style="margin-top:30px;font-size:12px;color:#888;">If the button doesn't work, copy this link: ${signLink}</p>
+      </div>
+    `,
+  };
 
-const upload = multer({ storage: multer.memoryStorage() });
-
-
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    console.log("Email Sent Successfully: ", info.messageId);
+    return info;
+  } catch (error) {
+    console.error("Brevo Email Error: ", error.message);
+    throw error; 
+  }
+};
 // const sendSigningEmail = async (party, docTitle, token, req) => {
 //   // const baseUrl = req.headers.origin || "http://localhost:5173";
 //   // const signLink = `${baseUrl}/sign?token=${token}`;
@@ -5909,37 +5938,37 @@ const upload = multer({ storage: multer.memoryStorage() });
 //     throw error; // যাতে মেইন রাউট বুঝতে পারে ইমেইল ফেইল করেছে
 //   }
 // };
-const sendSigningEmail = async (party, docTitle, token, req) => {
-  const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
-  const signLink = `${baseUrl}/sign?token=${token}`;
+// const sendSigningEmail = async (party, docTitle, token, req) => {
+//   const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
+//   const signLink = `${baseUrl}/sign?token=${token}`;
 
-  const mailOptions = {
-    // এখানে ${process.env.EMAIL_USER} এর বদলে সরাসরি আপনার ভেরিফাইড ইমেইল দিন
-    from: `"NexSign" <bisalsaha42@gmail.com>`, 
-    to: party.email,
-    subject: `Signature Request: ${docTitle}`,
-    html: `
-      <div style="font-family:sans-serif;padding:20px;border:1px solid #eee;border-radius:10px;max-width:500px;">
-        <h2 style="color:#0ea5e9;margin-bottom:20px;">Signature Request</h2>
-        <p>Hello <b>${party.name}</b>,</p>
-        <p>You have been invited to sign the document: <b>${docTitle}</b></p>
-        <div style="margin-top:30px;">
-          <a href="${signLink}" style="background:#0ea5e9;color:white;padding:14px 28px;text-decoration:none;border-radius:8px;display:inline-block;font-weight:bold;">Sign Document Now</a>
-        </div>
-        <p style="margin-top:30px;font-size:12px;color:#888;">If the button doesn't work, copy this link: ${signLink}</p>
-      </div>
-    `,
-  };
+//   const mailOptions = {
+//     // এখানে ${process.env.EMAIL_USER} এর বদলে সরাসরি আপনার ভেরিফাইড ইমেইল দিন
+//     from: `"NexSign" <bisalsaha42@gmail.com>`, 
+//     to: party.email,
+//     subject: `Signature Request: ${docTitle}`,
+//     html: `
+//       <div style="font-family:sans-serif;padding:20px;border:1px solid #eee;border-radius:10px;max-width:500px;">
+//         <h2 style="color:#0ea5e9;margin-bottom:20px;">Signature Request</h2>
+//         <p>Hello <b>${party.name}</b>,</p>
+//         <p>You have been invited to sign the document: <b>${docTitle}</b></p>
+//         <div style="margin-top:30px;">
+//           <a href="${signLink}" style="background:#0ea5e9;color:white;padding:14px 28px;text-decoration:none;border-radius:8px;display:inline-block;font-weight:bold;">Sign Document Now</a>
+//         </div>
+//         <p style="margin-top:30px;font-size:12px;color:#888;">If the button doesn't work, copy this link: ${signLink}</p>
+//       </div>
+//     `,
+//   };
 
-  try {
-    const info = await transporter.sendMail(mailOptions);
-    console.log("Email Sent Successfully: ", info.messageId);
-    return info;
-  } catch (error) {
-    console.error("Nodemailer Error: ", error);
-    throw error; 
-  }
-};
+//   try {
+//     const info = await transporter.sendMail(mailOptions);
+//     console.log("Email Sent Successfully: ", info.messageId);
+//     return info;
+//   } catch (error) {
+//     console.error("Nodemailer Error: ", error);
+//     throw error; 
+//   }
+// };
 
 // --- PDF MERGE LOGIC (Coordinate Fix) ---
 const mergeSignatures = async (doc) => {
