@@ -2094,7 +2094,7 @@ const adminRoutes = require('./routes/adminRoutes');
 
 const app = express();
 
-// ১. হেলমেট সিকিউরিটি (Cloudinary ইমেজ দেখানোর জন্য এটি প্রয়োজন)
+// ১. হেলমেট সিকিউরিটি (Cloudinary ইমেজ রেন্ডারিং এর জন্য)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: false,
@@ -2104,27 +2104,27 @@ app.use(helmet({
 const allowedOrigins = [
   'http://localhost:5173', 
   'https://nexsignfrontend.vercel.app',
-  'https://nexsignfrontend-git-main-bisal-sahas-projects.vercel.app' // প্রিভিউ লিঙ্কের জন্য
+  'https://nexsignfrontend-git-main-bisal-sahas-projects.vercel.app'
 ];
 
 app.use(cors({
   origin: (origin, callback) => {
-    // সাব-ডোমেইনগুলো অটোমেটিক এলাও করার জন্য endsWith ব্যবহার করতে পারেন
+    // অরিজিন চেক লজিক
     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
       callback(null, true);
     } else {
       callback(new Error('CORS blocked this request'));
     }
   },
-  credentials: true,
+  credentials: true, // এটি বাধ্যতামূলক যেহেতু ফ্রন্টএন্ডে withCredentials: true আছে
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
 
-// ৩. প্রি-ফ্লাইট রিকোয়েস্ট হ্যান্ডলার
+// ৩. প্রি-ফ্লাইট (OPTIONS) রিকোয়েস্ট গ্লোবাল হ্যান্ডলার
 app.options('*', cors());
 
-// ৪. মিডলওয়্যার (বড় পিডিএফ বা সাইন ডেটার জন্য লিমিট বাড়ানো হয়েছে)
+// ৪. পে-লোড লিমিট মিডলওয়্যার
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -2140,18 +2140,16 @@ app.use('/api/documents', documentRoutes);
 app.use('/api/admin', adminRoutes);
 
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: "Online", 
-    db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected" 
-  });
+  res.json({ status: "Online", db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected" });
 });
 
 // ৭. গ্লোবাল এরর হ্যান্ডলার
 app.use((err, req, res, next) => {
-  res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
+  const status = err.status || 500;
+  res.status(status).json({ error: err.message || 'Internal Server Error' });
 });
 
-const PORT = process.env.PORT || 5001; // আপনার .env এর পোর্টের সাথে মিল রাখতে পারেন
+const PORT = process.env.PORT || 5001;
 
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
