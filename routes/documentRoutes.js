@@ -6191,45 +6191,73 @@ router.post('/sign/submit', async (req, res) => {
 //     response.data.pipe(res);
 //   } catch (err) { res.status(404).send("Not found"); }
 // });
+// router.get('/proxy/*', async (req, res) => {
+//   try {
+//     let filePath = req.params[0];
+    
+//     // ১. এক্সটেনশন চেক এবং ফিক্স
+//     if (!filePath.toLowerCase().endsWith('.pdf')) {
+//       filePath += '.pdf';
+//     }
+
+//     const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${filePath}`;
+    
+//     // ২. ক্লাউডিনারি থেকে ডাটা আনা (টাইমআউটসহ)
+//     const response = await axios.get(url, { 
+//       responseType: 'stream',
+//       timeout: 15000 
+//     });
+// res.setHeader('Access-Control-Allow-Origin', 'https://nexsignfrontend.vercel.app');
+//     res.setHeader('Access-Control-Allow-Credentials', 'true');
+//     // ৩. প্রয়োজনীয় হেডার সেট করা (এটি পিডিএফ রেন্ডারিংয়ের জন্য অত্যন্ত গুরুত্বপূর্ণ)
+//     res.setHeader('Content-Type', 'application/pdf');
+//     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+//     res.setHeader('Pragma', 'no-cache');
+//     res.setHeader('Expires', '0');
+//     // ব্রাউজারকে জানানো যে এটি ডাউনলোড না করে ইন-লাইন ওপেন করতে হবে
+//     res.setHeader('Content-Disposition', 'inline');
+
+//     // ৪. ডাটা পাইপ করা এবং এরর হ্যান্ডলিং
+//     response.data.pipe(res);
+
+//     // স্ট্রিম শেষ হলে প্রপারলি ক্লোজ করা
+//     response.data.on('end', () => {
+//       res.end();
+//     });
+
+//   } catch (err) { 
+//     console.error("Proxy Error:", err.message);
+//     // ক্লাউডিনারি থেকে আসা এরর স্ট্যাটাস পাস করা
+//     const statusCode = err.response ? err.response.status : 404;
+//     res.status(statusCode).send("PDF Loading Failed: File not found or Cloudinary issue."); 
+//   }
+// });
+
 router.get('/proxy/*', async (req, res) => {
   try {
     let filePath = req.params[0];
-    
-    // ১. এক্সটেনশন চেক এবং ফিক্স
-    if (!filePath.toLowerCase().endsWith('.pdf')) {
-      filePath += '.pdf';
-    }
+    if (!filePath.toLowerCase().endsWith('.pdf')) filePath += '.pdf';
 
     const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${filePath}`;
     
-    // ২. ক্লাউডিনারি থেকে ডাটা আনা (টাইমআউটসহ)
     const response = await axios.get(url, { 
-      responseType: 'stream',
-      timeout: 15000 
+      responseType: 'stream', 
+      timeout: 20000 
     });
-res.setHeader('Access-Control-Allow-Origin', 'https://nexsignfrontend.vercel.app');
+
+    // ✅ অত্যন্ত গুরুত্বপূর্ণ CORS ফিক্স
+    res.setHeader('Access-Control-Allow-Origin', 'https://nexsignfrontend.vercel.app');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    // ৩. প্রয়োজনীয় হেডার সেট করা (এটি পিডিএফ রেন্ডারিংয়ের জন্য অত্যন্ত গুরুত্বপূর্ণ)
+    
+    // ✅ পিডিএফ রেন্ডারিং হেডার
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    // ব্রাউজারকে জানানো যে এটি ডাউনলোড না করে ইন-লাইন ওপেন করতে হবে
     res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
 
-    // ৪. ডাটা পাইপ করা এবং এরর হ্যান্ডলিং
     response.data.pipe(res);
-
-    // স্ট্রিম শেষ হলে প্রপারলি ক্লোজ করা
-    response.data.on('end', () => {
-      res.end();
-    });
-
   } catch (err) { 
     console.error("Proxy Error:", err.message);
-    // ক্লাউডিনারি থেকে আসা এরর স্ট্যাটাস পাস করা
-    const statusCode = err.response ? err.response.status : 404;
-    res.status(statusCode).send("PDF Loading Failed: File not found or Cloudinary issue."); 
+    res.status(404).send("PDF Not Found"); 
   }
 });
 
