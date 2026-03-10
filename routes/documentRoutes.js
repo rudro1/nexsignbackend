@@ -6847,6 +6847,27 @@ router.post('/upload', auth, upload.single('pdf'), async (req, res) => {
     res.status(500).json({ error: "Upload failed on server", details: err.message });
   }
 });
+
+
+// এটি নতুন যোগ করুন (সব রাউটের মাঝে)
+router.post('/upload-metadata', auth, async (req, res) => {
+  try {
+    const { title, fileUrl, fileId } = req.body;
+    const newDoc = new Document({
+      title: title || 'Untitled Document',
+      fileUrl: fileUrl,
+      fileId: fileId,
+      owner: req.user.id,
+      status: 'draft',
+      parties: [],
+      fields: []
+    });
+    await newDoc.save();
+    res.json(newDoc);
+  } catch (err) {
+    res.status(500).json({ error: "Metadata save failed" });
+  }
+});
 // ৩. সাইনিং লিঙ্ক পাঠানো
 router.post('/send', auth, async (req, res) => {
   try {
