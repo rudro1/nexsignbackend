@@ -6233,6 +6233,34 @@ router.post('/sign/submit', async (req, res) => {
 //   }
 // });
 
+// router.get('/proxy/*', async (req, res) => {
+//   try {
+//     let filePath = req.params[0];
+//     if (!filePath.toLowerCase().endsWith('.pdf')) filePath += '.pdf';
+
+//     const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${filePath}`;
+    
+//     const response = await axios.get(url, { 
+//       responseType: 'stream', 
+//       timeout: 20000 
+//     });
+
+//     // ✅ অত্যন্ত গুরুত্বপূর্ণ CORS ফিক্স
+//     res.setHeader('Access-Control-Allow-Origin', 'https://nexsignfrontend.vercel.app');
+//     res.setHeader('Access-Control-Allow-Credentials', 'true');
+    
+//     // ✅ পিডিএফ রেন্ডারিং হেডার
+//     res.setHeader('Content-Type', 'application/pdf');
+//     res.setHeader('Content-Disposition', 'inline');
+//     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+
+//     response.data.pipe(res);
+//   } catch (err) { 
+//     console.error("Proxy Error:", err.message);
+//     res.status(404).send("PDF Not Found"); 
+//   }
+// });
+
 router.get('/proxy/*', async (req, res) => {
   try {
     let filePath = req.params[0];
@@ -6245,19 +6273,17 @@ router.get('/proxy/*', async (req, res) => {
       timeout: 20000 
     });
 
-    // ✅ অত্যন্ত গুরুত্বপূর্ণ CORS ফিক্স
+    // 🌟 একদম নির্দিষ্ট করে এই হেডারগুলো দিন 🌟
+    res.removeHeader('Access-Control-Allow-Origin'); // যদি অন্য কোথাও থেকে * আসে সেটি মুছে ফেলবে
     res.setHeader('Access-Control-Allow-Origin', 'https://nexsignfrontend.vercel.app');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    
-    // ✅ পিডিএফ রেন্ডারিং হেডার
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline');
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
 
     response.data.pipe(res);
   } catch (err) { 
     console.error("Proxy Error:", err.message);
-    res.status(404).send("PDF Not Found"); 
+    res.status(404).send("PDF Loading Failed."); 
   }
 });
 

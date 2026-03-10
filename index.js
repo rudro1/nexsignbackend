@@ -2083,74 +2083,6 @@
 //   console.log(`🚀 NexSign Server running on: http://localhost:${PORT}`);
 // });
 
-// require('dotenv').config();
-// const express = require('express');
-// const cors = require('cors');
-// const mongoose = require('mongoose');
-// const helmet = require('helmet');
-
-// const authRoutes = require('./routes/authRoutes'); 
-// const documentRoutes = require('./routes/documentRoutes');
-// const adminRoutes = require('./routes/adminRoutes');
-
-// const app = express();
-
-// // ✅ 1. Updated Security for Cloudinary/Production
-// app.use(helmet({
-//   crossOriginResourcePolicy: { policy: "cross-origin" },
-//   contentSecurityPolicy: false, // Set to false temporarily if you face UI issues, or refine later
-// }));
-
-// // ✅ 2. Production CORS
-// const allowedOrigins = ['http://localhost:5173', 'https://nexsignfrontend.vercel.app'];
-// app.use(cors({
-//   origin: (origin, callback) => {
-//     if (!origin || allowedOrigins.includes(origin)) {
-//       callback(null, true);
-//     } else {
-//       callback(new Error('CORS blocked this request'));
-//     }
-//   },
-//   credentials: true
-// }));
-
-// // app.use(express.json({ limit: '10mb' }));
-// app.use(express.json({ limit: '50mb' }));
-// app.use(express.urlencoded({ limit: '50mb', extended: true }));
-// // ✅ 3. Database with Error Handling
-// mongoose.connect(process.env.MONGO_URI)
-//   .then(() => console.log('✅ MongoDB Connected'))
-//   .catch(err => console.error('❌ MongoDB Connection Error:', err));
-
-// // 4. Routes
-// app.get('/', (req, res) => res.send('NexSign Server is Online')); // Fixes "Cannot GET /"
-// app.use('/api/auth', authRoutes);      
-// app.use('/api/documents', documentRoutes);
-// app.use('/api/admin', adminRoutes);
-
-// app.get('/api/health', (req, res) => {
-//   res.json({ status: "Online", db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected" });
-// });
-
-// // 5. Global Error Handler
-// app.use((err, req, res, next) => {
-//   res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
-// });
-
-// const PORT = process.env.PORT || 10000;
-
-// // লোকাল বা রেন্ডারের জন্য সার্ভার চালু রাখা
-// if (process.env.NODE_ENV !== 'production') {
-//   app.listen(PORT, () => {
-//     console.log(`🚀 Server running on port ${PORT}`);
-//   });
-// }
-
-// // Vercel এর জন্য এটি অবশ্যই লাগবে
-// module.exports = app;
-
-
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -2166,28 +2098,32 @@ const app = express();
 // ✅ 1. Updated Security for Cloudinary/Production
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: false, // Set to false temporarily if you face UI issues, or refine later
 }));
 
-// ✅ 2. Production CORS (Fixed)
-// কলব্যাক ফাংশনের বদলে সরাসরি Array ব্যবহার করা হয়েছে
+// ✅ 2. Production CORS
+const allowedOrigins = ['http://localhost:5173', 'https://nexsignfrontend.vercel.app'];
 app.use(cors({
-  origin: ['http://localhost:5173', 'https://nexsignfrontend.vercel.app'],
-  credentials: true, // এটি true থাকলে origin কখনোই * হতে পারে না
-  methods:['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders:['Content-Type', 'Authorization', 'Origin', 'Accept']
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS blocked this request'));
+    }
+  },
+  credentials: true
 }));
 
+// app.use(express.json({ limit: '10mb' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
-// ✅ 3. Database Connection
+// ✅ 3. Database with Error Handling
 mongoose.connect(process.env.MONGO_URI)
   .then(() => console.log('✅ MongoDB Connected'))
   .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
 // 4. Routes
-app.get('/', (req, res) => res.send('NexSign Server is Online')); 
+app.get('/', (req, res) => res.send('NexSign Server is Online')); // Fixes "Cannot GET /"
 app.use('/api/auth', authRoutes);      
 app.use('/api/documents', documentRoutes);
 app.use('/api/admin', adminRoutes);
@@ -2203,10 +2139,12 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 10000;
 
+// লোকাল বা রেন্ডারের জন্য সার্ভার চালু রাখা
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
   });
 }
+
 // Vercel এর জন্য এটি অবশ্যই লাগবে
 module.exports = app;
