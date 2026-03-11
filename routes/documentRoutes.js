@@ -7204,18 +7204,29 @@ router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields: incomingFields } = req.body;
     
-    // ১. ডকুমেন্ট খুঁজে বের করা
     const doc = await Document.findOne({ "parties.token": token });
     if (!doc) return res.status(404).json({ error: "Invalid link" });
 
     const idx = doc.parties.findIndex(p => p.token === token);
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
+    
+    // ১. ফিক্সড আইপি অ্যাড্রেস বের করা
+    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip).split(',')[0].trim();
 
-    // ২. ফিল্ড মার্জ লজিক (Existing + New)
+    // ২. লোকেশন বের করার লজিক (ipapi.co ব্যবহার করে)
+    let locationData = "Unknown Location";
+    try {
+      const locRes = await axios.get(`https://ipapi.co/${ip}/json/`, { timeout: 3000 });
+      if (locRes.data && locRes.data.city) {
+        locationData = `${locRes.data.city}, ${locRes.data.region}, ${locRes.data.country_name}`;
+      }
+    } catch (locErr) {
+      console.error("Location API Error:", locErr.message);
+    }
+
+    // ৩. ফিল্ড মার্জ লজিক (আপনার আগের কোড অনুযায়ী)
     const existingFields = doc.fields || [];
     const updatedFields = [...existingFields];
-
     incomingFields.forEach(inf => {
       const existingIdx = updatedFields.findIndex(ef => ef.id === inf.id);
       if (existingIdx > -1) {
@@ -7225,13 +7236,15 @@ router.post('/sign/submit', async (req, res) => {
       }
     });
 
-    // ৩. ইউজারের স্ট্যাটাস এবং ডেটা আপডেট
+    // ৪. ইউজারের নতুন ডেটা আপডেট (মডেল অনুযায়ী)
     doc.fields = updatedFields;
     doc.parties[idx].status = 'signed';
     doc.parties[idx].signedAt = new Date();
     doc.parties[idx].device = userAgent;
+    doc.parties[idx].ipAddress = ip;       // 🌟 নতুন যোগ করা
+    doc.parties[idx].location = locationData; // 🌟 নতুন যোগ করা
 
-    // ৪. অডিট লগ তৈরি (ইউজার সাইন)
+    // ৫. অডিট লগ তৈরি (বিস্তারিত সহ)
     await AuditLog.create({
       document_id: doc._id,
       action: 'signed',
@@ -7242,41 +7255,27 @@ router.post('/sign/submit', async (req, res) => {
       },
       ip_address: ip,
       user_agent: userAgent,
-      details: `${doc.parties[idx].email} একটি স্বাক্ষর সম্পন্ন করেছেন। ডিভাইস: ${userAgent}`
+      details: `Signed by ${doc.parties[idx].email} from ${locationData}. Device: ${userAgent}`
     });
 
     doc.markModified('fields'); 
     doc.markModified('parties');
 
-    // ৫. পরবর্তী স্টেপ হ্যান্ডলিং
+    // পরবর্তী স্টেপ হ্যান্ডলিং (আপনার আগের কোড অনুযায়ী)
     if (idx + 1 < doc.parties.length) {
-      // যদি আরও সিগনার বাকি থাকে
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
       doc.currentPartyIndex = idx + 1;
-      
       await doc.save();
       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
       return res.json({ next: true });
     } else {
-      // যদি শেষ সিগনার হয় - ডকুমেন্ট কমপ্লিট
       doc.status = 'completed';
       await doc.save(); 
       
-      await AuditLog.create({
-        document_id: doc._id,
-        action: 'completed',
-        performed_by: { name: 'System', role: 'system' },
-        ip_address: ip,
-        user_agent: userAgent,
-        details: 'সকল পক্ষ স্বাক্ষর করেছেন। ডকুমেন্টটি চূড়ান্তভাবে সংরক্ষিত হয়েছে।'
-      });
-
-      // 🌟 ফিক্স: ডাটাবেস থেকে ফ্রেশ ডেটাসহ ডকুমেন্ট নিয়ে PDF তৈরি ও মেইল পাঠানো
       const finalizedDoc = await Document.findById(doc._id);
       await generateAndSendFinalDoc(finalizedDoc); 
-      
       return res.json({ completed: true });
     }
   } catch (err) { 

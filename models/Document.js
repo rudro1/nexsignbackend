@@ -166,7 +166,9 @@ const documentSchema = new mongoose.Schema({
     status: { type: String, enum: ['pending', 'sent', 'signed'], default: 'pending' },
     token: { type: String, index: true },
     signedAt: Date,
-    device: String
+    device: String,
+    ipAddress: String, // এটি যোগ করুন
+  location: String,
   }],
   fields: {
     type: [mongoose.Schema.Types.Mixed],
