@@ -6945,21 +6945,54 @@ router.post('/upload', auth, upload.single('pdf'), async (req, res) => {
 
 
 // এটি নতুন যোগ করুন (সব রাউটের মাঝে)
+// router.post('/upload-metadata', auth, async (req, res) => {
+//   try {
+//     const { title, fileUrl, fileId } = req.body;
+//     const newDoc = new Document({
+//       title: title || 'Untitled Document',
+//       fileUrl: fileUrl,
+//       fileId: fileId,
+//       owner: req.user.id,
+//       status: 'draft',
+//       parties: [],
+//       fields: []
+//     });
+//     await newDoc.save();
+//     res.json(newDoc);
+//   } catch (err) {
+//     res.status(500).json({ error: "Metadata save failed" });
+//   }
+// });
+
 router.post('/upload-metadata', auth, async (req, res) => {
   try {
     const { title, fileUrl, fileId } = req.body;
+    
+    // fileId যদি না থাকে তবে URL থেকে সেটি বের করার চেষ্টা করা ভালো
+    let finalFileId = fileId;
+    if (!finalFileId && fileUrl) {
+      // url থেকে nexsign_docs/filename অংশটুকু নেওয়ার জন্য
+      const parts = fileUrl.split('/');
+      const nexIndex = parts.indexOf('nexsign_docs');
+      if (nexIndex !== -1) {
+        finalFileId = parts.slice(nexIndex).join('/');
+      }
+    }
+
     const newDoc = new Document({
       title: title || 'Untitled Document',
       fileUrl: fileUrl,
-      fileId: fileId,
+      fileId: finalFileId, // প্রক্সির জন্য এই ID-ই ব্যবহৃত হবে
       owner: req.user.id,
       status: 'draft',
       parties: [],
       fields: []
     });
+    
     await newDoc.save();
     res.json(newDoc);
   } catch (err) {
+    console.error("Metadata Save Error:", err);
     res.status(500).json({ error: "Metadata save failed" });
   }
 });
@@ -7088,20 +7121,38 @@ router.get('/sign/:token', async (req, res) => {
 // });
 router.get('/proxy/*', async (req, res) => {
   try {
-    const path = req.params[0];
-    
-    // ফিক্স: 'raw/upload' সরিয়ে দিন কারণ ক্লাউডিনারি পাথ ফাইলের টাইপের ওপর নির্ভর করে
-    // আপনার আগের পাঠানো path এর ভেতরেই সব ইনফো থাকে
-    const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/${path}`;
-    
-    const response = await axios.get(url, { responseType: 'stream' });
-    
-    // ব্রাউজারকে জানান এটি একটি পিডিএফ
-    res.setHeader('Content-Type', 'application/pdf');
-    response.data.pipe(res);
-  } catch (err) { 
-    console.error("Proxy Error:", err.message);
-    res.status(404).send("File not found or access denied"); 
+    const cloudPath = req.params[0]; // ফ্রন্টএন্ড থেকে আসা path (যেমন: nexsign_docs/xyz.pdf)
+    if (!cloudPath) return res.status(400).send("Path is required");
+
+    // ক্লাউডিনারি পাথ স্ট্রাকচার: res.cloudinary.com/cloud_name/resource_type/upload/path
+    // পিডিএফ সাধারণত 'image/upload' অথবা 'raw/upload' পাথে থাকে।
+    const resourceTypes = ['image', 'raw'];
+    let lastError = null;
+
+    for (const type of resourceTypes) {
+      try {
+        const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/${type}/upload/${cloudPath}`;
+        
+        const response = await axios.get(url, { 
+          responseType: 'stream',
+          timeout: 10000 // ১০ সেকেন্ড টাইমআউট
+        });
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Access-Control-Allow-Origin', '*'); 
+        return response.data.pipe(res); // ফাইল পেলে সাথে সাথে রিটার্ন করবে
+      } catch (e) {
+        lastError = e;
+        continue; // না পেলে পরের টাইপ (raw) ট্রাই করবে
+      }
+    }
+
+    // যদি কোনো টাইপেই ফাইল না পাওয়া যায়
+    console.error("Proxy Error: File not found in image or raw types for path:", cloudPath);
+    res.status(404).send("File not found on Cloudinary storage");
+  } catch (err) {
+    console.error("Proxy Server Error:", err.message);
+    res.status(500).send("Internal server error during PDF proxying");
   }
 });
 // ৭. ডাইনামিক আইডি রাউট (অবশ্যই সবার শেষে)
