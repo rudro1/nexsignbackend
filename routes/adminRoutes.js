@@ -58,6 +58,68 @@
 // });
 
 // module.exports = router;
+// const express = require('express');
+// const router = express.Router();
+// const User = require('../models/User');
+// const Document = require('../models/Document');
+// const AuditLog = require('../models/AuditLog');
+// const auth = require('../middleware/auth');
+// const adminAuth = require('../middleware/adminAuth');
+
+// // ১. ইউজার লিস্ট
+// router.get('/users', auth, adminAuth, async (req, res) => {
+//   try {
+//     const users = await User.find({}).select('-password').sort({ createdAt: -1 });
+//     res.status(200).json(users);
+//   } catch (error) {
+//     res.status(500).json({ message: "ইউজার লিস্ট আনতে সমস্যা হয়েছে" });
+//   }
+// });
+
+// // ২. ডকুমেন্ট লিস্ট (Populate Fix)
+// router.get('/documents', auth, adminAuth, async (req, res) => {
+//   try {
+//     const documents = await Document.find({})
+//       .populate({ path: 'owner', model: 'User', select: 'full_name email' })
+//       .sort({ createdAt: -1 });
+//     res.status(200).json(documents);
+//   } catch (error) {
+//     res.status(500).json({ message: "ডকুমেন্ট লিস্ট আনতে সমস্যা হয়েছে" });
+//   }
+// });
+
+// // ৩. অডিট লগ (Populate Fix)
+// router.get('/audit-logs', auth, adminAuth, async (req, res) => {
+//   try {
+//     const logs = await AuditLog.find({})
+//       .populate({ path: 'document_id', model: 'Document', select: 'title' })
+//       .sort({ timestamp: -1 })
+//       .limit(200);
+//     res.status(200).json(logs);
+//   } catch (error) {
+//     res.status(500).json({ message: "অডিট লগ আনতে সমস্যা হয়েছে" });
+//   }
+// });
+
+// // ৪. ইউজার ডিলিট
+// router.delete('/users/:id', auth, adminAuth, async (req, res) => {
+//   try {
+//     const userId = req.params.id;
+//     const targetUser = await User.findById(userId);
+    
+//     if (targetUser && (targetUser.role === 'super_admin' || targetUser.role === 'admin')) {
+//       return res.status(403).json({ message: "অ্যাডমিনকে ডিলিট করা সম্ভব নয়!" });
+//     }
+
+//     await User.findByIdAndDelete(userId);
+//     res.status(200).json({ message: "ইউজার ডিলিট হয়েছে" });
+//   } catch (error) {
+//     res.status(500).json({ message: "ইউজার ডিলিট করতে সমস্যা হয়েছে" });
+//   }
+// });
+
+// module.exports = router;
+
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
@@ -66,37 +128,51 @@ const AuditLog = require('../models/AuditLog');
 const auth = require('../middleware/auth');
 const adminAuth = require('../middleware/adminAuth');
 
-// ১. ইউজার লিস্ট
+// ১. ইউজার লিস্ট (অপ্টিমাইজড)
 router.get('/users', auth, adminAuth, async (req, res) => {
   try {
-    const users = await User.find({}).select('-password').sort({ createdAt: -1 });
+    const users = await User.find({})
+      .select('-password')
+      .sort({ createdAt: -1 })
+      .lean(); // .lean() কুয়েরি ফাস্ট করে
     res.status(200).json(users);
   } catch (error) {
     res.status(500).json({ message: "ইউজার লিস্ট আনতে সমস্যা হয়েছে" });
   }
 });
 
-// ২. ডকুমেন্ট লিস্ট (Populate Fix)
+// ২. ডকুমেন্ট লিস্ট (অপ্টিমাইজড)
 router.get('/documents', auth, adminAuth, async (req, res) => {
   try {
     const documents = await Document.find({})
       .populate({ path: 'owner', model: 'User', select: 'full_name email' })
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .limit(50) // ভিয়ারসেল টাইমআউট রোধে লিমিট
+      .lean();
     res.status(200).json(documents);
   } catch (error) {
     res.status(500).json({ message: "ডকুমেন্ট লিস্ট আনতে সমস্যা হয়েছে" });
   }
 });
 
-// ৩. অডিট লগ (Populate Fix)
+// ৩. অডিট লগ (পেজিনেশন সহ - প্রতি ক্লিকে ১০টি)
 router.get('/audit-logs', auth, adminAuth, async (req, res) => {
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 10;
+    const skip = (page - 1) * limit;
+
     const logs = await AuditLog.find({})
       .populate({ path: 'document_id', model: 'Document', select: 'title' })
+      .populate({ path: 'performed_by', model: 'User', select: 'full_name email' })
       .sort({ timestamp: -1 })
-      .limit(200);
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
     res.status(200).json(logs);
   } catch (error) {
+    console.error("Audit Log Error:", error.message);
     res.status(500).json({ message: "অডিট লগ আনতে সমস্যা হয়েছে" });
   }
 });
