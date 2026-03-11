@@ -6781,7 +6781,10 @@ const mergeSignatures = async (doc) => {
       continue; 
     }
   }
-  return await pdfDoc.save();
+  return await pdfDoc.save({ 
+  useObjectStreams: true, // এটি ফাইলের সাইজ অনেকটা কমিয়ে দেবে
+  addDefaultPage: false 
+});
 };
 
 // const generateAndSendFinalDoc = async (doc) => {
