@@ -7150,6 +7150,19 @@ router.post('/sign/submit', async (req, res) => {
     doc.parties[idx].status = 'signed';
     doc.parties[idx].signedAt = new Date();
     
+    // অডিট লগ: নির্দিষ্ট ইউজারের সাইন করার রেকর্ড
+    await AuditLog.create({
+      document_id: doc._id,
+      action: 'signed',
+      performed_by: { 
+        name: doc.parties[idx].name, 
+        email: doc.parties[idx].email, 
+        role: 'signer' 
+      },
+      ip_address: req.ip,
+      details: `${doc.parties[idx].email} একটি স্বাক্ষর সম্পন্ন করেছেন।`
+    });
+
     doc.markModified('fields'); 
     doc.markModified('parties');
 
@@ -7160,18 +7173,21 @@ router.post('/sign/submit', async (req, res) => {
       doc.currentPartyIndex = idx + 1;
       
       await doc.save();
-      
-      // 🚀 পরিবর্তন: await সরিয়ে দেওয়া হয়েছে (Non-blocking)
-    await  sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
-      
+      await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
       return res.json({ next: true });
     } else {
       doc.status = 'completed';
       await doc.save(); 
       
-      // 🚀 পরিবর্তন: পিডিএফ তৈরি ব্যাকগ্রাউন্ডে হবে, ইউজার সাথে সাথে রেসপন্স পাবে
+      // ✅ অডিট লগ: পুরো ডকুমেন্ট কমপ্লিট হওয়ার রেকর্ড
+      await AuditLog.create({
+        document_id: doc._id,
+        action: 'completed',
+        performed_by: { name: 'System', role: 'system' },
+        details: 'সকল পক্ষ স্বাক্ষর করেছেন। ডকুমেন্টটি চূড়ান্তভাবে সংরক্ষিত হয়েছে।'
+      });
+
       generateAndSendFinalDoc(doc); 
-      
       return res.json({ completed: true });
     }
   } catch (err) { 
