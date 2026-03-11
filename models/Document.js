@@ -165,7 +165,8 @@ const documentSchema = new mongoose.Schema({
     email: { type: String, lowercase: true },
     status: { type: String, enum: ['pending', 'sent', 'signed'], default: 'pending' },
     token: { type: String, index: true },
-    signedAt: Date
+    signedAt: Date,
+    device: String
   }],
   fields: {
     type: [mongoose.Schema.Types.Mixed],

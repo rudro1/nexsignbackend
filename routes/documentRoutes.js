@@ -7133,6 +7133,10 @@ router.post('/sign/submit', async (req, res) => {
 
     const idx = doc.parties.findIndex(p => p.token === token);
     
+    // ✅ ডিভাইস ইনফো এবং আইপি অ্যাড্রেস নেওয়া
+    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
+
     // ১. ফিল্ড মার্জ লজিক
     const existingFields = doc.fields || [];
     const updatedFields = [...existingFields];
@@ -7149,7 +7153,8 @@ router.post('/sign/submit', async (req, res) => {
     doc.fields = updatedFields;
     doc.parties[idx].status = 'signed';
     doc.parties[idx].signedAt = new Date();
-    
+    doc.parties[idx].device = userAgent; // ✅ ডকুমেন্ট মডেলে ডিভাইস সেভ
+
     // অডিট লগ: নির্দিষ্ট ইউজারের সাইন করার রেকর্ড
     await AuditLog.create({
       document_id: doc._id,
@@ -7159,8 +7164,9 @@ router.post('/sign/submit', async (req, res) => {
         email: doc.parties[idx].email, 
         role: 'signer' 
       },
-      ip_address: req.ip,
-      details: `${doc.parties[idx].email} একটি স্বাক্ষর সম্পন্ন করেছেন।`
+      ip_address: ip,
+      user_agent: userAgent, // ✅ অডিট লগে ডিভাইস সেভ
+      details: `${doc.parties[idx].email} একটি স্বাক্ষর সম্পন্ন করেছেন। ডিভাইস: ${userAgent}`
     });
 
     doc.markModified('fields'); 
@@ -7179,12 +7185,14 @@ router.post('/sign/submit', async (req, res) => {
       doc.status = 'completed';
       await doc.save(); 
       
-      // ✅ অডিট লগ: পুরো ডকুমেন্ট কমপ্লিট হওয়ার রেকর্ড
+      // ✅ অডিট লগ: পুরো ডকুমেন্ট কমপ্লিট হওয়ার রেকর্ড
       await AuditLog.create({
         document_id: doc._id,
         action: 'completed',
         performed_by: { name: 'System', role: 'system' },
-        details: 'সকল পক্ষ স্বাক্ষর করেছেন। ডকুমেন্টটি চূড়ান্তভাবে সংরক্ষিত হয়েছে।'
+        ip_address: ip,
+        user_agent: userAgent,
+        details: 'সকল পক্ষ স্বাক্ষর করেছেন। ডকুমেন্টটি চূড়ান্তভাবে সংরক্ষিত হয়েছে।'
       });
 
       generateAndSendFinalDoc(doc); 
