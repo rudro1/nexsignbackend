@@ -127,7 +127,20 @@ const AuditLog = require('../models/AuditLog');
 const auth = require('../middleware/auth');
 const adminAuth = require('../middleware/adminAuth');
 
-// ২. ডকুমেন্ট লিস্ট (Error Safety সহ)
+// ১. ইউজার লিস্ট (এটি মিসিং ছিল)
+router.get('/users', auth, adminAuth, async (req, res) => {
+  try {
+    const users = await User.find({})
+      .select('-password') // পাসওয়ার্ড বাদে সব আনবে
+      .sort({ createdAt: -1 })
+      .lean();
+    res.status(200).json(users || []);
+  } catch (error) {
+    res.status(500).json({ message: "ইউজার লিস্ট আনতে সমস্যা হয়েছে" });
+  }
+});
+
+// ২. ডকুমেন্ট লিস্ট
 router.get('/documents', auth, adminAuth, async (req, res) => {
   try {
     const documents = await Document.find({})
@@ -136,7 +149,6 @@ router.get('/documents', auth, adminAuth, async (req, res) => {
       .limit(50) 
       .lean();
 
-    // ওনার (Owner) ডিলিট হয়ে গেলে যেন অ্যাপ ক্রাশ না করে সে জন্য ম্যাপ করা হয়েছে
     const sanitizedDocs = documents.map(doc => ({
       ...doc,
       owner: doc.owner || { full_name: 'Unknown User', email: 'N/A' }
@@ -148,7 +160,7 @@ router.get('/documents', auth, adminAuth, async (req, res) => {
   }
 });
 
-// ৩. অডিট লগ (Pagination + Null Safety)
+// ৩. অডিট লগ
 router.get('/audit-logs', auth, adminAuth, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -162,7 +174,6 @@ router.get('/audit-logs', auth, adminAuth, async (req, res) => {
       .limit(limit)
       .lean();
 
-    // ডকুমেন্ট ডিলিট হয়ে গেলে document_id null হয়, তা এখানে হ্যান্ডেল করা হয়েছে
     const sanitizedLogs = logs.map(log => ({
       ...log,
       document_id: log.document_id || { title: 'Deleted Document' }
