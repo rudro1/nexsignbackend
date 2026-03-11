@@ -7121,35 +7121,38 @@ router.get('/sign/:token', async (req, res) => {
 // });
 router.get('/proxy/*', async (req, res) => {
   try {
-    const cloudPath = req.params[0]; // ফ্রন্টএন্ড থেকে আসা path (যেমন: nexsign_docs/xyz.pdf)
+    const cloudPath = req.params[0];
     if (!cloudPath) return res.status(400).send("Path is required");
 
-    // ক্লাউডিনারি পাথ স্ট্রাকচার: res.cloudinary.com/cloud_name/resource_type/upload/path
-    // পিডিএফ সাধারণত 'image/upload' অথবা 'raw/upload' পাথে থাকে।
-    const resourceTypes = ['image', 'raw'];
-    let lastError = null;
+    // 🌟 ফিক্স: নির্দিষ্ট অরিজিন সেট করা (CORS Error দূর করবে)
+    const allowedOrigins = ['https://nexsignfrontend.vercel.app', 'http://localhost:5173'];
+    const origin = req.headers.origin;
+    
+    if (allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
 
+    const resourceTypes = ['image', 'raw'];
+    
     for (const type of resourceTypes) {
       try {
         const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/${type}/upload/${cloudPath}`;
         
         const response = await axios.get(url, { 
           responseType: 'stream',
-          timeout: 10000 // ১০ সেকেন্ড টাইমআউট
+          timeout: 10000 
         });
 
+        // ব্রাউজারকে জানানো এটি একটি পিডিএফ
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Access-Control-Allow-Origin', '*'); 
-        return response.data.pipe(res); // ফাইল পেলে সাথে সাথে রিটার্ন করবে
+        return response.data.pipe(res);
       } catch (e) {
-        lastError = e;
-        continue; // না পেলে পরের টাইপ (raw) ট্রাই করবে
+        continue; 
       }
     }
 
-    // যদি কোনো টাইপেই ফাইল না পাওয়া যায়
-    console.error("Proxy Error: File not found in image or raw types for path:", cloudPath);
-    res.status(404).send("File not found on Cloudinary storage");
+    res.status(404).send("PDF not found on Cloudinary storage");
   } catch (err) {
     console.error("Proxy Server Error:", err.message);
     res.status(500).send("Internal server error during PDF proxying");
