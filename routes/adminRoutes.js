@@ -127,17 +127,7 @@ const AuditLog = require('../models/AuditLog');
 const auth = require('../middleware/auth');
 const adminAuth = require('../middleware/adminAuth');
 
-// ১. ইউজার লিস্ট
-router.get('/users', auth, adminAuth, async (req, res) => {
-  try {
-    const users = await User.find({}).select('-password').sort({ createdAt: -1 }).lean();
-    res.status(200).json(users || []);
-  } catch (error) {
-    res.status(500).json({ message: "ইউজার লিস্ট আনতে সমস্যা হয়েছে" });
-  }
-});
-
-// ২. ডকুমেন্ট লিস্ট
+// ২. ডকুমেন্ট লিস্ট (Error Safety সহ)
 router.get('/documents', auth, adminAuth, async (req, res) => {
   try {
     const documents = await Document.find({})
@@ -145,13 +135,20 @@ router.get('/documents', auth, adminAuth, async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(50) 
       .lean();
-    res.status(200).json(documents || []);
+
+    // ওনার (Owner) ডিলিট হয়ে গেলে যেন অ্যাপ ক্রাশ না করে সে জন্য ম্যাপ করা হয়েছে
+    const sanitizedDocs = documents.map(doc => ({
+      ...doc,
+      owner: doc.owner || { full_name: 'Unknown User', email: 'N/A' }
+    }));
+
+    res.status(200).json(sanitizedDocs);
   } catch (error) {
     res.status(500).json({ message: "ডকুমেন্ট লিস্ট আনতে সমস্যা হয়েছে" });
   }
 });
 
-// ৩. অডিট লগ (FIXED: populate removed for performed_by)
+// ৩. অডিট লগ (Pagination + Null Safety)
 router.get('/audit-logs', auth, adminAuth, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -160,15 +157,19 @@ router.get('/audit-logs', auth, adminAuth, async (req, res) => {
 
     const logs = await AuditLog.find({})
       .populate({ path: 'document_id', model: 'Document', select: 'title' })
-      // performed_by পপুলেট করা যাবে না কারণ এটি রেফারেন্স নয়, সরাসরি ডাটা।
       .sort({ timestamp: -1 })
       .skip(skip)
       .limit(limit)
       .lean();
 
-    res.status(200).json(logs || []);
+    // ডকুমেন্ট ডিলিট হয়ে গেলে document_id null হয়, তা এখানে হ্যান্ডেল করা হয়েছে
+    const sanitizedLogs = logs.map(log => ({
+      ...log,
+      document_id: log.document_id || { title: 'Deleted Document' }
+    }));
+
+    res.status(200).json(sanitizedLogs);
   } catch (error) {
-    console.error("Audit Log Error:", error.message);
     res.status(500).json({ message: "অডিট লগ আনতে সমস্যা হয়েছে" });
   }
 });
