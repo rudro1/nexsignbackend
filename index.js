@@ -2088,6 +2088,10 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
 
+
+require('./models/User');
+require('./models/Document');
+require('./models/AuditLog'); 
 const authRoutes = require('./routes/authRoutes'); 
 const documentRoutes = require('./routes/documentRoutes');
 const adminRoutes = require('./routes/adminRoutes');

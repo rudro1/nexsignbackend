@@ -58,61 +58,63 @@
 // });
 
 // module.exports = router;
-
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const Document = require('../models/Document');
 const AuditLog = require('../models/AuditLog');
-const auth = require('../middleware/auth'); // আপনার মেইন লগইন চেক
-const adminAuth = require('../middleware/adminAuth'); // আপনার আগের দেওয়া রোল চেক
+const auth = require('../middleware/auth');
+const adminAuth = require('../middleware/adminAuth');
 
-// সব অ্যাডমিন রাউটে মিডলওয়্যারগুলো সিরিয়ালি বসান
+// ১. ইউজার লিস্ট
 router.get('/users', auth, adminAuth, async (req, res) => {
   try {
     const users = await User.find({}).select('-password').sort({ createdAt: -1 });
     res.status(200).json(users);
   } catch (error) {
-    res.status(500).json({ message: "ইউজার লিস্ট আনতে সমস্যা হয়েছে" });
+    res.status(500).json({ message: "ইউজার লিস্ট আনতে সমস্যা হয়েছে" });
   }
 });
 
+// ২. ডকুমেন্ট লিস্ট (Populate Fix)
 router.get('/documents', auth, adminAuth, async (req, res) => {
   try {
     const documents = await Document.find({})
-      .populate('owner', 'full_name email')
+      .populate({ path: 'owner', model: 'User', select: 'full_name email' })
       .sort({ createdAt: -1 });
     res.status(200).json(documents);
   } catch (error) {
-    res.status(500).json({ message: "ডকুমেন্ট লিস্ট আনতে সমস্যা হয়েছে" });
+    res.status(500).json({ message: "ডকুমেন্ট লিস্ট আনতে সমস্যা হয়েছে" });
   }
 });
 
+// ৩. অডিট লগ (Populate Fix)
 router.get('/audit-logs', auth, adminAuth, async (req, res) => {
   try {
     const logs = await AuditLog.find({})
-      .populate('document_id', 'title')
+      .populate({ path: 'document_id', model: 'Document', select: 'title' })
       .sort({ timestamp: -1 })
       .limit(200);
     res.status(200).json(logs);
   } catch (error) {
-    res.status(500).json({ message: "অডিট লগ আনতে সমস্যা হয়েছে" });
+    res.status(500).json({ message: "অডিট লগ আনতে সমস্যা হয়েছে" });
   }
 });
 
+// ৪. ইউজার ডিলিট
 router.delete('/users/:id', auth, adminAuth, async (req, res) => {
   try {
     const userId = req.params.id;
     const targetUser = await User.findById(userId);
     
     if (targetUser && (targetUser.role === 'super_admin' || targetUser.role === 'admin')) {
-      return res.status(403).json({ message: "অ্যাডমিনকে ডিলিট করা সম্ভব নয়!" });
+      return res.status(403).json({ message: "অ্যাডমিনকে ডিলিট করা সম্ভব নয়!" });
     }
 
     await User.findByIdAndDelete(userId);
-    res.status(200).json({ message: "ইউজার ডিলিট হয়েছে" });
+    res.status(200).json({ message: "ইউজার ডিলিট হয়েছে" });
   } catch (error) {
-    res.status(500).json({ message: "ইউজার ডিলিট করতে সমস্যা হয়েছে" });
+    res.status(500).json({ message: "ইউজার ডিলিট করতে সমস্যা হয়েছে" });
   }
 });
 
