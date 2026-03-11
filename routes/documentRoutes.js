@@ -6692,22 +6692,64 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ২. হেল্পার ফাংশনসমূহ (PDF Merging & Email)
+// const mergeSignatures = async (doc) => {
+//   const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
+//   const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
+//   const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+//   const pages = pdfDoc.getPages();
+
+//   for (const f of doc.fields) {
+//     try {
+//       const fd = typeof f === 'string' ? JSON.parse(f) : f;
+//       if (fd.value && fd.filled) {
+//         const pageIndex = Number(fd.page) - 1;
+//         if (pageIndex < 0 || pageIndex >= pages.length) continue;
+
+//         const page = pages[pageIndex];
+//         const { width, height } = page.getSize();
+        
+//         const drawW = (Number(fd.width) * width) / 100;
+//         const drawH = (Number(fd.height) * height) / 100;
+//         const drawX = (Number(fd.x) * width) / 100;
+//         const drawY = height - ((Number(fd.y) * height) / 100) - drawH;
+
+//         if (fd.value.startsWith('data:image')) {
+//           const base64Data = fd.value.split(',')[1];
+//           const sigImg = await pdfDoc.embedPng(Buffer.from(base64Data, 'base64'));
+//           page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
+//         } else {
+//           page.drawText(String(fd.value), {
+//             x: drawX + 2, y: drawY + (drawH / 4),
+//             size: 11, font: timesFont, color: rgb(0, 0, 0),
+//           });
+//         }
+//       }
+//     } catch (e) { continue; }
+//   }
+//   return await pdfDoc.save();
+// };
+
 const mergeSignatures = async (doc) => {
   const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
   const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
   const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const pages = pdfDoc.getPages();
 
-  for (const f of doc.fields) {
+  const uniqueFields = Array.from(new Map(doc.fields.map(f => {
+    const obj = typeof f === 'string' ? JSON.parse(f) : f;
+    return [obj.id, obj];
+  })).values());
+
+  for (const fd of uniqueFields) {
     try {
-      const fd = typeof f === 'string' ? JSON.parse(f) : f;
-      if (fd.value && fd.filled) {
+      if (fd.value) { 
         const pageIndex = Number(fd.page) - 1;
         if (pageIndex < 0 || pageIndex >= pages.length) continue;
 
         const page = pages[pageIndex];
         const { width, height } = page.getSize();
         
+        // পজিশন ফিক্সড রাখার ক্যালকুলেশন
         const drawW = (Number(fd.width) * width) / 100;
         const drawH = (Number(fd.height) * height) / 100;
         const drawX = (Number(fd.x) * width) / 100;
@@ -6715,16 +6757,29 @@ const mergeSignatures = async (doc) => {
 
         if (fd.value.startsWith('data:image')) {
           const base64Data = fd.value.split(',')[1];
-          const sigImg = await pdfDoc.embedPng(Buffer.from(base64Data, 'base64'));
+          const imgBuffer = Buffer.from(base64Data, 'base64');
+          
+          // ফরম্যাট চেক (PNG না JPG তা অটো ডিটেক্ট করবে)
+          let sigImg;
+          if (fd.value.includes('image/png')) {
+            sigImg = await pdfDoc.embedPng(imgBuffer);
+          } else {
+            sigImg = await pdfDoc.embedJpg(imgBuffer);
+          }
+          
           page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
         } else {
           page.drawText(String(fd.value), {
-            x: drawX + 2, y: drawY + (drawH / 4),
+            x: drawX + 2, 
+            y: drawY + (drawH / 3),
             size: 11, font: timesFont, color: rgb(0, 0, 0),
           });
         }
       }
-    } catch (e) { continue; }
+    } catch (e) { 
+      console.error(`Render Error for field ${fd.id}:`, e); 
+      continue; 
+    }
   }
   return await pdfDoc.save();
 };
@@ -6886,16 +6941,63 @@ router.post('/send', auth, async (req, res) => {
 });
 
 // ৪. সিগনেচার সাবমিট (CRITICAL: এটি ডাইনামিক ID রাউটের উপরে থাকতে হবে)
+// router.post('/sign/submit', async (req, res) => {
+//   try {
+//     const { token, fields } = req.body;
+//     const doc = await Document.findOne({ "parties.token": token });
+//     if (!doc) return res.status(404).json({ error: "Invalid link" });
+
+//     const idx = doc.parties.findIndex(p => p.token === token);
+//     doc.parties[idx].status = 'signed';
+//     doc.parties[idx].signedAt = new Date();
+//     doc.fields = fields; 
+    
+//     doc.markModified('fields'); 
+//     doc.markModified('parties');
+
+//     if (idx + 1 < doc.parties.length) {
+//       const nextToken = crypto.randomBytes(32).toString('hex');
+//       doc.parties[idx + 1].token = nextToken;
+//       doc.parties[idx + 1].status = 'sent';
+//       doc.currentPartyIndex = idx + 1;
+//       await doc.save();
+//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
+//       res.json({ next: true });
+//     } else {
+//       doc.currentPartyIndex = idx;
+//       doc.status = 'completed';
+//       await doc.save();
+//       await generateAndSendFinalDoc(doc);
+//       res.json({ completed: true });
+//     }
+//   } catch (err) { res.status(500).json({ error: "Submit failed" }); }
+// });
 router.post('/sign/submit', async (req, res) => {
   try {
-    const { token, fields } = req.body;
+    const { token, fields: incomingFields } = req.body;
     const doc = await Document.findOne({ "parties.token": token });
     if (!doc) return res.status(404).json({ error: "Invalid link" });
 
     const idx = doc.parties.findIndex(p => p.token === token);
+    
+    // ১. আগের ডাটা হারানো রোধ করতে ফিল্ডগুলো মার্জ (Merge) করা
+    const existingFields = doc.fields || [];
+    const updatedFields = [...existingFields];
+
+    incomingFields.forEach(inf => {
+      const existingIdx = updatedFields.findIndex(ef => ef.id === inf.id);
+      if (existingIdx > -1) {
+        // যদি ফিল্ডটি আগে থেকেই থাকে, তবে তার ভ্যালু আপডেট করুন
+        updatedFields[existingIdx] = { ...updatedFields[existingIdx], ...inf };
+      } else {
+        // নতুন ফিল্ড হলে যুক্ত করুন
+        updatedFields.push(inf);
+      }
+    });
+
+    doc.fields = updatedFields;
     doc.parties[idx].status = 'signed';
     doc.parties[idx].signedAt = new Date();
-    doc.fields = fields; 
     
     doc.markModified('fields'); 
     doc.markModified('parties');
@@ -6912,10 +7014,14 @@ router.post('/sign/submit', async (req, res) => {
       doc.currentPartyIndex = idx;
       doc.status = 'completed';
       await doc.save();
-      await generateAndSendFinalDoc(doc);
+      // ২. পিডিএফ জেনারেশনের আগে ১ সেকেন্ড বিরতি দিন যেন ডাটাবেস সিঙ্ক হতে পারে
+      setTimeout(() => generateAndSendFinalDoc(doc), 1000);
       res.json({ completed: true });
     }
-  } catch (err) { res.status(500).json({ error: "Submit failed" }); }
+  } catch (err) { 
+    console.error("Submit Error:", err);
+    res.status(500).json({ error: "Submit failed" }); 
+  }
 });
 
 // ৫. সাইনিং পেজের ডেটা লোড
