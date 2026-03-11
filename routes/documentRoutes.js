@@ -7203,48 +7203,43 @@ router.post('/send', auth, async (req, res) => {
 router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields: incomingFields } = req.body;
-    
     const doc = await Document.findOne({ "parties.token": token });
     if (!doc) return res.status(404).json({ error: "Invalid link" });
 
     const idx = doc.parties.findIndex(p => p.token === token);
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
     
-    // ১. ফিক্সড আইপি অ্যাড্রেস বের করা
-    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip).split(',')[0].trim();
+    // ১. Vercel-এর জন্য সঠিক আইপি ডিটেকশন (Fix)
+    const ip = (
+      req.headers['x-real-ip'] || 
+      req.headers['x-forwarded-for']?.split(',')[0] || 
+      req.socket.remoteAddress || 
+      '127.0.0.1'
+    ).trim();
 
-    // ২. লোকেশন বের করার লজিক (ipapi.co ব্যবহার করে)
+    // ২. লোকেশন বের করার লজিক (ip-api.com ব্যবহার করা ভালো কারণ এটি Vercel-এ বেশি স্টেবল)
     let locationData = "Unknown Location";
     try {
-      const locRes = await axios.get(`https://ipapi.co/${ip}/json/`, { timeout: 3000 });
-      if (locRes.data && locRes.data.city) {
-        locationData = `${locRes.data.city}, ${locRes.data.region}, ${locRes.data.country_name}`;
+      // লোকালহোস্ট আইপিতে এপিআই কাজ করবে না, তাই টেস্টিং এর জন্য চেক
+      if (ip !== '127.0.0.1' && ip !== '::1') {
+        const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 3000 });
+        if (locRes.data && locRes.data.status === 'success') {
+          locationData = `${locRes.data.city}, ${locRes.data.regionName}, ${locRes.data.country}`;
+        }
       }
     } catch (locErr) {
       console.error("Location API Error:", locErr.message);
     }
 
-    // ৩. ফিল্ড মার্জ লজিক (আপনার আগের কোড অনুযায়ী)
-    const existingFields = doc.fields || [];
-    const updatedFields = [...existingFields];
-    incomingFields.forEach(inf => {
-      const existingIdx = updatedFields.findIndex(ef => ef.id === inf.id);
-      if (existingIdx > -1) {
-        updatedFields[existingIdx] = { ...updatedFields[existingIdx], ...inf };
-      } else {
-        updatedFields.push(inf);
-      }
-    });
-
-    // ৪. ইউজারের নতুন ডেটা আপডেট (মডেল অনুযায়ী)
-    doc.fields = updatedFields;
+    // ৩. ফিল্ড আপডেট
+    doc.fields = incomingFields;
     doc.parties[idx].status = 'signed';
     doc.parties[idx].signedAt = new Date();
     doc.parties[idx].device = userAgent;
-    doc.parties[idx].ipAddress = ip;       // 🌟 নতুন যোগ করা
-    doc.parties[idx].location = locationData; // 🌟 নতুন যোগ করা
+    doc.parties[idx].ipAddress = ip;
+    doc.parties[idx].location = locationData;
 
-    // ৫. অডিট লগ তৈরি (বিস্তারিত সহ)
+    // ৪. অডিট লগ তৈরি
     await AuditLog.create({
       document_id: doc._id,
       action: 'signed',
@@ -7261,7 +7256,7 @@ router.post('/sign/submit', async (req, res) => {
     doc.markModified('fields'); 
     doc.markModified('parties');
 
-    // পরবর্তী স্টেপ হ্যান্ডলিং (আপনার আগের কোড অনুযায়ী)
+    // পরবর্তী স্টেপ হ্যান্ডলিং
     if (idx + 1 < doc.parties.length) {
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
@@ -7273,7 +7268,6 @@ router.post('/sign/submit', async (req, res) => {
     } else {
       doc.status = 'completed';
       await doc.save(); 
-      
       const finalizedDoc = await Document.findById(doc._id);
       await generateAndSendFinalDoc(finalizedDoc); 
       return res.json({ completed: true });
