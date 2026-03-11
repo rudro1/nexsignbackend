@@ -6840,7 +6840,7 @@ const generateAndSendFinalDoc = async (doc) => {
     const recipients = doc.parties.map(p => p.email).filter(e => e);
     
     if (recipients.length > 0) {
-       transporter.sendMail({
+    await  transporter.sendMail({
         from: `"NexSign" <${process.env.EMAIL_USER}>`,
         to: recipients.join(','),
         subject: `Completed: ${doc.title}`,
