@@ -6675,6 +6675,7 @@ const { v2: cloudinary } = require('cloudinary');
 const crypto = require('crypto');
 const nodemailer = require('nodemailer');
 const Document = require('../models/Document');
+const AuditLog = require('../models/AuditLog');
 const auth = require('../middleware/auth');
 
 cloudinary.config({
