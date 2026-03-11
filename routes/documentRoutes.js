@@ -6784,35 +6784,75 @@ const mergeSignatures = async (doc) => {
   return await pdfDoc.save();
 };
 
+// const generateAndSendFinalDoc = async (doc) => {
+//   try {
+//     const pdfBytes = await mergeSignatures(doc);
+//     const pdfBuffer = Buffer.from(pdfBytes);
+//     const publicId = `completed/final_${doc._id}_${Date.now()}`;
+
+//     const uploadResult = await new Promise((resolve, reject) => {
+//       const stream = cloudinary.uploader.upload_stream(
+//         { resource_type: "raw", public_id: publicId, format: 'pdf' },
+//         (err, res) => err ? reject(err) : resolve(res)
+//       );
+//       stream.end(pdfBuffer);
+//     });
+
+//     doc.fileUrl = uploadResult.secure_url;
+//     doc.status = 'completed';
+//     await doc.save();
+
+//     const recipients = doc.parties.map(p => p.email);
+//     await transporter.sendMail({
+//       from: `"NexSign" <${process.env.EMAIL_USER}>`,
+//       to: recipients.join(','),
+//       subject: `Completed: ${doc.title}`,
+//       html: `<h3>Signing Complete!</h3><p>The final signed version of <b>${doc.title}</b> is attached.</p>`,
+//       attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer }]
+//     });
+//   } catch (err) { console.error("Finalize Error:", err); }
+// };
 const generateAndSendFinalDoc = async (doc) => {
   try {
     const pdfBytes = await mergeSignatures(doc);
     const pdfBuffer = Buffer.from(pdfBytes);
-    const publicId = `completed/final_${doc._id}_${Date.now()}`;
-
+    
     const uploadResult = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(
-        { resource_type: "raw", public_id: publicId, format: 'pdf' },
+      cloudinary.uploader.upload_stream(
+        { 
+          resource_type: "auto", 
+          public_id: `final_${doc._id}_${Date.now()}`,
+          folder: "completed_docs",
+          format: "pdf" 
+        },
         (err, res) => err ? reject(err) : resolve(res)
-      );
-      stream.end(pdfBuffer);
+      ).end(pdfBuffer);
     });
 
     doc.fileUrl = uploadResult.secure_url;
     doc.status = 'completed';
     await doc.save();
 
-    const recipients = doc.parties.map(p => p.email);
-    await transporter.sendMail({
-      from: `"NexSign" <${process.env.EMAIL_USER}>`,
-      to: recipients.join(','),
-      subject: `Completed: ${doc.title}`,
-      html: `<h3>Signing Complete!</h3><p>The final signed version of <b>${doc.title}</b> is attached.</p>`,
-      attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer }]
-    });
-  } catch (err) { console.error("Finalize Error:", err); }
+    // ইমেইল লিস্ট ক্লিন করা (খালি ইমেইল থাকলে বাদ দেবে)
+    const recipients = doc.parties.map(p => p.email).filter(e => e);
+    
+    if (recipients.length > 0) {
+      await transporter.sendMail({
+        from: `"NexSign" <${process.env.EMAIL_USER}>`,
+        to: recipients.join(','),
+        subject: `Completed: ${doc.title}`,
+        html: `<h3>Signing Complete!</h3><p>The final signed version of <b>${doc.title}</b> is attached.</p>`,
+        attachments: [{ 
+          filename: `${doc.title}_Final.pdf`, 
+          content: pdfBuffer,
+          contentType: 'application/pdf'
+        }]
+      });
+    }
+  } catch (err) { 
+    console.error("Finalize Error:", err); 
+  }
 };
-
 const sendSigningEmail = async (party, docTitle, token) => {
   const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
   const signLink = `${baseUrl}/sign?token=${token}`;
