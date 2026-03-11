@@ -6856,17 +6856,38 @@ const generateAndSendFinalDoc = async (doc) => {
     console.error("Finalize Error:", err); 
   }
 };
+// const sendSigningEmail = async (party, docTitle, token) => {
+//   const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
+//   const signLink = `${baseUrl}/sign?token=${token}`;
+//   return transporter.sendMail({
+//     from: `"NexSign" <${process.env.EMAIL_USER}>`,
+//     to: party.email,
+//     subject: `Signature Request: ${docTitle}`,
+//     html: `<p>Please sign the document here: <a href="${signLink}">${signLink}</a></p>`
+//   });
+// };
 const sendSigningEmail = async (party, docTitle, token) => {
   const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
   const signLink = `${baseUrl}/sign?token=${token}`;
+  
   return transporter.sendMail({
     from: `"NexSign" <${process.env.EMAIL_USER}>`,
     to: party.email,
-    subject: `Signature Request: ${docTitle}`,
-    html: `<p>Please sign the document here: <a href="${signLink}">${signLink}</a></p>`
+    subject: `Action Required: Signature Request for ${docTitle}`,
+    // HTML-টি আরও সুন্দর করা হয়েছে যেন ক্লিক রেট বাড়ে
+    html: `
+      <div style="font-family: sans-serif; padding: 20px; color: #333;">
+        <h2>Hello ${party.name || 'Signer'},</h2>
+        <p>You have been requested to sign the document: <b>${docTitle}</b>.</p>
+        <p>Please click the button below to review and sign:</p>
+        <a href="${signLink}" style="background: #007bff; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 20px 0;">Sign Document</a>
+        <p>If the button doesn't work, copy and paste this link: <br/> ${signLink}</p>
+        <hr style="border: none; border-top: 1px solid #eee; margin-top: 30px;">
+        <p style="font-size: 12px; color: #777;">Sent via NexSign - Secure Electronic Signatures</p>
+      </div>
+    `
   });
 };
-
 // --- ROUTES (ORDER MATTERS) ---
 
 // ১. ড্যাশবোর্ড ডেটা
@@ -7141,7 +7162,7 @@ router.post('/sign/submit', async (req, res) => {
       await doc.save();
       
       // 🚀 পরিবর্তন: await সরিয়ে দেওয়া হয়েছে (Non-blocking)
-      sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
+    await  sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
       
       return res.json({ next: true });
     } else {
