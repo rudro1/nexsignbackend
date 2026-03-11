@@ -6730,12 +6730,75 @@ const upload = multer({ storage });
 //   return await pdfDoc.save();
 // };
 
+// const mergeSignatures = async (doc) => {
+//   const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
+//   const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
+//   const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+//   const pages = pdfDoc.getPages();
+
+//   const uniqueFields = Array.from(new Map(doc.fields.map(f => {
+//     const obj = typeof f === 'string' ? JSON.parse(f) : f;
+//     return [obj.id, obj];
+//   })).values());
+
+//   for (const fd of uniqueFields) {
+//     try {
+//       if (fd.value) { 
+//         const pageIndex = Number(fd.page) - 1;
+//         if (pageIndex < 0 || pageIndex >= pages.length) continue;
+
+//         const page = pages[pageIndex];
+//         const { width, height } = page.getSize();
+        
+//         // পজিশন ফিক্সড রাখার ক্যালকুলেশন
+//         const drawW = (Number(fd.width) * width) / 100;
+//         const drawH = (Number(fd.height) * height) / 100;
+//         const drawX = (Number(fd.x) * width) / 100;
+//         const drawY = height - ((Number(fd.y) * height) / 100) - drawH;
+
+//         if (fd.value.startsWith('data:image')) {
+//           const base64Data = fd.value.split(',')[1];
+//           const imgBuffer = Buffer.from(base64Data, 'base64');
+          
+//           // ফরম্যাট চেক (PNG না JPG তা অটো ডিটেক্ট করবে)
+//           let sigImg;
+//           if (fd.value.includes('image/png')) {
+//             sigImg = await pdfDoc.embedPng(imgBuffer);
+//           } else {
+//             sigImg = await pdfDoc.embedJpg(imgBuffer);
+//           }
+          
+//           page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
+//         } else {
+//           page.drawText(String(fd.value), {
+//             x: drawX + 2, 
+//             y: drawY + (drawH / 3),
+//             size: 11, font: timesFont, color: rgb(0, 0, 0),
+//           });
+//         }
+//       }
+//     } catch (e) { 
+//       console.error(`Render Error for field ${fd.id}:`, e); 
+//       continue; 
+//     }
+//   }
+//   return await pdfDoc.save({ 
+//   useObjectStreams: true, // এটি ফাইলের সাইজ অনেকটা কমিয়ে দেবে
+//   addDefaultPage: false 
+// });
+// }; workable
 const mergeSignatures = async (doc) => {
-  const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
+  // ১. সরাসরি Cloudinary URL থেকে ফাইল আনা (Timeout ও Error Handling সহ)
+  const response = await axios.get(doc.fileUrl, { 
+    responseType: 'arraybuffer',
+    timeout: 15000 
+  });
+  
   const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
   const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const pages = pdfDoc.getPages();
 
+  // ২. ডুপ্লিকেট ফিল্ড রিমুভ এবং ক্লিনআপ
   const uniqueFields = Array.from(new Map(doc.fields.map(f => {
     const obj = typeof f === 'string' ? JSON.parse(f) : f;
     return [obj.id, obj];
@@ -6743,49 +6806,55 @@ const mergeSignatures = async (doc) => {
 
   for (const fd of uniqueFields) {
     try {
-      if (fd.value) { 
-        const pageIndex = Number(fd.page) - 1;
-        if (pageIndex < 0 || pageIndex >= pages.length) continue;
+      if (!fd.value || !fd.filled) continue; // শুধু ফিল্ড করা ডেটা প্রসেস হবে
 
-        const page = pages[pageIndex];
-        const { width, height } = page.getSize();
+      const pageIndex = Number(fd.page) - 1;
+      if (pageIndex < 0 || pageIndex >= pages.length) continue;
+
+      const page = pages[pageIndex];
+      const { width, height } = page.getSize();
+      
+      // ক্যালকুলেশন (PDF কোঅর্ডিনেট সিস্টেম অনুযায়ী)
+      const drawW = (Number(fd.width) * width) / 100;
+      const drawH = (Number(fd.height) * height) / 100;
+      const drawX = (Number(fd.x) * width) / 100;
+      const drawY = height - ((Number(fd.y) * height) / 100) - drawH;
+
+      if (fd.value.startsWith('data:image')) {
+        const base64Data = fd.value.split(',')[1];
+        const imgBuffer = Buffer.from(base64Data, 'base64');
         
-        // পজিশন ফিক্সড রাখার ক্যালকুলেশন
-        const drawW = (Number(fd.width) * width) / 100;
-        const drawH = (Number(fd.height) * height) / 100;
-        const drawX = (Number(fd.x) * width) / 100;
-        const drawY = height - ((Number(fd.y) * height) / 100) - drawH;
-
-        if (fd.value.startsWith('data:image')) {
-          const base64Data = fd.value.split(',')[1];
-          const imgBuffer = Buffer.from(base64Data, 'base64');
-          
-          // ফরম্যাট চেক (PNG না JPG তা অটো ডিটেক্ট করবে)
-          let sigImg;
-          if (fd.value.includes('image/png')) {
-            sigImg = await pdfDoc.embedPng(imgBuffer);
-          } else {
-            sigImg = await pdfDoc.embedJpg(imgBuffer);
-          }
-          
-          page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
+        let sigImg;
+        // ৩. উন্নত ইমেজ ফরম্যাট হ্যান্ডলিং
+        if (fd.value.includes('image/png')) {
+          sigImg = await pdfDoc.embedPng(imgBuffer);
+        } else if (fd.value.includes('image/jpeg') || fd.value.includes('image/jpg')) {
+          sigImg = await pdfDoc.embedJpg(imgBuffer);
         } else {
-          page.drawText(String(fd.value), {
-            x: drawX + 2, 
-            y: drawY + (drawH / 3),
-            size: 11, font: timesFont, color: rgb(0, 0, 0),
-          });
+          // যদি ফরম্যাট না মেলে, তবুও ট্রাই করবে
+          sigImg = await pdfDoc.embedPng(imgBuffer).catch(() => pdfDoc.embedJpg(imgBuffer));
         }
+        
+        page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
+      } else {
+        // টেক্সট ফিল্ড (যেমন: নাম বা তারিখ)
+        page.drawText(String(fd.value), {
+          x: drawX + 2, 
+          y: drawY + (drawH / 2.5), // টেক্সট পজিশন ভার্টিক্যালি সেন্টার করা
+          size: 11, font: timesFont, color: rgb(0, 0, 0),
+        });
       }
     } catch (e) { 
-      console.error(`Render Error for field ${fd.id}:`, e); 
+      console.error(`Render Error for field ${fd.id}:`, e.message); 
       continue; 
     }
   }
+
+  // ৪. ফাইনাল সেভ (অবশ্যই await করতে হবে)
   return await pdfDoc.save({ 
-  useObjectStreams: true, // এটি ফাইলের সাইজ অনেকটা কমিয়ে দেবে
-  addDefaultPage: false 
-});
+    useObjectStreams: true, 
+    addDefaultPage: false 
+  });
 };
 
 // const generateAndSendFinalDoc = async (doc) => {
@@ -6818,30 +6887,34 @@ const mergeSignatures = async (doc) => {
 // };
 const generateAndSendFinalDoc = async (doc) => {
   try {
+    // ১. সাইনসহ PDF তৈরি (নিশ্চিত করুন mergeSignatures লেটেস্ট doc.fields পাচ্ছে)
     const pdfBytes = await mergeSignatures(doc);
     const pdfBuffer = Buffer.from(pdfBytes);
     
+    // ২. ক্লাউডিনারি আপলোড (অবশ্যই resource_type: "raw" ব্যবহার করুন)
     const uploadResult = await new Promise((resolve, reject) => {
-      cloudinary.uploader.upload_stream(
+      const stream = cloudinary.uploader.upload_stream(
         { 
-          resource_type: "auto", 
-          public_id: `final_${doc._id}_${Date.now()}`,
+          resource_type: "raw", 
           folder: "completed_docs",
-          format: "pdf" 
+          public_id: `final_${doc._id}_${Date.now()}.pdf`, // এক্সটেনশন যুক্ত করুন
+          access_mode: 'public'
         },
         (err, res) => err ? reject(err) : resolve(res)
-      ).end(pdfBuffer);
+      );
+      stream.end(pdfBuffer);
     });
 
+    // ৩. ডাটাবেসে সাইনসহ নতুন URL আপডেট করা
     doc.fileUrl = uploadResult.secure_url;
     doc.status = 'completed';
     await doc.save();
 
-    // ইমেইল লিস্ট ক্লিন করা (খালি ইমেইল থাকলে বাদ দেবে)
+    // ৪. ইমেইল পাঠানো
     const recipients = doc.parties.map(p => p.email).filter(e => e);
     
     if (recipients.length > 0) {
-    await  transporter.sendMail({
+      await transporter.sendMail({
         from: `"NexSign" <${process.env.EMAIL_USER}>`,
         to: recipients.join(','),
         subject: `Completed: ${doc.title}`,
@@ -6853,8 +6926,9 @@ const generateAndSendFinalDoc = async (doc) => {
         }]
       });
     }
+    console.log("Final document processed and email sent.");
   } catch (err) { 
-    console.error("Finalize Error:", err); 
+    console.error("Finalize Error Detailed:", err); 
   }
 };
 // const sendSigningEmail = async (party, docTitle, token) => {
@@ -7129,16 +7203,16 @@ router.post('/send', auth, async (req, res) => {
 router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields: incomingFields } = req.body;
+    
+    // ১. ডকুমেন্ট খুঁজে বের করা
     const doc = await Document.findOne({ "parties.token": token });
     if (!doc) return res.status(404).json({ error: "Invalid link" });
 
     const idx = doc.parties.findIndex(p => p.token === token);
-    
-    // ✅ ডিভাইস ইনফো এবং আইপি অ্যাড্রেস নেওয়া
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || req.ip;
 
-    // ১. ফিল্ড মার্জ লজিক
+    // ২. ফিল্ড মার্জ লজিক (Existing + New)
     const existingFields = doc.fields || [];
     const updatedFields = [...existingFields];
 
@@ -7151,12 +7225,13 @@ router.post('/sign/submit', async (req, res) => {
       }
     });
 
+    // ৩. ইউজারের স্ট্যাটাস এবং ডেটা আপডেট
     doc.fields = updatedFields;
     doc.parties[idx].status = 'signed';
     doc.parties[idx].signedAt = new Date();
-    doc.parties[idx].device = userAgent; // ✅ ডকুমেন্ট মডেলে ডিভাইস সেভ
+    doc.parties[idx].device = userAgent;
 
-    // অডিট লগ: নির্দিষ্ট ইউজারের সাইন করার রেকর্ড
+    // ৪. অডিট লগ তৈরি (ইউজার সাইন)
     await AuditLog.create({
       document_id: doc._id,
       action: 'signed',
@@ -7166,14 +7241,16 @@ router.post('/sign/submit', async (req, res) => {
         role: 'signer' 
       },
       ip_address: ip,
-      user_agent: userAgent, // ✅ অডিট লগে ডিভাইস সেভ
+      user_agent: userAgent,
       details: `${doc.parties[idx].email} একটি স্বাক্ষর সম্পন্ন করেছেন। ডিভাইস: ${userAgent}`
     });
 
     doc.markModified('fields'); 
     doc.markModified('parties');
 
+    // ৫. পরবর্তী স্টেপ হ্যান্ডলিং
     if (idx + 1 < doc.parties.length) {
+      // যদি আরও সিগনার বাকি থাকে
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
@@ -7183,10 +7260,10 @@ router.post('/sign/submit', async (req, res) => {
       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
       return res.json({ next: true });
     } else {
+      // যদি শেষ সিগনার হয় - ডকুমেন্ট কমপ্লিট
       doc.status = 'completed';
       await doc.save(); 
       
-      // ✅ অডিট লগ: পুরো ডকুমেন্ট কমপ্লিট হওয়ার রেকর্ড
       await AuditLog.create({
         document_id: doc._id,
         action: 'completed',
@@ -7196,7 +7273,10 @@ router.post('/sign/submit', async (req, res) => {
         details: 'সকল পক্ষ স্বাক্ষর করেছেন। ডকুমেন্টটি চূড়ান্তভাবে সংরক্ষিত হয়েছে।'
       });
 
-      generateAndSendFinalDoc(doc); 
+      // 🌟 ফিক্স: ডাটাবেস থেকে ফ্রেশ ডেটাসহ ডকুমেন্ট নিয়ে PDF তৈরি ও মেইল পাঠানো
+      const finalizedDoc = await Document.findById(doc._id);
+      await generateAndSendFinalDoc(finalizedDoc); 
+      
       return res.json({ completed: true });
     }
   } catch (err) { 
