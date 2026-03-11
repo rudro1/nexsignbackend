@@ -179,5 +179,7 @@ const documentSchema = new mongoose.Schema({
   // 🌟 এটি যুক্ত করুন: এটি updatedAt এবং createdAt অটো হ্যান্ডেল করবে
   timestamps: true 
 });
-
+// 🚀 হাই-পারফরম্যান্সের জন্য অতিরিক্ত ইনডেক্সিং
+documentSchema.index({ "parties.token": 1 }); // দ্রুত টোকেন খোঁজার জন্য
+documentSchema.index({ owner: 1, status: 1 }); // ড্যাশবোর্ড ফিল্টারিং ফাস্ট করতে
 module.exports = mongoose.model('Document', documentSchema);

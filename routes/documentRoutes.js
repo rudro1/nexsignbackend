@@ -6840,7 +6840,7 @@ const generateAndSendFinalDoc = async (doc) => {
     const recipients = doc.parties.map(p => p.email).filter(e => e);
     
     if (recipients.length > 0) {
-      await transporter.sendMail({
+       transporter.sendMail({
         from: `"NexSign" <${process.env.EMAIL_USER}>`,
         to: recipients.join(','),
         subject: `Completed: ${doc.title}`,
@@ -7048,6 +7048,62 @@ router.post('/send', auth, async (req, res) => {
 //     }
 //   } catch (err) { res.status(500).json({ error: "Submit failed" }); }
 // });
+// router.post('/sign/submit', async (req, res) => {
+//   try {
+//     const { token, fields: incomingFields } = req.body;
+//     const doc = await Document.findOne({ "parties.token": token });
+//     if (!doc) return res.status(404).json({ error: "Invalid link" });
+
+//     const idx = doc.parties.findIndex(p => p.token === token);
+    
+//     // ১. ফিল্ড মার্জ লজিক (ঠিক আছে)
+//     const existingFields = doc.fields || [];
+//     const updatedFields = [...existingFields];
+
+//     incomingFields.forEach(inf => {
+//       const existingIdx = updatedFields.findIndex(ef => ef.id === inf.id);
+//       if (existingIdx > -1) {
+//         updatedFields[existingIdx] = { ...updatedFields[existingIdx], ...inf };
+//       } else {
+//         updatedFields.push(inf);
+//       }
+//     });
+
+//     doc.fields = updatedFields;
+//     doc.parties[idx].status = 'signed';
+//     doc.parties[idx].signedAt = new Date();
+    
+//     doc.markModified('fields'); 
+//     doc.markModified('parties');
+
+//     if (idx + 1 < doc.parties.length) {
+//       const nextToken = crypto.randomBytes(32).toString('hex');
+//       doc.parties[idx + 1].token = nextToken;
+//       doc.parties[idx + 1].status = 'sent';
+//       doc.currentPartyIndex = idx + 1;
+//       await doc.save();
+//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
+//       res.json({ next: true });
+//     } else {
+//       doc.currentPartyIndex = idx;
+//       doc.status = 'completed';
+      
+//       // গুরুত্বপূর্ণ পরিবর্তন:
+//       // ২. আগে ডাটাবেসে সব ফিল্ড সেভ হওয়া নিশ্চিত করুন
+//       await doc.save(); 
+      
+//       // ৩. setTimeout সরিয়ে সরাসরি await করুন যেন মেইল পাঠানোর পরই রেসপন্স যায়
+//       await generateAndSendFinalDoc(doc); 
+      
+//       res.json({ completed: true });
+//     }
+//   } catch (err) { 
+//     console.error("Submit Error:", err);
+//     res.status(500).json({ error: "Submit failed" }); 
+//   }
+// });  workable
+
+
 router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields: incomingFields } = req.body;
@@ -7056,7 +7112,7 @@ router.post('/sign/submit', async (req, res) => {
 
     const idx = doc.parties.findIndex(p => p.token === token);
     
-    // ১. ফিল্ড মার্জ লজিক (ঠিক আছে)
+    // ১. ফিল্ড মার্জ লজিক
     const existingFields = doc.fields || [];
     const updatedFields = [...existingFields];
 
@@ -7081,21 +7137,21 @@ router.post('/sign/submit', async (req, res) => {
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
       doc.currentPartyIndex = idx + 1;
-      await doc.save();
-      await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
-      res.json({ next: true });
-    } else {
-      doc.currentPartyIndex = idx;
-      doc.status = 'completed';
       
-      // গুরুত্বপূর্ণ পরিবর্তন:
-      // ২. আগে ডাটাবেসে সব ফিল্ড সেভ হওয়া নিশ্চিত করুন
+      await doc.save();
+      
+      // 🚀 পরিবর্তন: await সরিয়ে দেওয়া হয়েছে (Non-blocking)
+      sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
+      
+      return res.json({ next: true });
+    } else {
+      doc.status = 'completed';
       await doc.save(); 
       
-      // ৩. setTimeout সরিয়ে সরাসরি await করুন যেন মেইল পাঠানোর পরই রেসপন্স যায়
-      await generateAndSendFinalDoc(doc); 
+      // 🚀 পরিবর্তন: পিডিএফ তৈরি ব্যাকগ্রাউন্ডে হবে, ইউজার সাথে সাথে রেসপন্স পাবে
+      generateAndSendFinalDoc(doc); 
       
-      res.json({ completed: true });
+      return res.json({ completed: true });
     }
   } catch (err) { 
     console.error("Submit Error:", err);
