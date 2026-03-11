@@ -7020,17 +7020,15 @@ router.post('/sign/submit', async (req, res) => {
 
     const idx = doc.parties.findIndex(p => p.token === token);
     
-    // ১. আগের ডাটা হারানো রোধ করতে ফিল্ডগুলো মার্জ (Merge) করা
+    // ১. ফিল্ড মার্জ লজিক (ঠিক আছে)
     const existingFields = doc.fields || [];
     const updatedFields = [...existingFields];
 
     incomingFields.forEach(inf => {
       const existingIdx = updatedFields.findIndex(ef => ef.id === inf.id);
       if (existingIdx > -1) {
-        // যদি ফিল্ডটি আগে থেকেই থাকে, তবে তার ভ্যালু আপডেট করুন
         updatedFields[existingIdx] = { ...updatedFields[existingIdx], ...inf };
       } else {
-        // নতুন ফিল্ড হলে যুক্ত করুন
         updatedFields.push(inf);
       }
     });
@@ -7053,9 +7051,14 @@ router.post('/sign/submit', async (req, res) => {
     } else {
       doc.currentPartyIndex = idx;
       doc.status = 'completed';
-      await doc.save();
-      // ২. পিডিএফ জেনারেশনের আগে ১ সেকেন্ড বিরতি দিন যেন ডাটাবেস সিঙ্ক হতে পারে
-      setTimeout(() => generateAndSendFinalDoc(doc), 1000);
+      
+      // গুরুত্বপূর্ণ পরিবর্তন:
+      // ২. আগে ডাটাবেসে সব ফিল্ড সেভ হওয়া নিশ্চিত করুন
+      await doc.save(); 
+      
+      // ৩. setTimeout সরিয়ে সরাসরি await করুন যেন মেইল পাঠানোর পরই রেসপন্স যায়
+      await generateAndSendFinalDoc(doc); 
+      
       res.json({ completed: true });
     }
   } catch (err) { 
@@ -7063,7 +7066,6 @@ router.post('/sign/submit', async (req, res) => {
     res.status(500).json({ error: "Submit failed" }); 
   }
 });
-
 // ৫. সাইনিং পেজের ডেটা লোড
 router.get('/sign/:token', async (req, res) => {
   try {
@@ -7075,16 +7077,33 @@ router.get('/sign/:token', async (req, res) => {
 });
 
 // ৬. পিডিএফ প্রক্সি
+// router.get('/proxy/*', async (req, res) => {
+//   try {
+//     const path = req.params[0];
+//     const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${path}`;
+//     const response = await axios.get(url, { responseType: 'stream' });
+//     res.setHeader('Content-Type', 'application/pdf');
+//     response.data.pipe(res);
+//   } catch (err) { res.status(404).send("File not found"); }
+// });
 router.get('/proxy/*', async (req, res) => {
   try {
     const path = req.params[0];
-    const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${path}`;
+    
+    // ফিক্স: 'raw/upload' সরিয়ে দিন কারণ ক্লাউডিনারি পাথ ফাইলের টাইপের ওপর নির্ভর করে
+    // আপনার আগের পাঠানো path এর ভেতরেই সব ইনফো থাকে
+    const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/${path}`;
+    
     const response = await axios.get(url, { responseType: 'stream' });
+    
+    // ব্রাউজারকে জানান এটি একটি পিডিএফ
     res.setHeader('Content-Type', 'application/pdf');
     response.data.pipe(res);
-  } catch (err) { res.status(404).send("File not found"); }
+  } catch (err) { 
+    console.error("Proxy Error:", err.message);
+    res.status(404).send("File not found or access denied"); 
+  }
 });
-
 // ৭. ডাইনামিক আইডি রাউট (অবশ্যই সবার শেষে)
 router.get('/:id', auth, async (req, res) => {
   try {
