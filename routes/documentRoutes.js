@@ -7068,7 +7068,6 @@ const generateAndSendFinalDoc = async (doc) => {
     const { width, height } = page.getSize();
     let y = height - 50;
 
-    // বর্ডার ও ডিজাইন (আগের মতোই থাকবে)
     page.drawRectangle({
       x: 20, y: 20, width: width - 40, height: height - 40,
       borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
@@ -7129,7 +7128,15 @@ const generateAndSendFinalDoc = async (doc) => {
         page.drawText(chunk, { x: 70, y, size: 8, font: timesFont, color: rgb(0.4, 0.4, 0.4) });
         y -= 12;
       }
-      page.drawText(`Signed At: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`, { x: 70, y, size: 9, font: boldFont });
+
+      // 🌟 ফিক্সড টাইমজোন: Bangladesh Time (BST)
+      const signedTime = p.signedAt ? new Date(p.signedAt).toLocaleString('en-US', { 
+        timeZone: 'Asia/Dhaka',
+        dateStyle: 'medium',
+        timeStyle: 'medium'
+      }) : 'N/A';
+
+      page.drawText(`Signed At: ${signedTime}`, { x: 70, y, size: 9, font: boldFont });
       y -= 35; 
     });
 
@@ -7152,37 +7159,81 @@ const generateAndSendFinalDoc = async (doc) => {
     const validCCs = (doc.ccEmails || []).filter(e => e && e.trim() !== "");
     const allRecipients = [...new Set([...signers, ...validCCs])];
     
-    // 🌟 ৩. সুন্দর ইমেইল টেমপ্লেট যোগ করা হয়েছে
+    // if (allRecipients.length > 0) {
+    //   // 🌟 ইমেইল টেমপ্লেটেও টাইমজোন ফিক্স করা হয়েছে
+    //   const completedTime = new Date().toLocaleString('en-US', { 
+    //     timeZone: 'Asia/Dhaka',
+    //     dateStyle: 'medium',
+    //     timeStyle: 'short'
+    //   });
+
+    //   await transporter.sendMail({
+    //     from: `"NexSign" <${process.env.EMAIL_USER}>`,
+    //     to: allRecipients.join(','), 
+    //     subject: `Fully Executed: ${doc.title}`,
+    //     html: `
+    //       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e1e1e1; border-radius: 8px; overflow: hidden;">
+    //         <div style="background-color: #2AAAE0; padding: 20px; text-align: center; color: #ffffff;">
+    //           <h1 style="margin: 0; font-size: 24px;">Signing Complete!</h1>
+    //         </div>
+    //         <div style="padding: 20px; color: #333333; line-height: 1.6;">
+    //           <p>Hello,</p>
+    //           <p>Great news! The document <b>"${doc.title}"</b> has been fully executed by all parties.</p>
+    //           <p>You can find the final signed PDF attached to this email. This version includes a <b>Digital Audit Certificate</b> for your secure record-keeping.</p>
+    //           <div style="background-color: #f4f7f9; border-left: 4px solid #2AAAE0; padding: 15px; margin: 20px 0;">
+    //             <p style="margin: 0;"><b>Document Details:</b></p>
+    //             <p style="margin: 5px 0 0;">ID: ${doc._id}</p>
+    //             <p style="margin: 0;">Completed On: ${completedTime} (BST)</p>
+    //           </div>
+    //           <p>Thank you for choosing <b>NexSign</b> for your digital document needs.</p>
+    //           <p style="margin-top: 30px;">Best regards,<br/>The NexSign Team</p>
+    //         </div>
+    //         <div style="background-color: #f9f9f9; padding: 15px; text-align: center; font-size: 12px; color: #888888;">
+    //           This is an automated message. Please do not reply to this email.
+    //         </div>
+    //       </div>
+    //     `,
+    //     attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
+    //   });
+    // }
     if (allRecipients.length > 0) {
-      await transporter.sendMail({
-        from: `"NexSign" <${process.env.EMAIL_USER}>`,
-        to: allRecipients.join(','), 
-        subject: `Fully Executed: ${doc.title}`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e1e1e1; border-radius: 8px; overflow: hidden;">
-            <div style="background-color: #2AAAE0; padding: 20px; text-align: center; color: #ffffff;">
-              <h1 style="margin: 0; font-size: 24px;">Signing Complete!</h1>
-            </div>
-            <div style="padding: 20px; color: #333333; line-height: 1.6;">
-              <p>Hello,</p>
-              <p>Great news! The document <b>"${doc.title}"</b> has been fully executed by all parties.</p>
-              <p>You can find the final signed PDF attached to this email. This version includes a <b>Digital Audit Certificate</b> for your secure record-keeping.</p>
-              <div style="background-color: #f4f7f9; border-left: 4px solid #2AAAE0; padding: 15px; margin: 20px 0;">
-                <p style="margin: 0;"><b>Document Details:</b></p>
-                <p style="margin: 5px 0 0;">ID: ${doc._id}</p>
-                <p style="margin: 0;">Completed On: ${new Date().toLocaleString()}</p>
-              </div>
-              <p>Thank you for choosing <b>NexSign</b> for your digital document needs.</p>
-              <p style="margin-top: 30px;">Best regards,<br/>The NexSign Team</p>
-            </div>
-            <div style="background-color: #f9f9f9; padding: 15px; text-align: center; font-size: 12px; color: #888888;">
-              This is an automated message. Please do not reply to this email.
-            </div>
+  const completedTime = new Date().toLocaleString('en-US', { 
+    timeZone: 'Asia/Dhaka',
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  });
+
+  await transporter.sendMail({
+    from: `"NexSign" <${process.env.EMAIL_USER}>`,
+    to: allRecipients.join(','), 
+    subject: `Fully Executed: ${doc.title}`,
+    html: `
+      <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e1e1e1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+        <div style="background-color: #2AAAE0; padding: 30px; text-align: center; color: #ffffff;">
+          <h1 style="margin: 0; font-size: 26px;">Document Fully Signed!</h1>
+          <p style="margin: 10px 0 0; opacity: 0.9;">Great news! Everyone has finished signing.</p>
+        </div>
+        <div style="padding: 30px; color: #444444; line-height: 1.6;">
+          <p>Hello,</p>
+          <p>The signing process for <b>"${doc.title}"</b> is now complete. A copy of the fully executed document, including the digital audit certificate, is attached to this email for your records.</p>
+          
+          <div style="background-color: #f8fcfe; border-left: 4px solid #2AAAE0; padding: 20px; margin: 25px 0; border-radius: 4px;">
+            <p style="margin: 0; font-weight: bold; color: #2AAAE0;">Document Summary:</p>
+            <p style="margin: 8px 0 0;">📄 <b>Name:</b> ${doc.title}</p>
+            <p style="margin: 4px 0 0;">📅 <b>Completed On:</b> ${completedTime} (BST)</p>
           </div>
-        `,
-        attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
-      });
-    }
+
+          <p>You can also view or download this document anytime from your NexSign dashboard.</p>
+          <p style="margin-top: 30px;">Best regards,<br/><b>The NexSign Team</b></p>
+        </div>
+        <div style="background-color: #f9f9f9; padding: 20px; text-align: center; font-size: 12px; color: #999999; border-top: 1px solid #eee;">
+          Securely processed by NexSign Digital Signature Service.
+        </div>
+      </div>
+    `,
+    attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
+  });
+}
   } catch (err) { 
     console.error("Finalize Error:", err); 
   }

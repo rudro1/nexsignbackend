@@ -58,7 +58,7 @@ const auditLogSchema = new mongoose.Schema({
   ip_address: { type: String },
   user_agent: { type: String }, 
   details: { type: String },
-  timestamp: { type: Date, default: Date.now, index: true }
+  timestamp: { type: Date, default: Date.now, index: true ,immutable: true}
 });
 
 module.exports = mongoose.model('AuditLog', auditLogSchema);
