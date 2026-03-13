@@ -6664,6 +6664,173 @@
 //   } catch (err) { res.status(404).send("File not found"); }
 // });
 
+// ৪. সিগনেচার সাবমিট (CRITICAL: এটি ডাইনামিক ID রাউটের উপরে থাকতে হবে)
+// router.post('/sign/submit', async (req, res) => {
+//   try {
+//     const { token, fields } = req.body;
+//     const doc = await Document.findOne({ "parties.token": token });
+//     if (!doc) return res.status(404).json({ error: "Invalid link" });
+
+//     const idx = doc.parties.findIndex(p => p.token === token);
+//     doc.parties[idx].status = 'signed';
+//     doc.parties[idx].signedAt = new Date();
+//     doc.fields = fields; 
+    
+//     doc.markModified('fields'); 
+//     doc.markModified('parties');
+
+//     if (idx + 1 < doc.parties.length) {
+//       const nextToken = crypto.randomBytes(32).toString('hex');
+//       doc.parties[idx + 1].token = nextToken;
+//       doc.parties[idx + 1].status = 'sent';
+//       doc.currentPartyIndex = idx + 1;
+//       await doc.save();
+//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
+//       res.json({ next: true });
+//     } else {
+//       doc.currentPartyIndex = idx;
+//       doc.status = 'completed';
+//       await doc.save();
+//       await generateAndSendFinalDoc(doc);
+//       res.json({ completed: true });
+//     }
+//   } catch (err) { res.status(500).json({ error: "Submit failed" }); }
+// });
+// router.post('/sign/submit', async (req, res) => {
+//   try {
+//     const { token, fields: incomingFields } = req.body;
+//     const doc = await Document.findOne({ "parties.token": token });
+//     if (!doc) return res.status(404).json({ error: "Invalid link" });
+
+//     const idx = doc.parties.findIndex(p => p.token === token);
+    
+//     // ১. ফিল্ড মার্জ লজিক (ঠিক আছে)
+//     const existingFields = doc.fields || [];
+//     const updatedFields = [...existingFields];
+
+//     incomingFields.forEach(inf => {
+//       const existingIdx = updatedFields.findIndex(ef => ef.id === inf.id);
+//       if (existingIdx > -1) {
+//         updatedFields[existingIdx] = { ...updatedFields[existingIdx], ...inf };
+//       } else {
+//         updatedFields.push(inf);
+//       }
+//     });
+
+//     doc.fields = updatedFields;
+//     doc.parties[idx].status = 'signed';
+//     doc.parties[idx].signedAt = new Date();
+    
+//     doc.markModified('fields'); 
+//     doc.markModified('parties');
+
+//     if (idx + 1 < doc.parties.length) {
+//       const nextToken = crypto.randomBytes(32).toString('hex');
+//       doc.parties[idx + 1].token = nextToken;
+//       doc.parties[idx + 1].status = 'sent';
+//       doc.currentPartyIndex = idx + 1;
+//       await doc.save();
+//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
+//       res.json({ next: true });
+//     } else {
+//       doc.currentPartyIndex = idx;
+//       doc.status = 'completed';
+      
+//       // গুরুত্বপূর্ণ পরিবর্তন:
+//       // ২. আগে ডাটাবেসে সব ফিল্ড সেভ হওয়া নিশ্চিত করুন
+//       await doc.save(); 
+      
+//       // ৩. setTimeout সরিয়ে সরাসরি await করুন যেন মেইল পাঠানোর পরই রেসপন্স যায়
+//       await generateAndSendFinalDoc(doc); 
+      
+//       res.json({ completed: true });
+//     }
+//   } catch (err) { 
+//     console.error("Submit Error:", err);
+//     res.status(500).json({ error: "Submit failed" }); 
+//   }
+// });  workable
+
+
+// router.post('/sign/submit', async (req, res) => {
+//   try {
+//     const { token, fields: incomingFields } = req.body;
+//     const doc = await Document.findOne({ "parties.token": token });
+//     if (!doc) return res.status(404).json({ error: "Invalid link" });
+
+//     const idx = doc.parties.findIndex(p => p.token === token);
+//     const userAgent = req.headers['user-agent'] || 'Unknown Device';
+    
+//     // ১. Vercel-এর জন্য সঠিক আইপি ডিটেকশন (Fix)
+//     const ip = (
+//       req.headers['x-real-ip'] || 
+//       req.headers['x-forwarded-for']?.split(',')[0] || 
+//       req.socket.remoteAddress || 
+//       '127.0.0.1'
+//     ).trim();
+
+//     // ২. লোকেশন বের করার লজিক (ip-api.com ব্যবহার করা ভালো কারণ এটি Vercel-এ বেশি স্টেবল)
+//     let locationData = "Unknown Location";
+//     try {
+//       // লোকালহোস্ট আইপিতে এপিআই কাজ করবে না, তাই টেস্টিং এর জন্য চেক
+//       if (ip !== '127.0.0.1' && ip !== '::1') {
+//         const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 3000 });
+//         if (locRes.data && locRes.data.status === 'success') {
+//           locationData = `${locRes.data.city}, ${locRes.data.regionName}, ${locRes.data.country}`;
+//         }
+//       }
+//     } catch (locErr) {
+//       console.error("Location API Error:", locErr.message);
+//     }
+
+//     // ৩. ফিল্ড আপডেট
+//     doc.fields = incomingFields;
+//     doc.parties[idx].status = 'signed';
+//     doc.parties[idx].signedAt = new Date();
+//     doc.parties[idx].device = userAgent;
+//     doc.parties[idx].ipAddress = ip;
+//     doc.parties[idx].location = locationData;
+
+//     // ৪. অডিট লগ তৈরি
+//     await AuditLog.create({
+//       document_id: doc._id,
+//       action: 'signed',
+//       performed_by: { 
+//         name: doc.parties[idx].name, 
+//         email: doc.parties[idx].email, 
+//         role: 'signer' 
+//       },
+//       ip_address: ip,
+//       user_agent: userAgent,
+//       details: `Signed by ${doc.parties[idx].email} from ${locationData}. Device: ${userAgent}`
+//     });
+
+//     doc.markModified('fields'); 
+//     doc.markModified('parties');
+
+//     // পরবর্তী স্টেপ হ্যান্ডলিং
+//     if (idx + 1 < doc.parties.length) {
+//       const nextToken = crypto.randomBytes(32).toString('hex');
+//       doc.parties[idx + 1].token = nextToken;
+//       doc.parties[idx + 1].status = 'sent';
+//       doc.currentPartyIndex = idx + 1;
+//       await doc.save();
+//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
+//       return res.json({ next: true });
+//     } else {
+//       doc.status = 'completed';
+//       await doc.save(); 
+//       const finalizedDoc = await Document.findById(doc._id);
+//       await generateAndSendFinalDoc(finalizedDoc); 
+//       return res.json({ completed: true });
+//     }
+//   } catch (err) { 
+//     console.error("Submit Error:", err);
+//     res.status(500).json({ error: "Submit failed" }); 
+//   }
+// }); //workable
+
+
 // module.exports = router;
 
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
@@ -6693,42 +6860,7 @@ const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 // ২. হেল্পার ফাংশনসমূহ (PDF Merging & Email)
-// const mergeSignatures = async (doc) => {
-//   const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
-//   const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
-//   const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
-//   const pages = pdfDoc.getPages();
 
-//   for (const f of doc.fields) {
-//     try {
-//       const fd = typeof f === 'string' ? JSON.parse(f) : f;
-//       if (fd.value && fd.filled) {
-//         const pageIndex = Number(fd.page) - 1;
-//         if (pageIndex < 0 || pageIndex >= pages.length) continue;
-
-//         const page = pages[pageIndex];
-//         const { width, height } = page.getSize();
-        
-//         const drawW = (Number(fd.width) * width) / 100;
-//         const drawH = (Number(fd.height) * height) / 100;
-//         const drawX = (Number(fd.x) * width) / 100;
-//         const drawY = height - ((Number(fd.y) * height) / 100) - drawH;
-
-//         if (fd.value.startsWith('data:image')) {
-//           const base64Data = fd.value.split(',')[1];
-//           const sigImg = await pdfDoc.embedPng(Buffer.from(base64Data, 'base64'));
-//           page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
-//         } else {
-//           page.drawText(String(fd.value), {
-//             x: drawX + 2, y: drawY + (drawH / 4),
-//             size: 11, font: timesFont, color: rgb(0, 0, 0),
-//           });
-//         }
-//       }
-//     } catch (e) { continue; }
-//   }
-//   return await pdfDoc.save();
-// };
 
 // const mergeSignatures = async (doc) => {
 //   const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
@@ -7204,7 +7336,7 @@ const generateAndSendFinalDoc = async (doc) => {
   });
 
   await transporter.sendMail({
-    from: `"NexSign" <${process.env.EMAIL_USER}>`,
+    from: `"NeXsign" <${process.env.EMAIL_USER}>`,
     to: allRecipients.join(','), 
     subject: `Fully Executed: ${doc.title}`,
     html: `
@@ -7503,173 +7635,6 @@ router.post('/send', auth, async (req, res) => {
     res.json({ success: true, signLink: `${process.env.FRONTEND_URL}/sign?token=${token}` });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
-// ৪. সিগনেচার সাবমিট (CRITICAL: এটি ডাইনামিক ID রাউটের উপরে থাকতে হবে)
-// router.post('/sign/submit', async (req, res) => {
-//   try {
-//     const { token, fields } = req.body;
-//     const doc = await Document.findOne({ "parties.token": token });
-//     if (!doc) return res.status(404).json({ error: "Invalid link" });
-
-//     const idx = doc.parties.findIndex(p => p.token === token);
-//     doc.parties[idx].status = 'signed';
-//     doc.parties[idx].signedAt = new Date();
-//     doc.fields = fields; 
-    
-//     doc.markModified('fields'); 
-//     doc.markModified('parties');
-
-//     if (idx + 1 < doc.parties.length) {
-//       const nextToken = crypto.randomBytes(32).toString('hex');
-//       doc.parties[idx + 1].token = nextToken;
-//       doc.parties[idx + 1].status = 'sent';
-//       doc.currentPartyIndex = idx + 1;
-//       await doc.save();
-//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
-//       res.json({ next: true });
-//     } else {
-//       doc.currentPartyIndex = idx;
-//       doc.status = 'completed';
-//       await doc.save();
-//       await generateAndSendFinalDoc(doc);
-//       res.json({ completed: true });
-//     }
-//   } catch (err) { res.status(500).json({ error: "Submit failed" }); }
-// });
-// router.post('/sign/submit', async (req, res) => {
-//   try {
-//     const { token, fields: incomingFields } = req.body;
-//     const doc = await Document.findOne({ "parties.token": token });
-//     if (!doc) return res.status(404).json({ error: "Invalid link" });
-
-//     const idx = doc.parties.findIndex(p => p.token === token);
-    
-//     // ১. ফিল্ড মার্জ লজিক (ঠিক আছে)
-//     const existingFields = doc.fields || [];
-//     const updatedFields = [...existingFields];
-
-//     incomingFields.forEach(inf => {
-//       const existingIdx = updatedFields.findIndex(ef => ef.id === inf.id);
-//       if (existingIdx > -1) {
-//         updatedFields[existingIdx] = { ...updatedFields[existingIdx], ...inf };
-//       } else {
-//         updatedFields.push(inf);
-//       }
-//     });
-
-//     doc.fields = updatedFields;
-//     doc.parties[idx].status = 'signed';
-//     doc.parties[idx].signedAt = new Date();
-    
-//     doc.markModified('fields'); 
-//     doc.markModified('parties');
-
-//     if (idx + 1 < doc.parties.length) {
-//       const nextToken = crypto.randomBytes(32).toString('hex');
-//       doc.parties[idx + 1].token = nextToken;
-//       doc.parties[idx + 1].status = 'sent';
-//       doc.currentPartyIndex = idx + 1;
-//       await doc.save();
-//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
-//       res.json({ next: true });
-//     } else {
-//       doc.currentPartyIndex = idx;
-//       doc.status = 'completed';
-      
-//       // গুরুত্বপূর্ণ পরিবর্তন:
-//       // ২. আগে ডাটাবেসে সব ফিল্ড সেভ হওয়া নিশ্চিত করুন
-//       await doc.save(); 
-      
-//       // ৩. setTimeout সরিয়ে সরাসরি await করুন যেন মেইল পাঠানোর পরই রেসপন্স যায়
-//       await generateAndSendFinalDoc(doc); 
-      
-//       res.json({ completed: true });
-//     }
-//   } catch (err) { 
-//     console.error("Submit Error:", err);
-//     res.status(500).json({ error: "Submit failed" }); 
-//   }
-// });  workable
-
-
-// router.post('/sign/submit', async (req, res) => {
-//   try {
-//     const { token, fields: incomingFields } = req.body;
-//     const doc = await Document.findOne({ "parties.token": token });
-//     if (!doc) return res.status(404).json({ error: "Invalid link" });
-
-//     const idx = doc.parties.findIndex(p => p.token === token);
-//     const userAgent = req.headers['user-agent'] || 'Unknown Device';
-    
-//     // ১. Vercel-এর জন্য সঠিক আইপি ডিটেকশন (Fix)
-//     const ip = (
-//       req.headers['x-real-ip'] || 
-//       req.headers['x-forwarded-for']?.split(',')[0] || 
-//       req.socket.remoteAddress || 
-//       '127.0.0.1'
-//     ).trim();
-
-//     // ২. লোকেশন বের করার লজিক (ip-api.com ব্যবহার করা ভালো কারণ এটি Vercel-এ বেশি স্টেবল)
-//     let locationData = "Unknown Location";
-//     try {
-//       // লোকালহোস্ট আইপিতে এপিআই কাজ করবে না, তাই টেস্টিং এর জন্য চেক
-//       if (ip !== '127.0.0.1' && ip !== '::1') {
-//         const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 3000 });
-//         if (locRes.data && locRes.data.status === 'success') {
-//           locationData = `${locRes.data.city}, ${locRes.data.regionName}, ${locRes.data.country}`;
-//         }
-//       }
-//     } catch (locErr) {
-//       console.error("Location API Error:", locErr.message);
-//     }
-
-//     // ৩. ফিল্ড আপডেট
-//     doc.fields = incomingFields;
-//     doc.parties[idx].status = 'signed';
-//     doc.parties[idx].signedAt = new Date();
-//     doc.parties[idx].device = userAgent;
-//     doc.parties[idx].ipAddress = ip;
-//     doc.parties[idx].location = locationData;
-
-//     // ৪. অডিট লগ তৈরি
-//     await AuditLog.create({
-//       document_id: doc._id,
-//       action: 'signed',
-//       performed_by: { 
-//         name: doc.parties[idx].name, 
-//         email: doc.parties[idx].email, 
-//         role: 'signer' 
-//       },
-//       ip_address: ip,
-//       user_agent: userAgent,
-//       details: `Signed by ${doc.parties[idx].email} from ${locationData}. Device: ${userAgent}`
-//     });
-
-//     doc.markModified('fields'); 
-//     doc.markModified('parties');
-
-//     // পরবর্তী স্টেপ হ্যান্ডলিং
-//     if (idx + 1 < doc.parties.length) {
-//       const nextToken = crypto.randomBytes(32).toString('hex');
-//       doc.parties[idx + 1].token = nextToken;
-//       doc.parties[idx + 1].status = 'sent';
-//       doc.currentPartyIndex = idx + 1;
-//       await doc.save();
-//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
-//       return res.json({ next: true });
-//     } else {
-//       doc.status = 'completed';
-//       await doc.save(); 
-//       const finalizedDoc = await Document.findById(doc._id);
-//       await generateAndSendFinalDoc(finalizedDoc); 
-//       return res.json({ completed: true });
-//     }
-//   } catch (err) { 
-//     console.error("Submit Error:", err);
-//     res.status(500).json({ error: "Submit failed" }); 
-//   }
-// }); //workable
-
 
 router.post('/sign/submit', async (req, res) => {
   try {
