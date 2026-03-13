@@ -7407,7 +7407,7 @@ const sendSigningEmail = async (party, docTitle, token) => {
   const brandColor = "#28ABDF"; 
 
   return transporter.sendMail({
-    from: `"NexSign" <${process.env.EMAIL_USER}>`,
+    from: `"NeXsign" <${process.env.EMAIL_USER}>`,
     to: party.email,
     subject: `Signature Request: ${docTitle}`,
     html: `
