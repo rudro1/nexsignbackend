@@ -246,12 +246,22 @@ exports.login = async (req, res) => {
     const user = await User.findOne({ email: email.toLowerCase().trim() });
 
     if (!user || !(await user.comparePassword(password))) {
-      return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
+      return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
     }
 
     const token = generateToken(user);
-    res.json({ token, user: { id: user._id, full_name: user.full_name, role: user.role } });
+    
+    // 🌟 এখানে email: user.email যোগ করা হয়েছে
+    res.json({ 
+      token, 
+      user: { 
+        id: user._id, 
+        full_name: user.full_name, 
+        email: user.email, // এই লাইনটি যোগ করুন
+        role: user.role 
+      } 
+    });
   } catch (error) {
-    res.status(500).json({ message: "লগইনে সমস্যা হয়েছে।" });
+    res.status(500).json({ message: "লগইনে সমস্যা হয়েছে।" });
   }
 };

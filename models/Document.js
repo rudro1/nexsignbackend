@@ -160,9 +160,14 @@ const documentSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true },
   fileUrl: { type: String, required: true },
   fileId: { type: String, required: true },
-  ccEmail: { type: String, lowercase: true, trim: true },
+  ccEmails: [{ 
+    type: String, 
+    lowercase: true, 
+    trim: true 
+  }],
+
   senderMeta: { 
-    type: mongoose.Schema.Types.Mixed, // এখানে name, email এবং formatted time থাকবে
+    type: mongoose.Schema.Types.Mixed, 
     default: null 
   },
   parties: [{
