@@ -6935,67 +6935,109 @@ const mergeSignatures = async (doc) => {
 
 const generateAndSendFinalDoc = async (doc) => {
   try {
-    // ১. আপনার আগের লজিক অনুযায়ী সাইনসহ PDF তৈরি
+    // ১. সিগনেচার মার্জ করা (আপনার আগের লজিক)
     const basePdfBytes = await mergeSignatures(doc);
-    
-    // --- নতুন ফিচারের শুরু ---
     const pdfDoc = await PDFDocument.load(basePdfBytes);
     const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
     const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
 
-    const page = pdfDoc.addPage([600, 800]); // নতুন পেজ যোগ
-    let y = 750;
+    // ২. অডিট সার্টিফিকেটের জন্য নতুন পেজ
+    let page = pdfDoc.addPage([600, 850]); 
+    const { width, height } = page.getSize();
+    let y = height - 50;
 
-    // অডিট রিপোর্ট হেডলাইন
-    page.drawText('NexSign Digital Audit Certificate', { x: 50, y, size: 20, font: boldFont });
-    y -= 40;
-    
-    // সেন্ডার বা ওনারের তথ্য
-    page.drawText(`Document Title: ${doc.title}`, { x: 50, y, size: 12, font: timesFont });
-    page.drawText(`Created By: ${doc.senderMeta?.name} (${doc.senderMeta?.email})`, { x: 50, y: y-20, size: 12, font: timesFont });
-    page.drawText(`Initiated At: ${doc.senderMeta?.time}`, { x: 50, y: y-40, size: 12, font: timesFont });
-    y -= 80;
+    // ডিজাইন: পেজ বর্ডার
+    page.drawRectangle({
+      x: 20, y: 20, width: width - 40, height: height - 40,
+      borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
+    });
 
-    page.drawText('Signer Details & Audit Trail:', { x: 50, y, size: 14, font: boldFont });
+    // ৩. স্টাইলিশ হেডার (Navy Blue)
+    page.drawRectangle({
+      x: 21, y: y - 50, width: width - 42, height: 60,
+      color: rgb(0.02, 0.15, 0.3),
+    });
+    page.drawText('NEXSIGN DIGITAL AUDIT CERTIFICATE', {
+      x: 50, y: y - 15, size: 20, font: boldFont, color: rgb(1, 1, 1)
+    });
+    page.drawText('Document Evidence Summary & Audit Trail', {
+      x: 50, y: y - 35, size: 10, font: timesFont, color: rgb(0.9, 0.9, 0.9)
+    });
+    y -= 100;
+
+    // ৪. ডকুমেন্ট ইনফরমেশন
+    const drawInfo = (label, value) => {
+      page.drawText(label, { x: 50, y, size: 11, font: boldFont });
+      page.drawText(String(value || 'N/A'), { x: 150, y, size: 11, font: timesFont });
+      y -= 20;
+    };
+
+    drawInfo('Document Title:', doc.title);
+    drawInfo('Created By:', `${doc.senderMeta?.name} (${doc.senderMeta?.email})`);
+    drawInfo('Initiated At:', doc.senderMeta?.time);
     y -= 30;
 
-    // সাইনারদের তথ্য লুপ (নাম, লোকেশন, আইপি, ডিভাইস এবং সময়)
+    page.drawText('SIGNER DETAILS & AUDIT TRAIL', { x: 50, y, size: 13, font: boldFont, color: rgb(0.02, 0.15, 0.3) });
+    y -= 25;
+
+    // ৫. সাইনারদের তথ্য লুপ (Text Wrapping সহ)
     doc.parties.forEach((p, index) => {
-      page.drawText(`${index + 1}. ${p.name} (${p.email})`, { x: 50, y, size: 11, font: boldFont });
+      // পেজ শেষ হয়ে গেলে নতুন পেজ যোগ করা
+      if (y < 120) {
+        page = pdfDoc.addPage([600, 850]);
+        y = height - 50;
+      }
+
+      // সেপারেটর লাইন
+      page.drawLine({ start: { x: 50, y: y + 10 }, end: { x: 550, y: y + 10 }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
+
+      // নাম ও 'SIGNED' ব্যাজ
+      page.drawText(`${index + 1}. ${p.name}`, { x: 50, y, size: 11, font: boldFont });
+      page.drawRectangle({ x: width - 100, y: y - 5, width: 55, height: 18, color: rgb(0.1, 0.6, 0.1) });
+      page.drawText('SIGNED', { x: width - 92, y: y, size: 8, font: boldFont, color: rgb(1, 1, 1) });
+      y -= 18;
+
+      // আইপি এবং লোকেশন
+      page.drawText(`Email: ${p.email} | IP: ${p.ipAddress || 'N/A'}`, { x: 70, y, size: 9, font: timesFont });
       y -= 15;
-      page.drawText(`IP: ${p.ipAddress || 'N/A'} | Location: ${p.location || 'Unknown'}`, { x: 50, y, size: 10, font: timesFont });
+      page.drawText(`Location: ${p.location || 'Unknown'}`, { x: 70, y, size: 9, font: timesFont });
       y -= 15;
-      // 🌟 ডিভাইসের নাম এখানে যোগ করা হয়েছে
-      page.drawText(`Device: ${p.device || 'Unknown Device'}`, { x: 50, y, size: 10, font: timesFont });
-      y -= 15;
-      page.drawText(`Signed At: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`, { x: 50, y, size: 10, font: timesFont });
-      y -= 35; // পরবর্তী সাইনারের জন্য গ্যাপ
+
+      // 🌟 ডিভাইস টেক্সট র‍্যাপিং (পেজের বাইরে যাওয়া আটকাতে)
+      const deviceText = `Device: ${p.device || 'N/A'}`;
+      const charLimit = 90; 
+      for (let i = 0; i < deviceText.length; i += charLimit) {
+        const chunk = deviceText.substring(i, i + charLimit);
+        page.drawText(chunk, { x: 70, y, size: 8, font: timesFont, color: rgb(0.4, 0.4, 0.4) });
+        y -= 12;
+      }
+
+      page.drawText(`Signed At: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`, { x: 70, y, size: 9, font: boldFont });
+      y -= 40; 
+    });
+
+    // ৬. ফুটার
+    page.drawText('This certificate is part of the electronic record and is legally binding.', {
+      x: 140, y: 40, size: 9, font: timesFont, color: rgb(0.5, 0.5, 0.5)
     });
 
     const pdfBytes = await pdfDoc.save(); 
     const pdfBuffer = Buffer.from(pdfBytes);
-    // --- নতুন ফিচারের শেষ ---
 
-    // ২. ক্লাউডিনারি আপলোড (আপনার আগের লজিক)
+    // ৭. ক্লাউডিনারি আপলোড
     const uploadResult = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { 
-          resource_type: "raw", 
-          folder: "completed_docs",
-          public_id: `final_${doc._id}_${Date.now()}.pdf`,
-          access_mode: 'public'
-        },
+        { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}.pdf`, access_mode: 'public' },
         (err, res) => err ? reject(err) : resolve(res)
       );
       stream.end(pdfBuffer);
     });
 
-    // ৩. ডাটাবেস আপডেট (আপনার আগের লজিক)
+    // ৮. ডাটাবেস আপডেট ও ইমেইল পাঠানো
     doc.fileUrl = uploadResult.secure_url;
     doc.status = 'completed';
     await doc.save();
 
-    // ৪. ইমেইল পাঠানো (সিসি যোগ করে)
     const recipients = doc.parties.map(p => p.email).filter(e => e);
     if (doc.ccEmail) recipients.push(doc.ccEmail); 
     
@@ -7004,15 +7046,10 @@ const generateAndSendFinalDoc = async (doc) => {
         from: `"NexSign" <${process.env.EMAIL_USER}>`,
         to: recipients.join(','),
         subject: `Fully Executed: ${doc.title}`,
-        html: `<h3>Signing Complete!</h3><p>The final signed document with a digital audit certificate is attached.</p>`,
-        attachments: [{ 
-          filename: `${doc.title}_Final.pdf`, 
-          content: pdfBuffer,
-          contentType: 'application/pdf'
-        }]
+        html: `<h3>Signing Complete!</h3><p>The final document for <b>${doc.title}</b> is ready with a digital audit certificate.</p>`,
+        attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
       });
     }
-    console.log("Final document with Audit Trail and Device Info processed.");
   } catch (err) { 
     console.error("Finalize Error:", err); 
   }
@@ -7023,6 +7060,33 @@ const generateAndSendFinalDoc = async (doc) => {
 
 
 
+// const sendSigningEmail = async (party, docTitle, token) => {
+//   const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
+//   const signLink = `${baseUrl}/sign?token=${token}`;
+  
+//   return transporter.sendMail({
+//     from: `"NexSign" <${process.env.EMAIL_USER}>`,
+//     to: party.email,
+//     subject: `Action Required: Signature Request for ${docTitle}`,
+//     // HTML-টি আরও সুন্দর করা হয়েছে যেন ক্লিক রেট বাড়ে
+//     html: `
+//       <div style="font-family: sans-serif; padding: 20px; color: #333;">
+//         <h2>Hello ${party.name || 'Signer'},</h2>
+//         <p>You have been requested to sign the document: <b>${docTitle}</b>.</p>
+//         <p>Please click the button below to review and sign:</p>
+//         <a href="${signLink}" style="background: #007bff; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 20px 0;">Sign Document</a>
+//         <p>If the button doesn't work, copy and paste this link: <br/> ${signLink}</p>
+//         <hr style="border: none; border-top: 1px solid #eee; margin-top: 30px;">
+//         <p style="font-size: 12px; color: #777;">Sent via NexSign - Secure Electronic Signatures</p>
+//       </div>
+//     `
+//   });
+// };
+// --- ROUTES (ORDER MATTERS) ---
+
+// ১. ড্যাশবোর্ড ডেটা
+//workable
+
 const sendSigningEmail = async (party, docTitle, token) => {
   const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
   const signLink = `${baseUrl}/sign?token=${token}`;
@@ -7030,24 +7094,85 @@ const sendSigningEmail = async (party, docTitle, token) => {
   return transporter.sendMail({
     from: `"NexSign" <${process.env.EMAIL_USER}>`,
     to: party.email,
-    subject: `Action Required: Signature Request for ${docTitle}`,
-    // HTML-টি আরও সুন্দর করা হয়েছে যেন ক্লিক রেট বাড়ে
+    subject: `Signature Request: ${docTitle}`,
     html: `
-      <div style="font-family: sans-serif; padding: 20px; color: #333;">
-        <h2>Hello ${party.name || 'Signer'},</h2>
-        <p>You have been requested to sign the document: <b>${docTitle}</b>.</p>
-        <p>Please click the button below to review and sign:</p>
-        <a href="${signLink}" style="background: #007bff; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 20px 0;">Sign Document</a>
-        <p>If the button doesn't work, copy and paste this link: <br/> ${signLink}</p>
-        <hr style="border: none; border-top: 1px solid #eee; margin-top: 30px;">
-        <p style="font-size: 12px; color: #777;">Sent via NexSign - Secure Electronic Signatures</p>
-      </div>
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          @media only screen and (max-width: 600px) {
+            .container { width: 100% !important; border-radius: 0 !important; }
+            .content { padding: 20px !important; }
+            .button { width: 100% !important; box-sizing: border-box; }
+          }
+        </style>
+      </head>
+      <body style="margin: 0; padding: 0; background-color: #f4f7f9; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%">
+          <tr>
+            <td align="center" style="padding: 20px 0;">
+              <table class="container" border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border: 1px solid #e1e4e8; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                
+                <tr>
+                  <td align="center" style="background-color: #0f172a; padding: 40px 20px;">
+                    <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">NexSign</h1>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td class="content" style="padding: 40px 40px 30px 40px;">
+                    <h2 style="color: #1a202c; font-size: 22px; margin-top: 0; font-weight: 700;">Signature Requested</h2>
+                    <p style="color: #4a5568; font-size: 16px; line-height: 24px;">
+                      Hello <strong>${party.name || 'Signer'}</strong>,
+                    </p>
+                    <p style="color: #4a5568; font-size: 16px; line-height: 24px;">
+                      You've been invited to review and sign a document via NexSign. This is a secure, legally binding process.
+                    </p>
+
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f8fafc; border-radius: 8px; margin: 25px 0;">
+                      <tr>
+                        <td style="padding: 20px; border-left: 4px solid #3b82f6;">
+                          <p style="color: #64748b; font-size: 12px; font-weight: bold; margin: 0 0 5px 0; text-transform: uppercase;">Document Name</p>
+                          <p style="color: #0f172a; font-size: 18px; font-weight: 600; margin: 0;">${docTitle}</p>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                      <tr>
+                        <td align="center" style="padding: 20px 0;">
+                          <a href="${signLink}" class="button" style="background-color: #3b82f6; color: #ffffff; padding: 16px 40px; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 16px; display: inline-block;">
+                            View & Sign Document
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+
+                    <p style="color: #718096; font-size: 14px; line-height: 20px; text-align: center; margin-top: 20px;">
+                      Questions? Contact the sender directly. For security, never share your signing link with anyone.
+                    </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding: 30px; background-color: #f9fafb; text-align: center; border-top: 1px solid #edf2f7;">
+                    <p style="color: #a0aec0; font-size: 12px; margin: 0;">
+                      &copy; 2026 NexSign Digital Signatures. All rights reserved.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
     `
   });
 };
-// --- ROUTES (ORDER MATTERS) ---
 
-// ১. ড্যাশবোর্ড ডেটা
+
 router.get('/', auth, async (req, res) => {
   try {
     const docs = await Document.find({ owner: req.user.id }).sort({ updatedAt: -1 });
