@@ -184,5 +184,24 @@ router.get('/audit-logs', auth, adminAuth, async (req, res) => {
     res.status(500).json({ message: "অডিট লগ আনতে সমস্যা হয়েছে" });
   }
 });
+// ইউজার ডিলিট করার রাউট
+router.delete('/users/:id', auth, adminAuth, async (req, res) => {
+  try {
+    await User.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: "User deleted" });
+  } catch (error) {
+    res.status(500).json({ message: "Error deleting user" });
+  }
+});
+
+// ডকুমেন্ট ডিলিট করার রাউট (এটি ডিলিট করলে ইউজারদের থেকেও ডিলিট হয়ে যাবে)
+router.delete('/documents/:id', auth, adminAuth, async (req, res) => {
+  try {
+    await Document.findByIdAndDelete(req.params.id);
+    res.status(200).json({ message: "Document deleted from system" });
+  } catch (error) {
+    res.status(500).json({ message: "Error deleting document" });
+  }
+});
 
 module.exports = router;
