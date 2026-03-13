@@ -7132,7 +7132,7 @@ const generateAndSendFinalDoc = async (doc) => {
 
     const uploadResult = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}` },
+        { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}.pdf` },
         (err, res) => err ? reject(err) : resolve(res)
       );
       stream.end(pdfBuffer);
