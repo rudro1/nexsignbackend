@@ -6933,8 +6933,124 @@ const mergeSignatures = async (doc) => {
 // };  workable
 
 
+// const generateAndSendFinalDoc = async (doc) => {
+//   try {
+//     const basePdfBytes = await mergeSignatures(doc);
+//     const pdfDoc = await PDFDocument.load(basePdfBytes);
+//     const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+//     const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+
+//     let page = pdfDoc.addPage([600, 850]); 
+//     const { width, height } = page.getSize();
+//     let y = height - 50;
+
+//     page.drawRectangle({
+//       x: 20, y: 20, width: width - 40, height: height - 40,
+//       borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
+//     });
+
+//     page.drawRectangle({
+//       x: 21, y: y - 50, width: width - 42, height: 60,
+//       color: rgb(0.02, 0.15, 0.3),
+//     });
+//     page.drawText('NEXSIGN DIGITAL AUDIT CERTIFICATE', {
+//       x: 50, y: y - 15, size: 20, font: boldFont, color: rgb(1, 1, 1)
+//     });
+//     page.drawText('Document Evidence Summary & Audit Trail', {
+//       x: 50, y: y - 35, size: 10, font: timesFont, color: rgb(0.9, 0.9, 0.9)
+//     });
+//     y -= 100;
+
+//     const drawInfo = (label, value) => {
+//       page.drawText(label, { x: 50, y, size: 11, font: boldFont });
+//       page.drawText(String(value || 'N/A'), { x: 150, y, size: 11, font: timesFont });
+//       y -= 20;
+//     };
+
+//     drawInfo('Document Title:', doc.title);
+//     drawInfo('Created By:', `${doc.senderMeta?.name} (${doc.senderMeta?.email})`);
+    
+//     // 🌟 ১. সার্টিফিকেটে CC Emails দেখানো
+//     if (doc.ccEmails && doc.ccEmails.length > 0) {
+//       drawInfo('CC Recipients:', doc.ccEmails.join(', '));
+//     }
+
+//     drawInfo('Initiated At:', doc.senderMeta?.time);
+//     y -= 30;
+
+//     page.drawText('SIGNER DETAILS & AUDIT TRAIL', { x: 50, y, size: 13, font: boldFont, color: rgb(0.02, 0.15, 0.3) });
+//     y -= 25;
+
+//     // ... (Signer Loop আগের মতোই থাকবে) ...
+//     doc.parties.forEach((p, index) => {
+//       if (y < 120) {
+//         page = pdfDoc.addPage([600, 850]);
+//         y = height - 50;
+//       }
+//       page.drawLine({ start: { x: 50, y: y + 10 }, end: { x: 550, y: y + 10 }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
+//       page.drawText(`${index + 1}. ${p.name}`, { x: 50, y, size: 11, font: boldFont });
+//       page.drawRectangle({ x: width - 100, y: y - 5, width: 55, height: 18, color: rgb(0.1, 0.6, 0.1) });
+//       page.drawText('SIGNED', { x: width - 92, y: y, size: 8, font: boldFont, color: rgb(1, 1, 1) });
+//       y -= 18;
+//       page.drawText(`Email: ${p.email} | IP: ${p.ipAddress || 'N/A'}`, { x: 70, y, size: 9, font: timesFont });
+//       y -= 15;
+//       page.drawText(`Location: ${p.location || 'Unknown'}`, { x: 70, y, size: 9, font: timesFont });
+//       y -= 15;
+//       const deviceText = `Device: ${p.device || 'N/A'}`;
+//       const charLimit = 90; 
+//       for (let i = 0; i < deviceText.length; i += charLimit) {
+//         const chunk = deviceText.substring(i, i + charLimit);
+//         page.drawText(chunk, { x: 70, y, size: 8, font: timesFont, color: rgb(0.4, 0.4, 0.4) });
+//         y -= 12;
+//       }
+//       page.drawText(`Signed At: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`, { x: 70, y, size: 9, font: boldFont });
+//       y -= 40; 
+//     });
+
+//     page.drawText('This certificate is part of the electronic record and is legally binding.', {
+//       x: 140, y: 40, size: 9, font: timesFont, color: rgb(0.5, 0.5, 0.5)
+//     });
+
+//     const pdfBytesFinal = await pdfDoc.save(); 
+//     const pdfBuffer = Buffer.from(pdfBytesFinal);
+
+//     const uploadResult = await new Promise((resolve, reject) => {
+//       const stream = cloudinary.uploader.upload_stream(
+//         { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}.pdf`, access_mode: 'public' },
+//         (err, res) => err ? reject(err) : resolve(res)
+//       );
+//       stream.end(pdfBuffer);
+//     });
+
+//     doc.fileUrl = uploadResult.secure_url;
+//     doc.status = 'completed';
+//     await doc.save();
+
+//     // 🌟 ২. মাল্টিপল সিসি ইমেইলসহ রিসিপিয়েন্ট লিস্ট
+//     const recipients = doc.parties.map(p => p.email).filter(e => e);
+    
+//     if (doc.ccEmails && doc.ccEmails.length > 0) {
+//       // সিসি ইমেইলগুলো রিসিপিয়েন্ট লিস্টে যুক্ত করা
+//       const validCCs = doc.ccEmails.filter(e => e && e.trim() !== "");
+//       recipients.push(...validCCs); 
+//     }
+    
+//     if (recipients.length > 0) {
+//       await transporter.sendMail({
+//         from: `"NexSign" <${process.env.EMAIL_USER}>`,
+//         to: recipients.join(','), // কমা দিয়ে আলাদা করে পাঠানো
+//         subject: `Fully Executed: ${doc.title}`,
+//         html: `<h3>Signing Complete!</h3><p>The final document for <b>${doc.title}</b> is ready with a digital audit certificate.</p>`,
+//         attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
+//       });
+//     }
+//   } catch (err) { 
+//     console.error("Finalize Error:", err); 
+//   }
+// };
 const generateAndSendFinalDoc = async (doc) => {
   try {
+    // ১. মূল পিডিএফ এবং অডিট পেজ তৈরি
     const basePdfBytes = await mergeSignatures(doc);
     const pdfDoc = await PDFDocument.load(basePdfBytes);
     const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
@@ -6944,11 +7060,13 @@ const generateAndSendFinalDoc = async (doc) => {
     const { width, height } = page.getSize();
     let y = height - 50;
 
+    // বর্ডার আর্ট
     page.drawRectangle({
       x: 20, y: 20, width: width - 40, height: height - 40,
       borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
     });
 
+    // হেডার ডিজাইন
     page.drawRectangle({
       x: 21, y: y - 50, width: width - 42, height: 60,
       color: rgb(0.02, 0.15, 0.3),
@@ -6970,7 +7088,7 @@ const generateAndSendFinalDoc = async (doc) => {
     drawInfo('Document Title:', doc.title);
     drawInfo('Created By:', `${doc.senderMeta?.name} (${doc.senderMeta?.email})`);
     
-    // 🌟 ১. সার্টিফিকেটে CC Emails দেখানো
+    // CC Emails সেকশন
     if (doc.ccEmails && doc.ccEmails.length > 0) {
       drawInfo('CC Recipients:', doc.ccEmails.join(', '));
     }
@@ -6981,9 +7099,9 @@ const generateAndSendFinalDoc = async (doc) => {
     page.drawText('SIGNER DETAILS & AUDIT TRAIL', { x: 50, y, size: 13, font: boldFont, color: rgb(0.02, 0.15, 0.3) });
     y -= 25;
 
-    // ... (Signer Loop আগের মতোই থাকবে) ...
+    // সাইনার লুপ
     doc.parties.forEach((p, index) => {
-      if (y < 120) {
+      if (y < 150) { // নতুন পেজ চেক
         page = pdfDoc.addPage([600, 850]);
         y = height - 50;
       }
@@ -6996,27 +7114,25 @@ const generateAndSendFinalDoc = async (doc) => {
       y -= 15;
       page.drawText(`Location: ${p.location || 'Unknown'}`, { x: 70, y, size: 9, font: timesFont });
       y -= 15;
+      
       const deviceText = `Device: ${p.device || 'N/A'}`;
-      const charLimit = 90; 
+      const charLimit = 85; 
       for (let i = 0; i < deviceText.length; i += charLimit) {
         const chunk = deviceText.substring(i, i + charLimit);
         page.drawText(chunk, { x: 70, y, size: 8, font: timesFont, color: rgb(0.4, 0.4, 0.4) });
         y -= 12;
       }
       page.drawText(`Signed At: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`, { x: 70, y, size: 9, font: boldFont });
-      y -= 40; 
+      y -= 35; 
     });
 
-    page.drawText('This certificate is part of the electronic record and is legally binding.', {
-      x: 140, y: 40, size: 9, font: timesFont, color: rgb(0.5, 0.5, 0.5)
-    });
-
+    // ২. ক্লাউডিনারি আপলোড ও ডাটাবেস আপডেট
     const pdfBytesFinal = await pdfDoc.save(); 
     const pdfBuffer = Buffer.from(pdfBytesFinal);
 
     const uploadResult = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}.pdf`, access_mode: 'public' },
+        { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}` },
         (err, res) => err ? reject(err) : resolve(res)
       );
       stream.end(pdfBuffer);
@@ -7026,21 +7142,17 @@ const generateAndSendFinalDoc = async (doc) => {
     doc.status = 'completed';
     await doc.save();
 
-    // 🌟 ২. মাল্টিপল সিসি ইমেইলসহ রিসিপিয়েন্ট লিস্ট
-    const recipients = doc.parties.map(p => p.email).filter(e => e);
+    // ৩. ইউনিক ইমেইল তালিকা তৈরি (ডুপ্লিকেট রিমুভ)
+    const signers = doc.parties.map(p => p.email).filter(e => e);
+    const validCCs = (doc.ccEmails || []).filter(e => e && e.trim() !== "");
+    const allRecipients = [...new Set([...signers, ...validCCs])];
     
-    if (doc.ccEmails && doc.ccEmails.length > 0) {
-      // সিসি ইমেইলগুলো রিসিপিয়েন্ট লিস্টে যুক্ত করা
-      const validCCs = doc.ccEmails.filter(e => e && e.trim() !== "");
-      recipients.push(...validCCs); 
-    }
-    
-    if (recipients.length > 0) {
+    if (allRecipients.length > 0) {
       await transporter.sendMail({
         from: `"NexSign" <${process.env.EMAIL_USER}>`,
-        to: recipients.join(','), // কমা দিয়ে আলাদা করে পাঠানো
+        to: allRecipients.join(','), 
         subject: `Fully Executed: ${doc.title}`,
-        html: `<h3>Signing Complete!</h3><p>The final document for <b>${doc.title}</b> is ready with a digital audit certificate.</p>`,
+        html: `<h3>Signing Complete!</h3><p>The final document for <b>${doc.title}</b> is attached with an audit certificate.</p>`,
         attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
       });
     }
@@ -7048,7 +7160,6 @@ const generateAndSendFinalDoc = async (doc) => {
     console.error("Finalize Error:", err); 
   }
 };
-
 
 
 
@@ -7405,16 +7516,97 @@ router.post('/send', auth, async (req, res) => {
 // });  workable
 
 
+// router.post('/sign/submit', async (req, res) => {
+//   try {
+//     const { token, fields: incomingFields } = req.body;
+//     const doc = await Document.findOne({ "parties.token": token });
+//     if (!doc) return res.status(404).json({ error: "Invalid link" });
+
+//     const idx = doc.parties.findIndex(p => p.token === token);
+//     const userAgent = req.headers['user-agent'] || 'Unknown Device';
+    
+//     // ১. Vercel-এর জন্য সঠিক আইপি ডিটেকশন (Fix)
+//     const ip = (
+//       req.headers['x-real-ip'] || 
+//       req.headers['x-forwarded-for']?.split(',')[0] || 
+//       req.socket.remoteAddress || 
+//       '127.0.0.1'
+//     ).trim();
+
+//     // ২. লোকেশন বের করার লজিক (ip-api.com ব্যবহার করা ভালো কারণ এটি Vercel-এ বেশি স্টেবল)
+//     let locationData = "Unknown Location";
+//     try {
+//       // লোকালহোস্ট আইপিতে এপিআই কাজ করবে না, তাই টেস্টিং এর জন্য চেক
+//       if (ip !== '127.0.0.1' && ip !== '::1') {
+//         const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 3000 });
+//         if (locRes.data && locRes.data.status === 'success') {
+//           locationData = `${locRes.data.city}, ${locRes.data.regionName}, ${locRes.data.country}`;
+//         }
+//       }
+//     } catch (locErr) {
+//       console.error("Location API Error:", locErr.message);
+//     }
+
+//     // ৩. ফিল্ড আপডেট
+//     doc.fields = incomingFields;
+//     doc.parties[idx].status = 'signed';
+//     doc.parties[idx].signedAt = new Date();
+//     doc.parties[idx].device = userAgent;
+//     doc.parties[idx].ipAddress = ip;
+//     doc.parties[idx].location = locationData;
+
+//     // ৪. অডিট লগ তৈরি
+//     await AuditLog.create({
+//       document_id: doc._id,
+//       action: 'signed',
+//       performed_by: { 
+//         name: doc.parties[idx].name, 
+//         email: doc.parties[idx].email, 
+//         role: 'signer' 
+//       },
+//       ip_address: ip,
+//       user_agent: userAgent,
+//       details: `Signed by ${doc.parties[idx].email} from ${locationData}. Device: ${userAgent}`
+//     });
+
+//     doc.markModified('fields'); 
+//     doc.markModified('parties');
+
+//     // পরবর্তী স্টেপ হ্যান্ডলিং
+//     if (idx + 1 < doc.parties.length) {
+//       const nextToken = crypto.randomBytes(32).toString('hex');
+//       doc.parties[idx + 1].token = nextToken;
+//       doc.parties[idx + 1].status = 'sent';
+//       doc.currentPartyIndex = idx + 1;
+//       await doc.save();
+//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
+//       return res.json({ next: true });
+//     } else {
+//       doc.status = 'completed';
+//       await doc.save(); 
+//       const finalizedDoc = await Document.findById(doc._id);
+//       await generateAndSendFinalDoc(finalizedDoc); 
+//       return res.json({ completed: true });
+//     }
+//   } catch (err) { 
+//     console.error("Submit Error:", err);
+//     res.status(500).json({ error: "Submit failed" }); 
+//   }
+// }); //workable
+
+
 router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields: incomingFields } = req.body;
+    
+    // ১. ডকুমেন্ট খুঁজে বের করা
     const doc = await Document.findOne({ "parties.token": token });
-    if (!doc) return res.status(404).json({ error: "Invalid link" });
+    if (!doc) return res.status(404).json({ error: "Invalid link or session expired" });
 
     const idx = doc.parties.findIndex(p => p.token === token);
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
     
-    // ১. Vercel-এর জন্য সঠিক আইপি ডিটেকশন (Fix)
+    // ২. নির্ভরযোগ্য আইপি ডিটেকশন
     const ip = (
       req.headers['x-real-ip'] || 
       req.headers['x-forwarded-for']?.split(',')[0] || 
@@ -7422,21 +7614,20 @@ router.post('/sign/submit', async (req, res) => {
       '127.0.0.1'
     ).trim();
 
-    // ২. লোকেশন বের করার লজিক (ip-api.com ব্যবহার করা ভালো কারণ এটি Vercel-এ বেশি স্টেবল)
+    // ৩. জিও-লোকেশন ফেচ করা
     let locationData = "Unknown Location";
-    try {
-      // লোকালহোস্ট আইপিতে এপিআই কাজ করবে না, তাই টেস্টিং এর জন্য চেক
-      if (ip !== '127.0.0.1' && ip !== '::1') {
-        const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 3000 });
-        if (locRes.data && locRes.data.status === 'success') {
+    if (ip !== '127.0.0.1' && ip !== '::1') {
+      try {
+        const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 2500 });
+        if (locRes.data?.status === 'success') {
           locationData = `${locRes.data.city}, ${locRes.data.regionName}, ${locRes.data.country}`;
         }
+      } catch (locErr) {
+        console.error("Geo-location fallback initiated:", locErr.message);
       }
-    } catch (locErr) {
-      console.error("Location API Error:", locErr.message);
     }
 
-    // ৩. ফিল্ড আপডেট
+    // ৪. ডকুমেন্টের তথ্য আপডেট
     doc.fields = incomingFields;
     doc.parties[idx].status = 'signed';
     doc.parties[idx].signedAt = new Date();
@@ -7444,7 +7635,7 @@ router.post('/sign/submit', async (req, res) => {
     doc.parties[idx].ipAddress = ip;
     doc.parties[idx].location = locationData;
 
-    // ৪. অডিট লগ তৈরি
+    // ৫. অডিট লগ এন্ট্রি
     await AuditLog.create({
       document_id: doc._id,
       action: 'signed',
@@ -7455,33 +7646,43 @@ router.post('/sign/submit', async (req, res) => {
       },
       ip_address: ip,
       user_agent: userAgent,
-      details: `Signed by ${doc.parties[idx].email} from ${locationData}. Device: ${userAgent}`
+      details: `Digitally signed from ${locationData}.`
     });
 
     doc.markModified('fields'); 
     doc.markModified('parties');
 
-    // পরবর্তী স্টেপ হ্যান্ডলিং
+    // ৬. পরবর্তী সাইনার বা সমাপ্তি লজিক
     if (idx + 1 < doc.parties.length) {
+      // পরবর্তী সাইনার আছে
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
       doc.currentPartyIndex = idx + 1;
+      
       await doc.save();
       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
       return res.json({ next: true });
     } else {
+      // শেষ সাইনার, ডকুমেন্ট সম্পন্ন
       doc.status = 'completed';
+      doc.currentPartyIndex = idx;
       await doc.save(); 
-      const finalizedDoc = await Document.findById(doc._id);
-      await generateAndSendFinalDoc(finalizedDoc); 
+
+      // 🌟 গুরুত্বপূর্ণ: ডাটাবেস থেকে একদম লেটেস্ট কপি নিয়ে সার্টিফিকেট বানানো
+      const finalDoc = await Document.findById(doc._id);
+      
+      // ব্যাকগ্রাউন্ডে প্রসেস না করে await করা ভালো যাতে রেসপন্স নিশ্চিত হয়
+      await generateAndSendFinalDoc(finalDoc); 
+      
       return res.json({ completed: true });
     }
   } catch (err) { 
-    console.error("Submit Error:", err);
-    res.status(500).json({ error: "Submit failed" }); 
+    console.error("Signature Submission Error:", err);
+    res.status(500).json({ error: "Failed to process signature" }); 
   }
 });
+
 // ৫. সাইনিং পেজের ডেটা লোড
 router.get('/sign/:token', async (req, res) => {
   try {

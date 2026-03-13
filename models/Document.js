@@ -170,16 +170,20 @@ const documentSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed, 
     default: null 
   },
-  parties: [{
-    name: String,
-    email: { type: String, lowercase: true },
-    status: { type: String, enum: ['pending', 'sent', 'signed'], default: 'pending' },
-    token: { type: String, index: true },
-    signedAt: Date,
-    device: String,
-    ipAddress: String, // এটি যোগ করুন
-  location: String,
-  }],
+ parties: [{
+  name: { type: String, required: true },
+  email: { type: String, lowercase: true, required: true },
+  status: { 
+    type: String, 
+    enum: ['pending', 'sent', 'signed'], 
+    default: 'pending' 
+  },
+  token: { type: String, index: true, sparse: true }, // sparse: true দিলে ড্রাফটে এরর হবে না
+  signedAt: Date,
+  device: { type: String, default: 'Unknown Device' }, // ডিফল্ট ভ্যালু যোগ করুন
+  ipAddress: { type: String, default: 'N/A' },        // ডিফল্ট ভ্যালু যোগ করুন
+  location: { type: String, default: 'Unknown' },     // ডিফল্ট ভ্যালু যোগ করুন
+}],
   fields: {
     type: [mongoose.Schema.Types.Mixed],
     default: []
