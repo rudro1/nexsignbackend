@@ -6885,19 +6885,104 @@ const mergeSignatures = async (doc) => {
 //     });
 //   } catch (err) { console.error("Finalize Error:", err); }
 // };
+// const generateAndSendFinalDoc = async (doc) => {
+//   try {
+//     // ১. সাইনসহ PDF তৈরি (নিশ্চিত করুন mergeSignatures লেটেস্ট doc.fields পাচ্ছে)
+//     const pdfBytes = await mergeSignatures(doc);
+//     const pdfBuffer = Buffer.from(pdfBytes);
+    
+//     // ২. ক্লাউডিনারি আপলোড (অবশ্যই resource_type: "raw" ব্যবহার করুন)
+//     const uploadResult = await new Promise((resolve, reject) => {
+//       const stream = cloudinary.uploader.upload_stream(
+//         { 
+//           resource_type: "raw", 
+//           folder: "completed_docs",
+//           public_id: `final_${doc._id}_${Date.now()}.pdf`, // এক্সটেনশন যুক্ত করুন
+//           access_mode: 'public'
+//         },
+//         (err, res) => err ? reject(err) : resolve(res)
+//       );
+//       stream.end(pdfBuffer);
+//     });
+
+//     // ৩. ডাটাবেসে সাইনসহ নতুন URL আপডেট করা
+//     doc.fileUrl = uploadResult.secure_url;
+//     doc.status = 'completed';
+//     await doc.save();
+
+//     // ৪. ইমেইল পাঠানো
+//     const recipients = doc.parties.map(p => p.email).filter(e => e);
+    
+//     if (recipients.length > 0) {
+//       await transporter.sendMail({
+//         from: `"NexSign" <${process.env.EMAIL_USER}>`,
+//         to: recipients.join(','),
+//         subject: `Completed: ${doc.title}`,
+//         html: `<h3>Signing Complete!</h3><p>The final signed version of <b>${doc.title}</b> is attached.</p>`,
+//         attachments: [{ 
+//           filename: `${doc.title}_Final.pdf`, 
+//           content: pdfBuffer,
+//           contentType: 'application/pdf'
+//         }]
+//       });
+//     }
+//     console.log("Final document processed and email sent.");
+//   } catch (err) { 
+//     console.error("Finalize Error Detailed:", err); 
+//   }
+// };  workable
+
+
 const generateAndSendFinalDoc = async (doc) => {
   try {
-    // ১. সাইনসহ PDF তৈরি (নিশ্চিত করুন mergeSignatures লেটেস্ট doc.fields পাচ্ছে)
-    const pdfBytes = await mergeSignatures(doc);
-    const pdfBuffer = Buffer.from(pdfBytes);
+    // ১. আপনার আগের লজিক অনুযায়ী সাইনসহ PDF তৈরি
+    const basePdfBytes = await mergeSignatures(doc);
     
-    // ২. ক্লাউডিনারি আপলোড (অবশ্যই resource_type: "raw" ব্যবহার করুন)
+    // --- নতুন ফিচারের শুরু ---
+    const pdfDoc = await PDFDocument.load(basePdfBytes);
+    const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+    const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+
+    const page = pdfDoc.addPage([600, 800]); // নতুন পেজ যোগ
+    let y = 750;
+
+    // অডিট রিপোর্ট হেডলাইন
+    page.drawText('NexSign Digital Audit Certificate', { x: 50, y, size: 20, font: boldFont });
+    y -= 40;
+    
+    // সেন্ডার বা ওনারের তথ্য
+    page.drawText(`Document Title: ${doc.title}`, { x: 50, y, size: 12, font: timesFont });
+    page.drawText(`Created By: ${doc.senderMeta?.name} (${doc.senderMeta?.email})`, { x: 50, y: y-20, size: 12, font: timesFont });
+    page.drawText(`Initiated At: ${doc.senderMeta?.time}`, { x: 50, y: y-40, size: 12, font: timesFont });
+    y -= 80;
+
+    page.drawText('Signer Details & Audit Trail:', { x: 50, y, size: 14, font: boldFont });
+    y -= 30;
+
+    // সাইনারদের তথ্য লুপ (নাম, লোকেশন, আইপি, ডিভাইস এবং সময়)
+    doc.parties.forEach((p, index) => {
+      page.drawText(`${index + 1}. ${p.name} (${p.email})`, { x: 50, y, size: 11, font: boldFont });
+      y -= 15;
+      page.drawText(`IP: ${p.ipAddress || 'N/A'} | Location: ${p.location || 'Unknown'}`, { x: 50, y, size: 10, font: timesFont });
+      y -= 15;
+      // 🌟 ডিভাইসের নাম এখানে যোগ করা হয়েছে
+      page.drawText(`Device: ${p.device || 'Unknown Device'}`, { x: 50, y, size: 10, font: timesFont });
+      y -= 15;
+      page.drawText(`Signed At: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`, { x: 50, y, size: 10, font: timesFont });
+      y -= 35; // পরবর্তী সাইনারের জন্য গ্যাপ
+    });
+
+    const pdfBytes = await pdfDoc.save(); 
+    const pdfBuffer = Buffer.from(pdfBytes);
+    // --- নতুন ফিচারের শেষ ---
+
+    // ২. ক্লাউডিনারি আপলোড (আপনার আগের লজিক)
     const uploadResult = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         { 
           resource_type: "raw", 
           folder: "completed_docs",
-          public_id: `final_${doc._id}_${Date.now()}.pdf`, // এক্সটেনশন যুক্ত করুন
+          public_id: `final_${doc._id}_${Date.now()}.pdf`,
           access_mode: 'public'
         },
         (err, res) => err ? reject(err) : resolve(res)
@@ -6905,20 +6990,21 @@ const generateAndSendFinalDoc = async (doc) => {
       stream.end(pdfBuffer);
     });
 
-    // ৩. ডাটাবেসে সাইনসহ নতুন URL আপডেট করা
+    // ৩. ডাটাবেস আপডেট (আপনার আগের লজিক)
     doc.fileUrl = uploadResult.secure_url;
     doc.status = 'completed';
     await doc.save();
 
-    // ৪. ইমেইল পাঠানো
+    // ৪. ইমেইল পাঠানো (সিসি যোগ করে)
     const recipients = doc.parties.map(p => p.email).filter(e => e);
+    if (doc.ccEmail) recipients.push(doc.ccEmail); 
     
     if (recipients.length > 0) {
       await transporter.sendMail({
         from: `"NexSign" <${process.env.EMAIL_USER}>`,
         to: recipients.join(','),
-        subject: `Completed: ${doc.title}`,
-        html: `<h3>Signing Complete!</h3><p>The final signed version of <b>${doc.title}</b> is attached.</p>`,
+        subject: `Fully Executed: ${doc.title}`,
+        html: `<h3>Signing Complete!</h3><p>The final signed document with a digital audit certificate is attached.</p>`,
         attachments: [{ 
           filename: `${doc.title}_Final.pdf`, 
           content: pdfBuffer,
@@ -6926,21 +7012,17 @@ const generateAndSendFinalDoc = async (doc) => {
         }]
       });
     }
-    console.log("Final document processed and email sent.");
+    console.log("Final document with Audit Trail and Device Info processed.");
   } catch (err) { 
-    console.error("Finalize Error Detailed:", err); 
+    console.error("Finalize Error:", err); 
   }
 };
-// const sendSigningEmail = async (party, docTitle, token) => {
-//   const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
-//   const signLink = `${baseUrl}/sign?token=${token}`;
-//   return transporter.sendMail({
-//     from: `"NexSign" <${process.env.EMAIL_USER}>`,
-//     to: party.email,
-//     subject: `Signature Request: ${docTitle}`,
-//     html: `<p>Please sign the document here: <a href="${signLink}">${signLink}</a></p>`
-//   });
-// };
+
+
+
+
+
+
 const sendSigningEmail = async (party, docTitle, token) => {
   const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
   const signLink = `${baseUrl}/sign?token=${token}`;
