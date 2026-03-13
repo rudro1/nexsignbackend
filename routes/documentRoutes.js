@@ -7062,20 +7062,18 @@ const generateAndSendFinalDoc = async (doc) => {
     const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
     const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
 
-    // ব্র্যান্ড কালার ডিফাইন (#2AAAE0)
-    const brandColor = rgb(0.16, 0.67, 0.88); 
+    const brandColor = rgb(0.16, 0.67, 0.88); // #2AAAE0
 
     let page = pdfDoc.addPage([600, 850]); 
     const { width, height } = page.getSize();
     let y = height - 50;
 
-    // বর্ডার
+    // বর্ডার ও ডিজাইন (আগের মতোই থাকবে)
     page.drawRectangle({
       x: 20, y: 20, width: width - 40, height: height - 40,
       borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
     });
 
-    // ১. হেডার ব্যাকগ্রাউন্ড (#2AAAE0)
     page.drawRectangle({
       x: 21, y: y - 50, width: width - 42, height: 60,
       color: brandColor, 
@@ -7105,11 +7103,7 @@ const generateAndSendFinalDoc = async (doc) => {
     drawInfo('Initiated At:', doc.senderMeta?.time);
     y -= 30;
 
-    // ২. সাইনার ডিটেইলস হেডার কালার (#2AAAE0)
-    page.drawText('SIGNER DETAILS & AUDIT TRAIL', { 
-      x: 50, y, size: 13, font: boldFont, 
-      color: brandColor 
-    });
+    page.drawText('SIGNER DETAILS & AUDIT TRAIL', { x: 50, y, size: 13, font: boldFont, color: brandColor });
     y -= 25;
 
     // সাইনার লুপ
@@ -7120,11 +7114,8 @@ const generateAndSendFinalDoc = async (doc) => {
       }
       page.drawLine({ start: { x: 50, y: y + 10 }, end: { x: 550, y: y + 10 }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
       page.drawText(`${index + 1}. ${p.name}`, { x: 50, y, size: 11, font: boldFont });
-      
-      // সাইনড ব্যাজ (সবুজ রাখা ভালো, অথবা ব্র্যান্ড কালার দিতে পারেন)
       page.drawRectangle({ x: width - 100, y: y - 5, width: 55, height: 18, color: rgb(0.1, 0.6, 0.1) });
       page.drawText('SIGNED', { x: width - 92, y: y, size: 8, font: boldFont, color: rgb(1, 1, 1) });
-      
       y -= 18;
       page.drawText(`Email: ${p.email} | IP: ${p.ipAddress || 'N/A'}`, { x: 70, y, size: 9, font: timesFont });
       y -= 15;
@@ -7145,7 +7136,6 @@ const generateAndSendFinalDoc = async (doc) => {
     const pdfBytesFinal = await pdfDoc.save(); 
     const pdfBuffer = Buffer.from(pdfBytesFinal);
 
-    // ক্লাউডিনারি আপলোড (ফাইল নেম ইউনিক রাখতে Date.now() যোগ করা হয়েছে)
     const uploadResult = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}.pdf` },
@@ -7158,17 +7148,38 @@ const generateAndSendFinalDoc = async (doc) => {
     doc.status = 'completed';
     await doc.save();
 
-    // ইমেইল লজিক
     const signers = doc.parties.map(p => p.email).filter(e => e);
     const validCCs = (doc.ccEmails || []).filter(e => e && e.trim() !== "");
     const allRecipients = [...new Set([...signers, ...validCCs])];
     
+    // 🌟 ৩. সুন্দর ইমেইল টেমপ্লেট যোগ করা হয়েছে
     if (allRecipients.length > 0) {
       await transporter.sendMail({
         from: `"NexSign" <${process.env.EMAIL_USER}>`,
         to: allRecipients.join(','), 
         subject: `Fully Executed: ${doc.title}`,
-        html: `<h3 style="color: #2AAAE0;">Signing Complete!</h3><p>The final document for <b>${doc.title}</b> is ready with a digital audit certificate.</p>`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e1e1e1; border-radius: 8px; overflow: hidden;">
+            <div style="background-color: #2AAAE0; padding: 20px; text-align: center; color: #ffffff;">
+              <h1 style="margin: 0; font-size: 24px;">Signing Complete!</h1>
+            </div>
+            <div style="padding: 20px; color: #333333; line-height: 1.6;">
+              <p>Hello,</p>
+              <p>Great news! The document <b>"${doc.title}"</b> has been fully executed by all parties.</p>
+              <p>You can find the final signed PDF attached to this email. This version includes a <b>Digital Audit Certificate</b> for your secure record-keeping.</p>
+              <div style="background-color: #f4f7f9; border-left: 4px solid #2AAAE0; padding: 15px; margin: 20px 0;">
+                <p style="margin: 0;"><b>Document Details:</b></p>
+                <p style="margin: 5px 0 0;">ID: ${doc._id}</p>
+                <p style="margin: 0;">Completed On: ${new Date().toLocaleString()}</p>
+              </div>
+              <p>Thank you for choosing <b>NexSign</b> for your digital document needs.</p>
+              <p style="margin-top: 30px;">Best regards,<br/>The NexSign Team</p>
+            </div>
+            <div style="background-color: #f9f9f9; padding: 15px; text-align: center; font-size: 12px; color: #888888;">
+              This is an automated message. Please do not reply to this email.
+            </div>
+          </div>
+        `,
         attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
       });
     }
