@@ -6933,12 +6933,17 @@ const mergeSignatures = async (doc) => {
 // };  workable
 
 
+
+
 // const generateAndSendFinalDoc = async (doc) => {
 //   try {
 //     const basePdfBytes = await mergeSignatures(doc);
 //     const pdfDoc = await PDFDocument.load(basePdfBytes);
 //     const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
 //     const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+
+//     // ব্র্যান্ড কালার ডিফাইন (#2AAAE0)
+//     const brandColor = rgb(0.16, 0.67, 0.88); 
 
 //     let page = pdfDoc.addPage([600, 850]); 
 //     const { width, height } = page.getSize();
@@ -6949,10 +6954,12 @@ const mergeSignatures = async (doc) => {
 //       borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
 //     });
 
+//     // ১. হেডার ব্যাকগ্রাউন্ড কালার পরিবর্তন (#2AAAE0)
 //     page.drawRectangle({
 //       x: 21, y: y - 50, width: width - 42, height: 60,
-//       color: rgb(0.02, 0.15, 0.3),
+//       color: brandColor, 
 //     });
+
 //     page.drawText('NEXSIGN DIGITAL AUDIT CERTIFICATE', {
 //       x: 50, y: y - 15, size: 20, font: boldFont, color: rgb(1, 1, 1)
 //     });
@@ -6970,7 +6977,6 @@ const mergeSignatures = async (doc) => {
 //     drawInfo('Document Title:', doc.title);
 //     drawInfo('Created By:', `${doc.senderMeta?.name} (${doc.senderMeta?.email})`);
     
-//     // 🌟 ১. সার্টিফিকেটে CC Emails দেখানো
 //     if (doc.ccEmails && doc.ccEmails.length > 0) {
 //       drawInfo('CC Recipients:', doc.ccEmails.join(', '));
 //     }
@@ -6978,137 +6984,26 @@ const mergeSignatures = async (doc) => {
 //     drawInfo('Initiated At:', doc.senderMeta?.time);
 //     y -= 30;
 
-//     page.drawText('SIGNER DETAILS & AUDIT TRAIL', { x: 50, y, size: 13, font: boldFont, color: rgb(0.02, 0.15, 0.3) });
+//     // ২. সাইনার ডিটেইলস হেডার কালার পরিবর্তন (#2AAAE0)
+//     page.drawText('SIGNER DETAILS & AUDIT TRAIL', { 
+//       x: 50, y, size: 13, font: boldFont, 
+//       color: brandColor // এখানে ব্র্যান্ড কালার ব্যবহার করা হয়েছে
+//     });
 //     y -= 25;
 
-//     // ... (Signer Loop আগের মতোই থাকবে) ...
+//     // সাইনার লুপ (বাকি অংশ একই থাকবে...)
 //     doc.parties.forEach((p, index) => {
-//       if (y < 120) {
+//       if (y < 150) {
 //         page = pdfDoc.addPage([600, 850]);
 //         y = height - 50;
 //       }
 //       page.drawLine({ start: { x: 50, y: y + 10 }, end: { x: 550, y: y + 10 }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
 //       page.drawText(`${index + 1}. ${p.name}`, { x: 50, y, size: 11, font: boldFont });
+      
+//       // ব্যাজ কালারও ব্র্যান্ড কালারের সাথে সামঞ্জস্যপূর্ণ করা যেতে পারে
 //       page.drawRectangle({ x: width - 100, y: y - 5, width: 55, height: 18, color: rgb(0.1, 0.6, 0.1) });
 //       page.drawText('SIGNED', { x: width - 92, y: y, size: 8, font: boldFont, color: rgb(1, 1, 1) });
-//       y -= 18;
-//       page.drawText(`Email: ${p.email} | IP: ${p.ipAddress || 'N/A'}`, { x: 70, y, size: 9, font: timesFont });
-//       y -= 15;
-//       page.drawText(`Location: ${p.location || 'Unknown'}`, { x: 70, y, size: 9, font: timesFont });
-//       y -= 15;
-//       const deviceText = `Device: ${p.device || 'N/A'}`;
-//       const charLimit = 90; 
-//       for (let i = 0; i < deviceText.length; i += charLimit) {
-//         const chunk = deviceText.substring(i, i + charLimit);
-//         page.drawText(chunk, { x: 70, y, size: 8, font: timesFont, color: rgb(0.4, 0.4, 0.4) });
-//         y -= 12;
-//       }
-//       page.drawText(`Signed At: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`, { x: 70, y, size: 9, font: boldFont });
-//       y -= 40; 
-//     });
-
-//     page.drawText('This certificate is part of the electronic record and is legally binding.', {
-//       x: 140, y: 40, size: 9, font: timesFont, color: rgb(0.5, 0.5, 0.5)
-//     });
-
-//     const pdfBytesFinal = await pdfDoc.save(); 
-//     const pdfBuffer = Buffer.from(pdfBytesFinal);
-
-//     const uploadResult = await new Promise((resolve, reject) => {
-//       const stream = cloudinary.uploader.upload_stream(
-//         { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}.pdf`, access_mode: 'public' },
-//         (err, res) => err ? reject(err) : resolve(res)
-//       );
-//       stream.end(pdfBuffer);
-//     });
-
-//     doc.fileUrl = uploadResult.secure_url;
-//     doc.status = 'completed';
-//     await doc.save();
-
-//     // 🌟 ২. মাল্টিপল সিসি ইমেইলসহ রিসিপিয়েন্ট লিস্ট
-//     const recipients = doc.parties.map(p => p.email).filter(e => e);
-    
-//     if (doc.ccEmails && doc.ccEmails.length > 0) {
-//       // সিসি ইমেইলগুলো রিসিপিয়েন্ট লিস্টে যুক্ত করা
-//       const validCCs = doc.ccEmails.filter(e => e && e.trim() !== "");
-//       recipients.push(...validCCs); 
-//     }
-    
-//     if (recipients.length > 0) {
-//       await transporter.sendMail({
-//         from: `"NexSign" <${process.env.EMAIL_USER}>`,
-//         to: recipients.join(','), // কমা দিয়ে আলাদা করে পাঠানো
-//         subject: `Fully Executed: ${doc.title}`,
-//         html: `<h3>Signing Complete!</h3><p>The final document for <b>${doc.title}</b> is ready with a digital audit certificate.</p>`,
-//         attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
-//       });
-//     }
-//   } catch (err) { 
-//     console.error("Finalize Error:", err); 
-//   }
-// };
-// const generateAndSendFinalDoc = async (doc) => {
-//   try {
-//     // ১. মূল পিডিএফ এবং অডিট পেজ তৈরি
-//     const basePdfBytes = await mergeSignatures(doc);
-//     const pdfDoc = await PDFDocument.load(basePdfBytes);
-//     const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
-//     const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
-
-//     let page = pdfDoc.addPage([600, 850]); 
-//     const { width, height } = page.getSize();
-//     let y = height - 50;
-
-//     // বর্ডার আর্ট
-//     page.drawRectangle({
-//       x: 20, y: 20, width: width - 40, height: height - 40,
-//       borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
-//     });
-
-//     // হেডার ডিজাইন
-//     page.drawRectangle({
-//       x: 21, y: y - 50, width: width - 42, height: 60,
-//       color: rgb(0.02, 0.15, 0.3),
-//     });
-//     page.drawText('NEXSIGN DIGITAL AUDIT CERTIFICATE', {
-//       x: 50, y: y - 15, size: 20, font: boldFont, color: rgb(1, 1, 1)
-//     });
-//     page.drawText('Document Evidence Summary & Audit Trail', {
-//       x: 50, y: y - 35, size: 10, font: timesFont, color: rgb(0.9, 0.9, 0.9)
-//     });
-//     y -= 100;
-
-//     const drawInfo = (label, value) => {
-//       page.drawText(label, { x: 50, y, size: 11, font: boldFont });
-//       page.drawText(String(value || 'N/A'), { x: 150, y, size: 11, font: timesFont });
-//       y -= 20;
-//     };
-
-//     drawInfo('Document Title:', doc.title);
-//     drawInfo('Created By:', `${doc.senderMeta?.name} (${doc.senderMeta?.email})`);
-    
-//     // CC Emails সেকশন
-//     if (doc.ccEmails && doc.ccEmails.length > 0) {
-//       drawInfo('CC Recipients:', doc.ccEmails.join(', '));
-//     }
-
-//     drawInfo('Initiated At:', doc.senderMeta?.time);
-//     y -= 30;
-
-//     page.drawText('SIGNER DETAILS & AUDIT TRAIL', { x: 50, y, size: 13, font: boldFont, color: rgb(0.02, 0.15, 0.3) });
-//     y -= 25;
-
-//     // সাইনার লুপ
-//     doc.parties.forEach((p, index) => {
-//       if (y < 150) { // নতুন পেজ চেক
-//         page = pdfDoc.addPage([600, 850]);
-//         y = height - 50;
-//       }
-//       page.drawLine({ start: { x: 50, y: y + 10 }, end: { x: 550, y: y + 10 }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
-//       page.drawText(`${index + 1}. ${p.name}`, { x: 50, y, size: 11, font: boldFont });
-//       page.drawRectangle({ x: width - 100, y: y - 5, width: 55, height: 18, color: rgb(0.1, 0.6, 0.1) });
-//       page.drawText('SIGNED', { x: width - 92, y: y, size: 8, font: boldFont, color: rgb(1, 1, 1) });
+      
 //       y -= 18;
 //       page.drawText(`Email: ${p.email} | IP: ${p.ipAddress || 'N/A'}`, { x: 70, y, size: 9, font: timesFont });
 //       y -= 15;
@@ -7126,7 +7021,7 @@ const mergeSignatures = async (doc) => {
 //       y -= 35; 
 //     });
 
-//     // ২. ক্লাউডিনারি আপলোড ও ডাটাবেস আপডেট
+//     // ... বাকি আপলোড এবং ইমেইল লজিক ...
 //     const pdfBytesFinal = await pdfDoc.save(); 
 //     const pdfBuffer = Buffer.from(pdfBytesFinal);
 
@@ -7142,7 +7037,6 @@ const mergeSignatures = async (doc) => {
 //     doc.status = 'completed';
 //     await doc.save();
 
-//     // ৩. ইউনিক ইমেইল তালিকা তৈরি (ডুপ্লিকেট রিমুভ)
 //     const signers = doc.parties.map(p => p.email).filter(e => e);
 //     const validCCs = (doc.ccEmails || []).filter(e => e && e.trim() !== "");
 //     const allRecipients = [...new Set([...signers, ...validCCs])];
@@ -7152,7 +7046,7 @@ const mergeSignatures = async (doc) => {
 //         from: `"NexSign" <${process.env.EMAIL_USER}>`,
 //         to: allRecipients.join(','), 
 //         subject: `Fully Executed: ${doc.title}`,
-//         html: `<h3>Signing Complete!</h3><p>The final document for <b>${doc.title}</b> is attached with an audit certificate.</p>`,
+//         html: `<h3 style="color: #2AAAE0;">Signing Complete!</h3><p>The final document for <b>${doc.title}</b> is ready.</p>`,
 //         attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
 //       });
 //     }
@@ -7175,12 +7069,13 @@ const generateAndSendFinalDoc = async (doc) => {
     const { width, height } = page.getSize();
     let y = height - 50;
 
+    // বর্ডার
     page.drawRectangle({
       x: 20, y: 20, width: width - 40, height: height - 40,
       borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
     });
 
-    // ১. হেডার ব্যাকগ্রাউন্ড কালার পরিবর্তন (#2AAAE0)
+    // ১. হেডার ব্যাকগ্রাউন্ড (#2AAAE0)
     page.drawRectangle({
       x: 21, y: y - 50, width: width - 42, height: 60,
       color: brandColor, 
@@ -7210,14 +7105,14 @@ const generateAndSendFinalDoc = async (doc) => {
     drawInfo('Initiated At:', doc.senderMeta?.time);
     y -= 30;
 
-    // ২. সাইনার ডিটেইলস হেডার কালার পরিবর্তন (#2AAAE0)
+    // ২. সাইনার ডিটেইলস হেডার কালার (#2AAAE0)
     page.drawText('SIGNER DETAILS & AUDIT TRAIL', { 
       x: 50, y, size: 13, font: boldFont, 
-      color: brandColor // এখানে ব্র্যান্ড কালার ব্যবহার করা হয়েছে
+      color: brandColor 
     });
     y -= 25;
 
-    // সাইনার লুপ (বাকি অংশ একই থাকবে...)
+    // সাইনার লুপ
     doc.parties.forEach((p, index) => {
       if (y < 150) {
         page = pdfDoc.addPage([600, 850]);
@@ -7226,7 +7121,7 @@ const generateAndSendFinalDoc = async (doc) => {
       page.drawLine({ start: { x: 50, y: y + 10 }, end: { x: 550, y: y + 10 }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
       page.drawText(`${index + 1}. ${p.name}`, { x: 50, y, size: 11, font: boldFont });
       
-      // ব্যাজ কালারও ব্র্যান্ড কালারের সাথে সামঞ্জস্যপূর্ণ করা যেতে পারে
+      // সাইনড ব্যাজ (সবুজ রাখা ভালো, অথবা ব্র্যান্ড কালার দিতে পারেন)
       page.drawRectangle({ x: width - 100, y: y - 5, width: 55, height: 18, color: rgb(0.1, 0.6, 0.1) });
       page.drawText('SIGNED', { x: width - 92, y: y, size: 8, font: boldFont, color: rgb(1, 1, 1) });
       
@@ -7247,10 +7142,10 @@ const generateAndSendFinalDoc = async (doc) => {
       y -= 35; 
     });
 
-    // ... বাকি আপলোড এবং ইমেইল লজিক ...
     const pdfBytesFinal = await pdfDoc.save(); 
     const pdfBuffer = Buffer.from(pdfBytesFinal);
 
+    // ক্লাউডিনারি আপলোড (ফাইল নেম ইউনিক রাখতে Date.now() যোগ করা হয়েছে)
     const uploadResult = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}.pdf` },
@@ -7263,6 +7158,7 @@ const generateAndSendFinalDoc = async (doc) => {
     doc.status = 'completed';
     await doc.save();
 
+    // ইমেইল লজিক
     const signers = doc.parties.map(p => p.email).filter(e => e);
     const validCCs = (doc.ccEmails || []).filter(e => e && e.trim() !== "");
     const allRecipients = [...new Set([...signers, ...validCCs])];
@@ -7272,7 +7168,7 @@ const generateAndSendFinalDoc = async (doc) => {
         from: `"NexSign" <${process.env.EMAIL_USER}>`,
         to: allRecipients.join(','), 
         subject: `Fully Executed: ${doc.title}`,
-        html: `<h3 style="color: #2AAAE0;">Signing Complete!</h3><p>The final document for <b>${doc.title}</b> is ready.</p>`,
+        html: `<h3 style="color: #2AAAE0;">Signing Complete!</h3><p>The final document for <b>${doc.title}</b> is ready with a digital audit certificate.</p>`,
         attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
       });
     }
