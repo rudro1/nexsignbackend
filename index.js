@@ -2178,7 +2178,7 @@ require('./models/AuditLog');
 const authRoutes = require('./routes/authRoutes'); 
 const documentRoutes = require('./routes/documentRoutes');
 const adminRoutes = require('./routes/adminRoutes');
-
+const feedbackRoutes = require('./routes/feedbackRoutes');
 const app = express();
 
 // ২. হেলমেট ও সিকিউরিটি
@@ -2255,6 +2255,7 @@ app.get('/api/health', (req, res) => {
     db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected" 
   });
 });
+app.use('/api/feedback', feedbackRoutes);
 
 // ৭. গ্লোবাল এরর হ্যান্ডলার
 app.use((err, req, res, next) => {
@@ -2264,6 +2265,7 @@ app.use((err, req, res, next) => {
     error: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
   });
 });
+
 
 // লোকাল সার্ভার লজিক
 if (process.env.NODE_ENV !== 'production') {
