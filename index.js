@@ -1,14 +1,5 @@
-// // // const express = require('express');
-// // // const mongoose = require('mongoose');
-// // // const cors = require('cors');
-// // // const bcrypt = require('bcryptjs');
-// // // const jwt = require('jsonwebtoken');
-// // // const multer = require('multer');
-// // // const cloudinary = require('cloudinary').v2;
-// // // const { CloudinaryStorage } = require('multer-storage-cloudinary');
-// // // const nodemailer = require('nodemailer');
-// // // const crypto = require('crypto');
 
+<<<<<<< HEAD
 // // // const User = require('./models/User');
 // // // const Document = require('./models/Document');
 // // // const AuditLog = require('./models/AuditLog');
@@ -2164,6 +2155,8 @@
 
 
 
+=======
+>>>>>>> 8f29975 (Google Auth)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -2272,5 +2265,10 @@ if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5001;
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 }
+
+
+//google login
+
+app.use("/api/auth", authRoutes);
 
 module.exports = app;

@@ -1,40 +1,4 @@
-// const mongoose = require('mongoose');
 
-// const auditLogSchema = new mongoose.Schema({
-//   document_id: { 
-//     type: mongoose.Schema.Types.ObjectId, 
-//     ref: 'Document', 
-//     required: true 
-//   },
-//   action: { 
-//     type: String, 
-//     enum: ["created", "sent", "opened", "signed", "completed", "cancelled"],
-//     required: true 
-//   },
-//   party_name: { type: String },
-//   party_email: { type: String },
-//   details: { type: String },
-//   timestamp: { type: Date, default: Date.now }
-// });
-
-// module.exports = mongoose.model('AuditLog', auditLogSchema);
-// const mongoose = require('mongoose');
-
-// const auditLogSchema = new mongoose.Schema({
-//   document_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Document', required: true },
-//   action: { 
-//     type: String, 
-//     enum: ['created', 'sent', 'opened', 'signed', 'completed', 'cancelled'], 
-//     required: true 
-//   },
-//   party_name: String,
-//   party_email: String,
-//   ip_address: String, // অতিরিক্ত সিকিউরিটির জন্য আইপি ট্র্যাক করা ভালো
-//   details: String,
-//   timestamp: { type: Date, default: Date.now }
-// });
-
-// module.exports = mongoose.model('AuditLog', auditLogSchema);
 const mongoose = require('mongoose');
 
 const auditLogSchema = new mongoose.Schema({

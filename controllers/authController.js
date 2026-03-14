@@ -110,6 +110,14 @@
 // const jwt = require('jsonwebtoken');
 // const bcrypt = require('bcryptjs');
 
+// const User = require('../models/User'); // পাথ ঠিক আছে কি না নিশ্চিত করুন
+// const jwt = require('jsonwebtoken');
+// const bcrypt = require('bcryptjs');
+
+// import User from '../models/User.js';
+// import jwt from 'jsonwebtoken';
+// import bcrypt from 'bcryptjs';
+
 // // ১. রেজিস্ট্রেশন (পাসওয়ার্ড হ্যাশ করে সেভ করবে)
 // exports.register = async (req, res) => {
 //   try {
@@ -205,6 +213,211 @@
 
 
 
+
+
+// // ৩. Google Login
+// exports.googleAuth = async (req, res) => {
+//   try {
+//     const { name, email, photoURL } = req.body;
+
+//     if (!email) {
+//       return res.status(400).json({ message: "Email is required" });
+//     }
+
+//     let user = await User.findOne({ email });
+
+//     if (!user) {
+//       user = await User.create({
+//         full_name: name,
+//         email: email,
+//         photo: photoURL,
+//         role: "user",
+//         status: "active"
+//       });
+//     }
+
+//     const token = jwt.sign(
+//       { id: user._id, role: user.role },
+//       process.env.JWT_SECRET,
+//       { expiresIn: "7d" }
+//     );
+
+//     res.json({
+//       token,
+//       user
+//     });
+
+//   } catch (error) {
+//     console.error(error);
+//     res.status(500).json({ message: "Google authentication failed" });
+//   }
+// };
+
+
+// import User from '../models/User.js';
+// import jwt from 'jsonwebtoken';
+// import bcrypt from 'bcryptjs';
+
+
+// // ================= REGISTER =================
+// export const register = async (req, res) => {
+//   try {
+//     const { full_name, email, password } = req.body;
+
+//     if (!full_name || !email || !password) {
+//       return res.status(400).json({ message: "সবগুলো তথ্য প্রদান করুন।" });
+//     }
+
+//     const cleanEmail = email.toLowerCase().trim();
+
+//     // email exist check
+//     const existingUser = await User.findOne({ email: cleanEmail });
+//     if (existingUser) {
+//       return res.status(400).json({
+//         message: "এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে।"
+//       });
+//     }
+
+//     // password hash
+//     const salt = await bcrypt.genSalt(10);
+//     const hashedPassword = await bcrypt.hash(password, salt);
+
+//     // super admin check
+//     const isSuperAdmin = cleanEmail === "bisalsaha42@gmail.com";
+
+//     const user = new User({
+//       full_name,
+//       email: cleanEmail,
+//       password: hashedPassword,
+//       role: isSuperAdmin ? "super_admin" : "user"
+//     });
+
+//     await user.save();
+
+//     // JWT token
+//     const token = jwt.sign(
+//       { id: user._id, role: user.role },
+//       process.env.JWT_SECRET,
+//       { expiresIn: "7d" }
+//     );
+
+//     res.status(201).json({
+//       message: "অ্যাকাউন্ট তৈরি সফল হয়েছে",
+//       token,
+//       user: {
+//         id: user._id,
+//         full_name: user.full_name,
+//         email: user.email,
+//         role: user.role
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error("Register Error:", error);
+//     res.status(500).json({
+//       message: "সার্ভারে সমস্যা হয়েছে",
+//       error: error.message
+//     });
+//   }
+// };
+
+
+
+// // ================= LOGIN =================
+// export const login = async (req, res) => {
+//   try {
+//     const { email, password } = req.body;
+
+//     const cleanEmail = email.toLowerCase().trim();
+
+//     const user = await User.findOne({ email: cleanEmail });
+
+//     if (!user) {
+//       return res.status(400).json({
+//         message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।"
+//       });
+//     }
+
+//     const isMatch = await bcrypt.compare(password, user.password);
+
+//     if (!isMatch) {
+//       return res.status(400).json({
+//         message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।"
+//       });
+//     }
+
+//     const token = jwt.sign(
+//       { id: user._id, role: user.role },
+//       process.env.JWT_SECRET,
+//       { expiresIn: "7d" }
+//     );
+
+//     res.json({
+//       token,
+//       user: {
+//         id: user._id,
+//         full_name: user.full_name,
+//         email: user.email,
+//         role: user.role
+//       }
+//     });
+
+//   } catch (error) {
+//     console.error("Login Error:", error);
+//     res.status(500).json({
+//       message: "সার্ভারে সমস্যা হয়েছে।"
+//     });
+//   }
+// };
+
+
+
+// // ================= GOOGLE AUTH =================
+// export const googleAuth = async (req, res) => {
+//   try {
+
+//     const { name, email, photoURL } = req.body;
+
+//     if (!email) {
+//       return res.status(400).json({
+//         message: "Email is required"
+//       });
+//     }
+
+//     let user = await User.findOne({ email });
+
+//     // create user if not exist
+//     if (!user) {
+//       user = await User.create({
+//         full_name: name,
+//         email,
+//         photo: photoURL,
+//         role: "user",
+//         status: "active"
+//       });
+//     }
+
+//     const token = jwt.sign(
+//       { id: user._id, role: user.role },
+//       process.env.JWT_SECRET,
+//       { expiresIn: "7d" }
+//     );
+
+//     res.json({
+//       token,
+//       user
+//     });
+
+//   } catch (error) {
+//     console.error("Google Auth Error:", error);
+
+//     res.status(500).json({
+//       message: "Google authentication failed"
+//     });
+//   }
+// };
+
+
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 
@@ -216,6 +429,7 @@ const generateToken = (user) => {
   );
 };
 
+// REGISTER
 exports.register = async (req, res) => {
   try {
     const { full_name, email, password } = req.body;
@@ -223,6 +437,11 @@ exports.register = async (req, res) => {
 
     const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) return res.status(400).json({ message: "ইমেইলটি ইতিমধ্যে ব্যবহৃত।" });
+    const existingUser = await User.findOne({ email: cleanEmail });
+    if (existingUser) return res.status(400).json({ message: "Email already exists" });
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
     const user = new User({
       full_name,
@@ -240,10 +459,24 @@ exports.register = async (req, res) => {
   }
 };
 
+      password: hashedPassword,
+      role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user"
+    });
+
+    await user.save();
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    res.status(201).json({ token, user });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// LOGIN
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email: email.toLowerCase().trim() });
+<<<<<<< HEAD
 
     if (!user || !(await user.comparePassword(password))) {
       return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
@@ -263,5 +496,40 @@ exports.login = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: "লগইনে সমস্যা হয়েছে।" });
+=======
+    if (!user) return res.status(400).json({ message: "Invalid credentials" });
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
+
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    res.json({ token, user });
+  } catch (error) {
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+// GOOGLE AUTH (Fix)
+exports.googleAuth = async (req, res) => {
+  try {
+    const { name, email, photoURL } = req.body;
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      // পাসওয়ার্ড ছাড়াই ইউজার তৈরি হবে কারণ মডেলে ডিফল্ট ভ্যালু আছে
+      user = await User.create({
+        full_name: name,
+        email: email,
+       
+        role: email === "bisalsaha42@gmail.com" ? "super_admin" : "user"
+      });
+    }
+
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+    res.json({ token, user });
+  } catch (error) {
+    console.error("Google Auth Error:", error);
+    res.status(500).json({ message: "Google authentication failed" });
+>>>>>>> 8f29975 (Google Auth)
   }
 };
