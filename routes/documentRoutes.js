@@ -6923,7 +6923,6 @@ const upload = multer({ storage });
 // });
 // }; workable
 const mergeSignatures = async (doc) => {
-  // ১. সরাসরি Cloudinary URL থেকে ফাইল আনা (Timeout ও Error Handling সহ)
   const response = await axios.get(doc.fileUrl, { 
     responseType: 'arraybuffer',
     timeout: 15000 
@@ -6933,7 +6932,7 @@ const mergeSignatures = async (doc) => {
   const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
   const pages = pdfDoc.getPages();
 
-  // ২. ডুপ্লিকেট ফিল্ড রিমুভ এবং ক্লিনআপ
+  // ১. ডুপ্লিকেট ফিল্ড রিমুভ (পরিচ্ছন্ন লজিক)
   const uniqueFields = Array.from(new Map(doc.fields.map(f => {
     const obj = typeof f === 'string' ? JSON.parse(f) : f;
     return [obj.id, obj];
@@ -6941,21 +6940,15 @@ const mergeSignatures = async (doc) => {
 
   for (const fd of uniqueFields) {
     try {
-<<<<<<< HEAD
-      if (!fd.value || !fd.filled) continue; // শুধু ফিল্ড করা ডেটা প্রসেস হবে
-=======
-      if (fd.value) { 
-        const pageIndex = Number(fd.page) -  1;
-        if (pageIndex < 0 || pageIndex >= pages.length) continue;
->>>>>>> 8f29975 (Google Auth)
-
+      if (!fd.value || !fd.filled) continue; 
+      
       const pageIndex = Number(fd.page) - 1;
       if (pageIndex < 0 || pageIndex >= pages.length) continue;
 
       const page = pages[pageIndex];
       const { width, height } = page.getSize();
       
-      // ক্যালকুলেশন (PDF কোঅর্ডিনেট সিস্টেম অনুযায়ী)
+      // ২. কোঅর্ডিনেট ক্যালকুলেশন (Precise Mapping)
       const drawW = (Number(fd.width) * width) / 100;
       const drawH = (Number(fd.height) * height) / 100;
       const drawX = (Number(fd.x) * width) / 100;
@@ -6966,37 +6959,28 @@ const mergeSignatures = async (doc) => {
         const imgBuffer = Buffer.from(base64Data, 'base64');
         
         let sigImg;
-        // ৩. উন্নত ইমেজ ফরম্যাট হ্যান্ডলিং
+        // ৩. ডাইনামিক ইমেজ এমবেডিং
         if (fd.value.includes('image/png')) {
           sigImg = await pdfDoc.embedPng(imgBuffer);
-        } else if (fd.value.includes('image/jpeg') || fd.value.includes('image/jpg')) {
-          sigImg = await pdfDoc.embedJpg(imgBuffer);
         } else {
-          // যদি ফরম্যাট না মেলে, তবুও ট্রাই করবে
-          sigImg = await pdfDoc.embedPng(imgBuffer).catch(() => pdfDoc.embedJpg(imgBuffer));
+          sigImg = await pdfDoc.embedJpg(imgBuffer);
         }
         
         page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
       } else {
-        // টেক্সট ফিল্ড (যেমন: নাম বা তারিখ)
         page.drawText(String(fd.value), {
           x: drawX + 2, 
-          y: drawY + (drawH / 2.5), // টেক্সট পজিশন ভার্টিক্যালি সেন্টার করা
-          size: 11, font: timesFont, color: rgb(0, 0, 0),
+          y: drawY + (drawH / 4), // টেক্সট এলাইনমেন্ট ঠিক করা হয়েছে
+          size: 10, font: timesFont, color: rgb(0, 0, 0),
         });
       }
     } catch (e) { 
       console.error(`Render Error for field ${fd.id}:`, e.message); 
-      continue; 
     }
   }
 
-  // ৪. ফাইনাল সেভ (অবশ্যই await করতে হবে)
-  return await pdfDoc.save({ 
-    useObjectStreams: true, 
-    addDefaultPage: false 
-  });
-}; 
+  return await pdfDoc.save();
+};
 //changes need for snap
 
 

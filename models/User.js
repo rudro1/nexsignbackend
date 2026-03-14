@@ -69,14 +69,12 @@ const userSchema = new mongoose.Schema({
   
 });
 
-<<<<<<< HEAD
 // ✅ পাসওয়ার্ড চেক করার জন্য এই মেথডটি যোগ করুন (এটি ছাড়া লগইন হবে না)
 userSchema.methods.comparePassword = async function(enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
 module.exports = mongoose.model('User', userSchema);
-=======
 
 // ✅ এটিই সবচাইতে গুরুত্বপূর্ণ লাইন। কোনো ব্র্যাকেট ছাড়া সরাসরি এভাবে লিখুন:
 module.exports = mongoose.model('User', userSchema);
@@ -84,4 +82,3 @@ module.exports = mongoose.model('User', userSchema);
 
 
 
->>>>>>> 8f29975 (Google Auth)
