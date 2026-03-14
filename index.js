@@ -1,5 +1,4 @@
 
-<<<<<<< HEAD
 // // // const User = require('./models/User');
 // // // const Document = require('./models/Document');
 // // // const AuditLog = require('./models/AuditLog');
@@ -2155,8 +2154,6 @@
 
 
 
-=======
->>>>>>> 8f29975 (Google Auth)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
