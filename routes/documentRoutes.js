@@ -7636,6 +7636,97 @@ router.post('/send', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// router.post('/sign/submit', async (req, res) => {
+//   try {
+//     const { token, fields: incomingFields } = req.body;
+    
+//     // ১. ডকুমেন্ট খুঁজে বের করা
+//     const doc = await Document.findOne({ "parties.token": token });
+//     if (!doc) return res.status(404).json({ error: "Invalid link or session expired" });
+
+//     const idx = doc.parties.findIndex(p => p.token === token);
+//     const userAgent = req.headers['user-agent'] || 'Unknown Device';
+    
+//     // ২. নির্ভরযোগ্য আইপি ডিটেকশন
+//     const ip = (
+//       req.headers['x-real-ip'] || 
+//       req.headers['x-forwarded-for']?.split(',')[0] || 
+//       req.socket.remoteAddress || 
+//       '127.0.0.1'
+//     ).trim();
+
+//     // ৩. জিও-লোকেশন ফেচ করা
+//     let locationData = "Unknown Location";
+//     if (ip !== '127.0.0.1' && ip !== '::1') {
+//       try {
+//         const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 2500 });
+//         if (locRes.data?.status === 'success') {
+//           locationData = `${locRes.data.city}, ${locRes.data.regionName}, ${locRes.data.country}`;
+//         }
+//       } catch (locErr) {
+//         console.error("Geo-location fallback initiated:", locErr.message);
+//       }
+//     }
+
+//     // ৪. ডকুমেন্টের তথ্য আপডেট
+//     doc.fields = incomingFields;
+//     doc.parties[idx].status = 'signed';
+//     doc.parties[idx].signedAt = new Date();
+//     doc.parties[idx].device = userAgent;
+//     doc.parties[idx].ipAddress = ip;
+//     doc.parties[idx].location = locationData;
+
+//     // ৫. অডিট লগ এন্ট্রি
+//     await AuditLog.create({
+//       document_id: doc._id,
+//       action: 'signed',
+//       performed_by: { 
+//         name: doc.parties[idx].name, 
+//         email: doc.parties[idx].email, 
+//         role: 'signer' 
+//       },
+//       ip_address: ip,
+//       user_agent: userAgent,
+//       details: `Digitally signed from ${locationData}.`
+//     });
+
+//     doc.markModified('fields'); 
+//     doc.markModified('parties');
+
+//     // ৬. পরবর্তী সাইনার বা সমাপ্তি লজিক
+//     if (idx + 1 < doc.parties.length) {
+//       // পরবর্তী সাইনার আছে
+//       const nextToken = crypto.randomBytes(32).toString('hex');
+//       doc.parties[idx + 1].token = nextToken;
+//       doc.parties[idx + 1].status = 'sent';
+//       doc.currentPartyIndex = idx + 1;
+      
+//       await doc.save();
+//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
+//       return res.json({ next: true });
+//     } else {
+//       // শেষ সাইনার, ডকুমেন্ট সম্পন্ন
+//       doc.status = 'completed';
+//       doc.currentPartyIndex = idx;
+//       await doc.save(); 
+
+//       // 🌟 গুরুত্বপূর্ণ: ডাটাবেস থেকে একদম লেটেস্ট কপি নিয়ে সার্টিফিকেট বানানো
+//       const finalDoc = await Document.findById(doc._id);
+      
+//       // ব্যাকগ্রাউন্ডে প্রসেস না করে await করা ভালো যাতে রেসপন্স নিশ্চিত হয়
+//       await generateAndSendFinalDoc(finalDoc); 
+      
+//       return res.json({ completed: true });
+//     }
+//   } catch (err) { 
+//     console.error("Signature Submission Error:", err);
+//     res.status(500).json({ error: "Failed to process signature" }); 
+//   }
+// });
+
+// ৫. সাইনিং পেজের ডেটা লোড
+//fix for error the snap 
+
 router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields: incomingFields } = req.body;
@@ -7676,7 +7767,7 @@ router.post('/sign/submit', async (req, res) => {
     doc.parties[idx].ipAddress = ip;
     doc.parties[idx].location = locationData;
 
-    // ৫. অডিট লগ এন্ট্রি
+    // ৫. অডিট লগ এন্ট্রি (এটি await থাকাই ভালো)
     await AuditLog.create({
       document_id: doc._id,
       action: 'signed',
@@ -7695,28 +7786,35 @@ router.post('/sign/submit', async (req, res) => {
 
     // ৬. পরবর্তী সাইনার বা সমাপ্তি লজিক
     if (idx + 1 < doc.parties.length) {
-      // পরবর্তী সাইনার আছে
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
       doc.currentPartyIndex = idx + 1;
       
       await doc.save();
-      await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
+      // ইমেইল পাঠানো ব্যাকগ্রাউন্ডে রাখা ভালো
+      sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken).catch(e => console.error("Email Error:", e)); 
       return res.json({ next: true });
     } else {
-      // শেষ সাইনার, ডকুমেন্ট সম্পন্ন
+      // ✅ শেষ সাইনার, ডকুমেন্ট সম্পন্ন
       doc.status = 'completed';
       doc.currentPartyIndex = idx;
+      
+      // গুরুত্বপূর্ণ: ডাটাবেসে পজিশন সেভ নিশ্চিত করা
       await doc.save(); 
 
-      // 🌟 গুরুত্বপূর্ণ: ডাটাবেস থেকে একদম লেটেস্ট কপি নিয়ে সার্টিফিকেট বানানো
+      // লেটেস্ট কপি সংগ্রহ
       const finalDoc = await Document.findById(doc._id);
       
-      // ব্যাকগ্রাউন্ডে প্রসেস না করে await করা ভালো যাতে রেসপন্স নিশ্চিত হয়
-      await generateAndSendFinalDoc(finalDoc); 
+      // 🚀 ফিক্স: মোবাইল ক্র্যাশ এড়াতে আগে রেসপন্স পাঠানো
+      res.json({ completed: true });
+
+      // 🚀 ফিক্স: এরর হ্যান্ডলিং সহ ব্যাকগ্রাউন্ডে পিডিএফ জেনারেশন
+      generateAndSendFinalDoc(finalDoc).catch(err => {
+        console.error("🔴 Critical: Background PDF Generation Error:", err.message);
+      });
       
-      return res.json({ completed: true });
+      return; 
     }
   } catch (err) { 
     console.error("Signature Submission Error:", err);
@@ -7724,7 +7822,7 @@ router.post('/sign/submit', async (req, res) => {
   }
 });
 
-// ৫. সাইনিং পেজের ডেটা লোড
+
 router.get('/sign/:token', async (req, res) => {
   try {
     const doc = await Document.findOne({ "parties.token": req.params.token });
