@@ -119,6 +119,94 @@
 // });
 
 // module.exports = router;
+// const express = require('express');
+// const router = express.Router();
+// const User = require('../models/User');
+// const Document = require('../models/Document');
+// const AuditLog = require('../models/AuditLog');
+// const auth = require('../middleware/auth');
+// const adminAuth = require('../middleware/adminAuth');
+
+// // ১. ইউজার লিস্ট (এটি মিসিং ছিল)
+// router.get('/users', auth, adminAuth, async (req, res) => {
+//   try {
+//     const users = await User.find({})
+//       .select('-password') // পাসওয়ার্ড বাদে সব আনবে
+//       .sort({ createdAt: -1 })
+//       .lean();
+//     res.status(200).json(users || []);
+//   } catch (error) {
+//     res.status(500).json({ message: "ইউজার লিস্ট আনতে সমস্যা হয়েছে" });
+//   }
+// });
+
+// // ২. ডকুমেন্ট লিস্ট
+// router.get('/documents', auth, adminAuth, async (req, res) => {
+//   try {
+//     const documents = await Document.find({})
+//       .populate({ path: 'owner', model: 'User', select: 'full_name email' })
+//       .sort({ createdAt: -1 })
+//       .limit(50) 
+//       .lean();
+
+//     const sanitizedDocs = documents.map(doc => ({
+//       ...doc,
+//       owner: doc.owner || { full_name: 'Unknown User', email: 'N/A' }
+//     }));
+
+//     res.status(200).json(sanitizedDocs);
+//   } catch (error) {
+//     res.status(500).json({ message: "ডকুমেন্ট লিস্ট আনতে সমস্যা হয়েছে" });
+//   }
+// });
+
+// // ৩. অডিট লগ
+// router.get('/audit-logs', auth, adminAuth, async (req, res) => {
+//   try {
+//     const page = parseInt(req.query.page) || 1;
+//     const limit = 10;
+//     const skip = (page - 1) * limit;
+
+//     const logs = await AuditLog.find({})
+//       .populate({ path: 'document_id', model: 'Document', select: 'title' })
+//       .sort({ timestamp: -1 })
+//       .skip(skip)
+//       .limit(limit)
+//       .lean();
+
+//     const sanitizedLogs = logs.map(log => ({
+//       ...log,
+//       document_id: log.document_id || { title: 'Deleted Document' }
+//     }));
+
+//     res.status(200).json(sanitizedLogs);
+//   } catch (error) {
+//     res.status(500).json({ message: "অডিট লগ আনতে সমস্যা হয়েছে" });
+//   }
+// });
+// // ইউজার ডিলিট করার রাউট
+// router.delete('/users/:id', auth, adminAuth, async (req, res) => {
+//   try {
+//     await User.findByIdAndDelete(req.params.id);
+//     res.status(200).json({ message: "User deleted" });
+//   } catch (error) {
+//     res.status(500).json({ message: "Error deleting user" });
+//   }
+// });
+
+// // ডকুমেন্ট ডিলিট করার রাউট (এটি ডিলিট করলে ইউজারদের থেকেও ডিলিট হয়ে যাবে)
+// router.delete('/documents/:id', auth, adminAuth, async (req, res) => {
+//   try {
+//     await Document.findByIdAndDelete(req.params.id);
+//     res.status(200).json({ message: "Document deleted from system" });
+//   } catch (error) {
+//     res.status(500).json({ message: "Error deleting document" });
+//   }
+// });
+
+// module.exports = router;
+
+
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
@@ -127,11 +215,11 @@ const AuditLog = require('../models/AuditLog');
 const auth = require('../middleware/auth');
 const adminAuth = require('../middleware/adminAuth');
 
-// ১. ইউজার লিস্ট (এটি মিসিং ছিল)
+// ১. ইউজার লিস্ট আনা
 router.get('/users', auth, adminAuth, async (req, res) => {
   try {
     const users = await User.find({})
-      .select('-password') // পাসওয়ার্ড বাদে সব আনবে
+      .select('-password') // সিকিউরিটির জন্য পাসওয়ার্ড বাদ
       .sort({ createdAt: -1 })
       .lean();
     res.status(200).json(users || []);
@@ -140,15 +228,16 @@ router.get('/users', auth, adminAuth, async (req, res) => {
   }
 });
 
-// ২. ডকুমেন্ট লিস্ট
+// ২. সকল ডকুমেন্ট লিস্ট আনা
 router.get('/documents', auth, adminAuth, async (req, res) => {
   try {
     const documents = await Document.find({})
-      .populate({ path: 'owner', model: 'User', select: 'full_name email' })
+      .populate({ path: 'owner', select: 'full_name email' })
       .sort({ createdAt: -1 })
       .limit(50) 
       .lean();
 
+    // ডাটা ক্লিনআপ (যদি ওনার ডিলিট হয়ে গিয়ে থাকে)
     const sanitizedDocs = documents.map(doc => ({
       ...doc,
       owner: doc.owner || { full_name: 'Unknown User', email: 'N/A' }
@@ -160,15 +249,15 @@ router.get('/documents', auth, adminAuth, async (req, res) => {
   }
 });
 
-// ৩. অডিট লগ
+// ৩. অডিট লগ দেখা (প্যাজিনেশন সহ)
 router.get('/audit-logs', auth, adminAuth, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
-    const limit = 10;
+    const limit = 20;
     const skip = (page - 1) * limit;
 
     const logs = await AuditLog.find({})
-      .populate({ path: 'document_id', model: 'Document', select: 'title' })
+      .populate({ path: 'document_id', select: 'title' })
       .sort({ timestamp: -1 })
       .skip(skip)
       .limit(limit)
@@ -184,23 +273,26 @@ router.get('/audit-logs', auth, adminAuth, async (req, res) => {
     res.status(500).json({ message: "অডিট লগ আনতে সমস্যা হয়েছে" });
   }
 });
-// ইউজার ডিলিট করার রাউট
+
+// ৪. ইউজার ডিলিট করা
 router.delete('/users/:id', auth, adminAuth, async (req, res) => {
   try {
-    await User.findByIdAndDelete(req.params.id);
-    res.status(200).json({ message: "User deleted" });
+    const user = await User.findByIdAndDelete(req.params.id);
+    if (!user) return res.status(404).json({ message: "ইউজার খুঁজে পাওয়া যায়নি" });
+    res.status(200).json({ message: "ইউজার সফলভাবে ডিলিট করা হয়েছে" });
   } catch (error) {
-    res.status(500).json({ message: "Error deleting user" });
+    res.status(500).json({ message: "ইউজার ডিলিট করতে সমস্যা হয়েছে" });
   }
 });
 
-// ডকুমেন্ট ডিলিট করার রাউট (এটি ডিলিট করলে ইউজারদের থেকেও ডিলিট হয়ে যাবে)
+// ৫. সিস্টেম থেকে ডকুমেন্ট ডিলিট করা
 router.delete('/documents/:id', auth, adminAuth, async (req, res) => {
   try {
-    await Document.findByIdAndDelete(req.params.id);
-    res.status(200).json({ message: "Document deleted from system" });
+    const doc = await Document.findByIdAndDelete(req.params.id);
+    if (!doc) return res.status(404).json({ message: "ডকুমেন্ট খুঁজে পাওয়া যায়নি" });
+    res.status(200).json({ message: "ডকুমেন্ট সফলভাবে ডিলিট করা হয়েছে" });
   } catch (error) {
-    res.status(500).json({ message: "Error deleting document" });
+    res.status(500).json({ message: "ডকুমেন্ট ডিলিট করতে সমস্যা হয়েছে" });
   }
 });
 

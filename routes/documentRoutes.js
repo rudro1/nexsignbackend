@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 // const express = require('express');
 // const router = express.Router();
 // const Document = require('../models/Document');
@@ -6833,8 +6832,6 @@
 
 
 // module.exports = router;
-=======
->>>>>>> 8f29975 (Google Auth)
 
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 const express = require('express');

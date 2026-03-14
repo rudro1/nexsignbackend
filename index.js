@@ -2154,13 +2154,130 @@
 
 
 
+// require('dotenv').config();
+// const express = require('express');
+// const cors = require('cors');
+// const mongoose = require('mongoose');
+// const helmet = require('helmet');
+
+// // ১. মডেল ইমপোর্ট (কানেকশনের আগে ইমপোর্ট করা ভালো)
+// require('./models/User');
+// require('./models/Document');
+// require('./models/AuditLog'); 
+
+// const authRoutes = require('./routes/authRoutes'); 
+// const documentRoutes = require('./routes/documentRoutes');
+// const adminRoutes = require('./routes/adminRoutes');
+// const feedbackRoutes = require('./routes/feedbackRoutes');
+// const app = express();
+
+// // ২. হেলমেট ও সিকিউরিটি
+// app.use(helmet({
+//   crossOriginResourcePolicy: { policy: "cross-origin" },
+//   contentSecurityPolicy: false,
+// }));
+
+// // ৩. CORS কনফিগারেশন
+// const allowedOrigins = [
+//   'http://localhost:5173', 
+//   'https://nexsignfrontend.vercel.app',
+//   'https://nexsignfrontend-git-main-bisal-sahas-projects.vercel.app'
+// ];
+
+// app.use(cors({
+//   origin: (origin, callback) => {
+//     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+//       callback(null, true);
+//     } else {
+//       callback(new Error('CORS blocked this request'));
+//     }
+//   },
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+// }));
+
+// app.options('*', cors());
+
+// // ৪. পে-লোড লিমিট
+// app.use(express.json({ limit: '50mb' }));
+// app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// // ৫. ডাটাবেস কানেকশন হ্যান্ডলার (Vercel অপ্টিমাইজড)
+// const connectDB = async () => {
+//   // যদি আগে থেকেই কানেক্টেড থাকে তবে নতুন করে কানেক্ট হবে না
+//   if (mongoose.connection.readyState >= 1) return;
+
+//   try {
+//     await mongoose.connect(process.env.MONGO_URI, {
+//       useNewUrlParser: true,
+//       useUnifiedTopology: true,
+//       serverSelectionTimeoutMS: 5000, // ৫ সেকেন্ড পর টাইমআউট
+//       socketTimeoutMS: 45000,
+//     });
+//     console.log('✅ MongoDB Connected');
+//   } catch (err) {
+//     console.error('❌ MongoDB Connection Error:', err.message);
+//     // সার্ভারলেস ফাংশনে এরর থ্রো করা উচিত যাতে বাফারিং না হয়
+//     throw new Error('Database connection failed');
+//   }
+// };
+
+// // কানেকশন মিডলওয়্যার (প্রতিটি রিকোয়েস্টে কানেকশন নিশ্চিত করবে)
+// app.use(async (req, res, next) => {
+//   try {
+//     await connectDB();
+//     next();
+//   } catch (err) {
+//     res.status(503).json({ error: "Service Unavailable: Database Connection Error" });
+//   }
+// });
+
+// // ৬. রাউটস
+// app.get('/', (req, res) => res.send('NexSign Server is Online'));
+// app.use('/api/auth', authRoutes);      
+// app.use('/api/documents', documentRoutes);
+// app.use('/api/admin', adminRoutes);
+
+// app.get('/api/health', (req, res) => {
+//   res.json({ 
+//     status: "Online", 
+//     db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected" 
+//   });
+// });
+// app.use('/api/feedback', feedbackRoutes);
+
+// // ৭. গ্লোবাল এরর হ্যান্ডলার
+// app.use((err, req, res, next) => {
+//   console.error("Global Error Log:", err.stack);
+//   const status = err.status || 500;
+//   res.status(status).json({ 
+//     error: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
+//   });
+// });
+
+
+// // লোকাল সার্ভার লজিক
+// if (process.env.NODE_ENV !== 'production') {
+//   const PORT = process.env.PORT || 5001;
+//   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+// }
+
+
+// //google login
+
+// app.use("/api/auth", authRoutes);
+
+// module.exports = app;
+
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
 
-// ১. মডেল ইমপোর্ট (কানেকশনের আগে ইমপোর্ট করা ভালো)
+// মডেল ইমপোর্ট
 require('./models/User');
 require('./models/Document');
 require('./models/AuditLog'); 
@@ -2169,15 +2286,15 @@ const authRoutes = require('./routes/authRoutes');
 const documentRoutes = require('./routes/documentRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const feedbackRoutes = require('./routes/feedbackRoutes');
+
 const app = express();
 
-// ২. হেলমেট ও সিকিউরিটি
+// ১. সিকিউরিটি এবং মিডলওয়্যার
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: false,
 }));
 
-// ৩. CORS কনফিগারেশন
 const allowedOrigins = [
   'http://localhost:5173', 
   'https://nexsignfrontend.vercel.app',
@@ -2197,47 +2314,36 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
 
-app.options('*', cors());
-
-// ৪. পে-লোড লিমিট
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// ৫. ডাটাবেস কানেকশন হ্যান্ডলার (Vercel অপ্টিমাইজড)
+// ২. ডাটাবেস কানেকশন (Vercel-এর জন্য অপ্টিমাইজড)
 const connectDB = async () => {
-  // যদি আগে থেকেই কানেক্টেড থাকে তবে নতুন করে কানেক্ট হবে না
   if (mongoose.connection.readyState >= 1) return;
-
   try {
-    await mongoose.connect(process.env.MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-      serverSelectionTimeoutMS: 5000, // ৫ সেকেন্ড পর টাইমআউট
-      socketTimeoutMS: 45000,
-    });
+    await mongoose.connect(process.env.MONGO_URI);
     console.log('✅ MongoDB Connected');
   } catch (err) {
-    console.error('❌ MongoDB Connection Error:', err.message);
-    // সার্ভারলেস ফাংশনে এরর থ্রো করা উচিত যাতে বাফারিং না হয়
+    console.error('❌ MongoDB Error:', err.message);
     throw new Error('Database connection failed');
   }
 };
 
-// কানেকশন মিডলওয়্যার (প্রতিটি রিকোয়েস্টে কানেকশন নিশ্চিত করবে)
 app.use(async (req, res, next) => {
   try {
     await connectDB();
     next();
   } catch (err) {
-    res.status(503).json({ error: "Service Unavailable: Database Connection Error" });
+    res.status(503).json({ error: "Service Unavailable" });
   }
 });
 
-// ৬. রাউটস
+// ৩. রাউটস
 app.get('/', (req, res) => res.send('NexSign Server is Online'));
 app.use('/api/auth', authRoutes);      
 app.use('/api/documents', documentRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/feedback', feedbackRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ 
@@ -2245,27 +2351,19 @@ app.get('/api/health', (req, res) => {
     db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected" 
   });
 });
-app.use('/api/feedback', feedbackRoutes);
 
-// ৭. গ্লোবাল এরর হ্যান্ডলার
+// ৪. গ্লোবাল এরর হ্যান্ডলার
 app.use((err, req, res, next) => {
-  console.error("Global Error Log:", err.stack);
-  const status = err.status || 500;
-  res.status(status).json({ 
+  console.error("Error:", err.stack);
+  res.status(err.status || 500).json({ 
     error: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
   });
 });
 
-
-// লোকাল সার্ভার লজিক
+// ৫. লোকাল সার্ভার রান
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5001;
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 }
-
-
-//google login
-
-app.use("/api/auth", authRoutes);
 
 module.exports = app;

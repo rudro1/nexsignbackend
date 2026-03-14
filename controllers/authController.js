@@ -497,12 +497,14 @@
 //     res.status(500).json({ message: "লগইনে সমস্যা হয়েছে।" });
 //   }
 // };
-
-
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs'); // নিশ্চিত করুন এটি ইম্পোর্ট করা আছে
+const bcrypt = require('bcryptjs');
 
+/**
+ * কমন টোকেন জেনারেটর ফাংশন
+ * এটি ভালো কারণ টোকেন লজিক এক জায়গায় থাকলে মেইনটেইন করা সহজ হয়।
+ */
 const generateToken = (user) => {
   return jwt.sign(
     { id: user._id, role: user.role }, 
@@ -511,17 +513,19 @@ const generateToken = (user) => {
   );
 };
 
-// --- REGISTER ---
+// --- REGISTER (নতুন ইউজার তৈরি) ---
 exports.register = async (req, res) => {
   try {
     const { full_name, email, password } = req.body;
     const cleanEmail = email.toLowerCase().trim();
 
-    // ১. ইউজার অলরেডি আছে কি না চেক
+    // ১. চেক করা ইমেইলটি আগে থেকে আছে কি না
     const existingUser = await User.findOne({ email: cleanEmail });
-    if (existingUser) return res.status(400).json({ message: "ইমেইলটি ইতিমধ্যে ব্যবহৃত।" });
+    if (existingUser) {
+        return res.status(400).json({ message: "ইমেইলটি ইতিমধ্যে ব্যবহৃত।" });
+    }
 
-    // ২. পাসওয়ার্ড হ্যাশিং (যদি মডেলে pre-save hook না থাকে)
+    // ২. পাসওয়ার্ড হ্যাশিং (মডেলে সেভ করার আগে সিকিউরিটি)
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(password, salt);
 
@@ -537,19 +541,20 @@ exports.register = async (req, res) => {
 
     res.status(201).json({ 
       token, 
-      user: { id: user._id, full_name, email: cleanEmail, role: user.role } 
+      user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } 
     });
   } catch (error) {
     res.status(500).json({ message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।", error: error.message });
   }
 };
 
-// --- LOGIN ---
+// --- LOGIN (ইমেইল ও পাসওয়ার্ড দিয়ে লগইন) ---
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
     const user = await User.findOne({ email: email.toLowerCase().trim() });
 
+    // ইউজার চেক এবং পাসওয়ার্ড ম্যাচিং (Model এর comparePassword মেথড ব্যবহার করে)
     if (!user || !(await user.comparePassword(password))) {
       return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
     }
@@ -567,5 +572,41 @@ exports.login = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: "লগইনে সমস্যা হয়েছে।" });
+  }
+};
+
+// --- GOOGLE AUTH (গুগল দিয়ে লগইন বা অ্যাকাউন্ট তৈরি) ---
+exports.googleAuth = async (req, res) => {
+  try {
+    const { name, email, photoURL } = req.body;
+    const cleanEmail = email.toLowerCase().trim();
+    
+    let user = await User.findOne({ email: cleanEmail });
+
+    // ইউজার না থাকলে নতুন প্রোফাইল তৈরি (এটি ভালো কারণ ইউজারের সময় বাঁচে)
+    if (!user) {
+      user = await User.create({
+        full_name: name,
+        email: cleanEmail,
+        photoURL: photoURL,
+        password: Math.random().toString(36).slice(-10), // র‍্যান্ডম পাসওয়ার্ড
+        role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user"
+      });
+    }
+
+    const token = generateToken(user);
+    
+    res.json({ 
+      token, 
+      user: { 
+        id: user._id, 
+        full_name: user.full_name, 
+        email: user.email, 
+        role: user.role 
+      } 
+    });
+  } catch (error) {
+    console.error("Google Auth Error:", error);
+    res.status(500).json({ message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
   }
 };
