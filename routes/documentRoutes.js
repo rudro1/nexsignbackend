@@ -6919,75 +6919,78 @@ const upload = multer({ storage });
 //   addDefaultPage: false 
 // });
 // }; workable
-const mergeSignatures = async (doc) => {
-  // ১. সরাসরি Cloudinary URL থেকে ফাইল আনা (Timeout ও Error Handling সহ)
-  const response = await axios.get(doc.fileUrl, { 
-    responseType: 'arraybuffer',
-    timeout: 15000 
-  });
+// const mergeSignatures = async (doc) => {
+//   // ১. সরাসরি Cloudinary URL থেকে ফাইল আনা (Timeout ও Error Handling সহ)
+//   const response = await axios.get(doc.fileUrl, { 
+//     responseType: 'arraybuffer',
+//     timeout: 15000 
+//   });
   
-  const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
-  const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
-  const pages = pdfDoc.getPages();
+//   const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
+//   const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+//   const pages = pdfDoc.getPages();
 
-  // ২. ডুপ্লিকেট ফিল্ড রিমুভ এবং ক্লিনআপ
-  const uniqueFields = Array.from(new Map(doc.fields.map(f => {
-    const obj = typeof f === 'string' ? JSON.parse(f) : f;
-    return [obj.id, obj];
-  })).values());
+//   // ২. ডুপ্লিকেট ফিল্ড রিমুভ এবং ক্লিনআপ
+//   const uniqueFields = Array.from(new Map(doc.fields.map(f => {
+//     const obj = typeof f === 'string' ? JSON.parse(f) : f;
+//     return [obj.id, obj];
+//   })).values());
 
-  for (const fd of uniqueFields) {
-    try {
-      if (!fd.value || !fd.filled) continue; // শুধু ফিল্ড করা ডেটা প্রসেস হবে
+//   for (const fd of uniqueFields) {
+//     try {
+//       if (!fd.value || !fd.filled) continue; // শুধু ফিল্ড করা ডেটা প্রসেস হবে
 
-      const pageIndex = Number(fd.page) - 1;
-      if (pageIndex < 0 || pageIndex >= pages.length) continue;
+//       const pageIndex = Number(fd.page) - 1;
+//       if (pageIndex < 0 || pageIndex >= pages.length) continue;
 
-      const page = pages[pageIndex];
-      const { width, height } = page.getSize();
+//       const page = pages[pageIndex];
+//       const { width, height } = page.getSize();
       
-      // ক্যালকুলেশন (PDF কোঅর্ডিনেট সিস্টেম অনুযায়ী)
-      const drawW = (Number(fd.width) * width) / 100;
-      const drawH = (Number(fd.height) * height) / 100;
-      const drawX = (Number(fd.x) * width) / 100;
-      const drawY = height - ((Number(fd.y) * height) / 100) - drawH;
+//       // ক্যালকুলেশন (PDF কোঅর্ডিনেট সিস্টেম অনুযায়ী)
+//       const drawW = (Number(fd.width) * width) / 100;
+//       const drawH = (Number(fd.height) * height) / 100;
+//       const drawX = (Number(fd.x) * width) / 100;
+//       const drawY = height - ((Number(fd.y) * height) / 100) - drawH;
 
-      if (fd.value.startsWith('data:image')) {
-        const base64Data = fd.value.split(',')[1];
-        const imgBuffer = Buffer.from(base64Data, 'base64');
+//       if (fd.value.startsWith('data:image')) {
+//         const base64Data = fd.value.split(',')[1];
+//         const imgBuffer = Buffer.from(base64Data, 'base64');
         
-        let sigImg;
-        // ৩. উন্নত ইমেজ ফরম্যাট হ্যান্ডলিং
-        if (fd.value.includes('image/png')) {
-          sigImg = await pdfDoc.embedPng(imgBuffer);
-        } else if (fd.value.includes('image/jpeg') || fd.value.includes('image/jpg')) {
-          sigImg = await pdfDoc.embedJpg(imgBuffer);
-        } else {
-          // যদি ফরম্যাট না মেলে, তবুও ট্রাই করবে
-          sigImg = await pdfDoc.embedPng(imgBuffer).catch(() => pdfDoc.embedJpg(imgBuffer));
-        }
+//         let sigImg;
+//         // ৩. উন্নত ইমেজ ফরম্যাট হ্যান্ডলিং
+//         if (fd.value.includes('image/png')) {
+//           sigImg = await pdfDoc.embedPng(imgBuffer);
+//         } else if (fd.value.includes('image/jpeg') || fd.value.includes('image/jpg')) {
+//           sigImg = await pdfDoc.embedJpg(imgBuffer);
+//         } else {
+//           // যদি ফরম্যাট না মেলে, তবুও ট্রাই করবে
+//           sigImg = await pdfDoc.embedPng(imgBuffer).catch(() => pdfDoc.embedJpg(imgBuffer));
+//         }
         
-        page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
-      } else {
-        // টেক্সট ফিল্ড (যেমন: নাম বা তারিখ)
-        page.drawText(String(fd.value), {
-          x: drawX + 2, 
-          y: drawY + (drawH / 2.5), // টেক্সট পজিশন ভার্টিক্যালি সেন্টার করা
-          size: 11, font: timesFont, color: rgb(0, 0, 0),
-        });
-      }
-    } catch (e) { 
-      console.error(`Render Error for field ${fd.id}:`, e.message); 
-      continue; 
-    }
-  }
+//         page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
+//       } else {
+//         // টেক্সট ফিল্ড (যেমন: নাম বা তারিখ)
+//         page.drawText(String(fd.value), {
+//           x: drawX + 2, 
+//           y: drawY + (drawH / 2.5), // টেক্সট পজিশন ভার্টিক্যালি সেন্টার করা
+//           size: 11, font: timesFont, color: rgb(0, 0, 0),
+//         });
+//       }
+//     } catch (e) { 
+//       console.error(`Render Error for field ${fd.id}:`, e.message); 
+//       continue; 
+//     }
+//   }
 
-  // ৪. ফাইনাল সেভ (অবশ্যই await করতে হবে)
-  return await pdfDoc.save({ 
-    useObjectStreams: true, 
-    addDefaultPage: false 
-  });
-};
+//   // ৪. ফাইনাল সেভ (অবশ্যই await করতে হবে)
+//   return await pdfDoc.save({ 
+//     useObjectStreams: true, 
+//     addDefaultPage: false 
+//   });
+// }; changes need for snap
+
+
+
 
 // const generateAndSendFinalDoc = async (doc) => {
 //   try {
@@ -7187,6 +7190,252 @@ const mergeSignatures = async (doc) => {
 //   }
 // };
 
+// const generateAndSendFinalDoc = async (doc) => {
+//   try {
+//     const basePdfBytes = await mergeSignatures(doc);
+//     const pdfDoc = await PDFDocument.load(basePdfBytes);
+//     const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+//     const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
+
+//     const brandColor = rgb(0.16, 0.67, 0.88); // #2AAAE0
+
+//     let page = pdfDoc.addPage([600, 850]); 
+//     const { width, height } = page.getSize();
+//     let y = height - 50;
+
+//     page.drawRectangle({
+//       x: 20, y: 20, width: width - 40, height: height - 40,
+//       borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
+//     });
+
+//     page.drawRectangle({
+//       x: 21, y: y - 50, width: width - 42, height: 60,
+//       color: brandColor, 
+//     });
+
+//     page.drawText('NEXSIGN DIGITAL AUDIT CERTIFICATE', {
+//       x: 50, y: y - 15, size: 20, font: boldFont, color: rgb(1, 1, 1)
+//     });
+//     page.drawText('Document Evidence Summary & Audit Trail', {
+//       x: 50, y: y - 35, size: 10, font: timesFont, color: rgb(0.9, 0.9, 0.9)
+//     });
+//     y -= 100;
+
+//     const drawInfo = (label, value) => {
+//       page.drawText(label, { x: 50, y, size: 11, font: boldFont });
+//       page.drawText(String(value || 'N/A'), { x: 150, y, size: 11, font: timesFont });
+//       y -= 20;
+//     };
+
+//     drawInfo('Document Title:', doc.title);
+//     drawInfo('Created By:', `${doc.senderMeta?.name} (${doc.senderMeta?.email})`);
+    
+//     if (doc.ccEmails && doc.ccEmails.length > 0) {
+//       drawInfo('CC Recipients:', doc.ccEmails.join(', '));
+//     }
+
+//     drawInfo('Initiated At:', doc.senderMeta?.time);
+//     y -= 30;
+
+//     page.drawText('SIGNER DETAILS & AUDIT TRAIL', { x: 50, y, size: 13, font: boldFont, color: brandColor });
+//     y -= 25;
+
+//     // সাইনার লুপ
+//     doc.parties.forEach((p, index) => {
+//       if (y < 150) {
+//         page = pdfDoc.addPage([600, 850]);
+//         y = height - 50;
+//       }
+//       page.drawLine({ start: { x: 50, y: y + 10 }, end: { x: 550, y: y + 10 }, thickness: 0.5, color: rgb(0.9, 0.9, 0.9) });
+//       page.drawText(`${index + 1}. ${p.name}`, { x: 50, y, size: 11, font: boldFont });
+//       page.drawRectangle({ x: width - 100, y: y - 5, width: 55, height: 18, color: rgb(0.1, 0.6, 0.1) });
+//       page.drawText('SIGNED', { x: width - 92, y: y, size: 8, font: boldFont, color: rgb(1, 1, 1) });
+//       y -= 18;
+//       page.drawText(`Email: ${p.email} | IP: ${p.ipAddress || 'N/A'}`, { x: 70, y, size: 9, font: timesFont });
+//       y -= 15;
+//       page.drawText(`Location: ${p.location || 'Unknown'}`, { x: 70, y, size: 9, font: timesFont });
+//       y -= 15;
+      
+//       const deviceText = `Device: ${p.device || 'N/A'}`;
+//       const charLimit = 85; 
+//       for (let i = 0; i < deviceText.length; i += charLimit) {
+//         const chunk = deviceText.substring(i, i + charLimit);
+//         page.drawText(chunk, { x: 70, y, size: 8, font: timesFont, color: rgb(0.4, 0.4, 0.4) });
+//         y -= 12;
+//       }
+
+//       // 🌟 ফিক্সড টাইমজোন: Bangladesh Time (BST)
+//       const signedTime = p.signedAt ? new Date(p.signedAt).toLocaleString('en-US', { 
+//         timeZone: 'Asia/Dhaka',
+//         dateStyle: 'medium',
+//         timeStyle: 'medium'
+//       }) : 'N/A';
+
+//       page.drawText(`Signed At: ${signedTime}`, { x: 70, y, size: 9, font: boldFont });
+//       y -= 35; 
+//     });
+
+//     const pdfBytesFinal = await pdfDoc.save(); 
+//     const pdfBuffer = Buffer.from(pdfBytesFinal);
+
+//     const uploadResult = await new Promise((resolve, reject) => {
+//       const stream = cloudinary.uploader.upload_stream(
+//         { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}.pdf` },
+//         (err, res) => err ? reject(err) : resolve(res)
+//       );
+//       stream.end(pdfBuffer);
+//     });
+
+//     doc.fileUrl = uploadResult.secure_url;
+//     doc.status = 'completed';
+//     await doc.save();
+
+//     const signers = doc.parties.map(p => p.email).filter(e => e);
+//     const validCCs = (doc.ccEmails || []).filter(e => e && e.trim() !== "");
+//     const allRecipients = [...new Set([...signers, ...validCCs])];
+    
+//     // if (allRecipients.length > 0) {
+//     //   // 🌟 ইমেইল টেমপ্লেটেও টাইমজোন ফিক্স করা হয়েছে
+//     //   const completedTime = new Date().toLocaleString('en-US', { 
+//     //     timeZone: 'Asia/Dhaka',
+//     //     dateStyle: 'medium',
+//     //     timeStyle: 'short'
+//     //   });
+
+//     //   await transporter.sendMail({
+//     //     from: `"NexSign" <${process.env.EMAIL_USER}>`,
+//     //     to: allRecipients.join(','), 
+//     //     subject: `Fully Executed: ${doc.title}`,
+//     //     html: `
+//     //       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e1e1e1; border-radius: 8px; overflow: hidden;">
+//     //         <div style="background-color: #2AAAE0; padding: 20px; text-align: center; color: #ffffff;">
+//     //           <h1 style="margin: 0; font-size: 24px;">Signing Complete!</h1>
+//     //         </div>
+//     //         <div style="padding: 20px; color: #333333; line-height: 1.6;">
+//     //           <p>Hello,</p>
+//     //           <p>Great news! The document <b>"${doc.title}"</b> has been fully executed by all parties.</p>
+//     //           <p>You can find the final signed PDF attached to this email. This version includes a <b>Digital Audit Certificate</b> for your secure record-keeping.</p>
+//     //           <div style="background-color: #f4f7f9; border-left: 4px solid #2AAAE0; padding: 15px; margin: 20px 0;">
+//     //             <p style="margin: 0;"><b>Document Details:</b></p>
+//     //             <p style="margin: 5px 0 0;">ID: ${doc._id}</p>
+//     //             <p style="margin: 0;">Completed On: ${completedTime} (BST)</p>
+//     //           </div>
+//     //           <p>Thank you for choosing <b>NexSign</b> for your digital document needs.</p>
+//     //           <p style="margin-top: 30px;">Best regards,<br/>The NexSign Team</p>
+//     //         </div>
+//     //         <div style="background-color: #f9f9f9; padding: 15px; text-align: center; font-size: 12px; color: #888888;">
+//     //           This is an automated message. Please do not reply to this email.
+//     //         </div>
+//     //       </div>
+//     //     `,
+//     //     attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
+//     //   });
+//     // }
+//     if (allRecipients.length > 0) {
+//   const completedTime = new Date().toLocaleString('en-US', { 
+//     timeZone: 'Asia/Dhaka',
+//     dateStyle: 'medium',
+//     timeStyle: 'short'
+//   });
+
+//   await transporter.sendMail({
+//     from: `"NeXsign" <${process.env.EMAIL_USER}>`,
+//     to: allRecipients.join(','), 
+//     subject: `Fully Executed: ${doc.title}`,
+//     html: `
+//       <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e1e1e1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
+//         <div style="background-color: #2AAAE0; padding: 30px; text-align: center; color: #ffffff;">
+//           <h1 style="margin: 0; font-size: 26px;">Document Fully Signed!</h1>
+//           <p style="margin: 10px 0 0; opacity: 0.9;">Great news! Everyone has finished signing.</p>
+//         </div>
+//         <div style="padding: 30px; color: #444444; line-height: 1.6;">
+//           <p>Hello,</p>
+//           <p>The signing process for <b>"${doc.title}"</b> is now complete. A copy of the fully executed document, including the digital audit certificate, is attached to this email for your records.</p>
+          
+//           <div style="background-color: #f8fcfe; border-left: 4px solid #2AAAE0; padding: 20px; margin: 25px 0; border-radius: 4px;">
+//             <p style="margin: 0; font-weight: bold; color: #2AAAE0;">Document Summary:</p>
+//             <p style="margin: 8px 0 0;">📄 <b>Name:</b> ${doc.title}</p>
+//             <p style="margin: 4px 0 0;">📅 <b>Completed On:</b> ${completedTime} (BST)</p>
+//           </div>
+
+//           <p>You can also view or download this document anytime from your NexSign dashboard.</p>
+//           <p style="margin-top: 30px;">Best regards,<br/><b>The NexSign Team</b></p>
+//         </div>
+//         <div style="background-color: #f9f9f9; padding: 20px; text-align: center; font-size: 12px; color: #999999; border-top: 1px solid #eee;">
+//           Securely processed by NexSign Digital Signature Service.
+//         </div>
+//       </div>
+//     `,
+//     attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
+//   });
+// }
+//   } catch (err) { 
+//     console.error("Finalize Error:", err); 
+//   }
+// }; change for snap problem 
+
+
+
+
+const mergeSignatures = async (doc) => {
+  const response = await axios.get(doc.fileUrl, { 
+    responseType: 'arraybuffer',
+    timeout: 15000 
+  });
+  
+  const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
+  const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
+  const pages = pdfDoc.getPages();
+
+  // ১. ডুপ্লিকেট ফিল্ড রিমুভ এবং ক্লিনআপ
+  const uniqueFields = Array.from(new Map(doc.fields.map(f => {
+    const obj = typeof f === 'string' ? JSON.parse(f) : f;
+    return [obj.id, obj];
+  })).values());
+
+  for (const fd of uniqueFields) {
+    try {
+      // 🌟 ফিক্স: 'filled' প্রপার্টি চেক বাদ দেওয়া হয়েছে, শুধু value থাকলেই রেন্ডার হবে
+      if (!fd.value) continue; 
+
+      const pageIndex = Number(fd.page) - 1;
+      if (pageIndex < 0 || pageIndex >= pages.length) continue;
+
+      const page = pages[pageIndex];
+      const { width, height } = page.getSize();
+      
+      const drawW = (Number(fd.width) * width) / 100;
+      const drawH = (Number(fd.height) * height) / 100;
+      const drawX = (Number(fd.x) * width) / 100;
+      const drawY = height - ((Number(fd.y) * height) / 100) - drawH;
+
+      if (String(fd.value).startsWith('data:image')) {
+        const base64Data = fd.value.split(',')[1];
+        const imgBuffer = Buffer.from(base64Data, 'base64');
+        
+        let sigImg;
+        if (fd.value.includes('image/png')) {
+          sigImg = await pdfDoc.embedPng(imgBuffer);
+        } else {
+          sigImg = await pdfDoc.embedJpg(imgBuffer);
+        }
+        
+        page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
+      } else {
+        page.drawText(String(fd.value), {
+          x: drawX + 2, 
+          y: drawY + (drawH / 4), // 🌟 পজিশন ফিক্স
+          size: 11, font: timesFont, color: rgb(0, 0, 0),
+        });
+      }
+    } catch (e) { 
+      console.error(`Render Error: ${e.message}`); 
+    }
+  }
+
+  return await pdfDoc.save({ useObjectStreams: true });
+};
+
 const generateAndSendFinalDoc = async (doc) => {
   try {
     const basePdfBytes = await mergeSignatures(doc);
@@ -7194,7 +7443,7 @@ const generateAndSendFinalDoc = async (doc) => {
     const timesFont = await pdfDoc.embedFont(StandardFonts.TimesRoman);
     const boldFont = await pdfDoc.embedFont(StandardFonts.TimesRomanBold);
 
-    const brandColor = rgb(0.16, 0.67, 0.88); // #2AAAE0
+    const brandColor = rgb(0.16, 0.67, 0.88); 
 
     let page = pdfDoc.addPage([600, 850]); 
     const { width, height } = page.getSize();
@@ -7237,7 +7486,6 @@ const generateAndSendFinalDoc = async (doc) => {
     page.drawText('SIGNER DETAILS & AUDIT TRAIL', { x: 50, y, size: 13, font: boldFont, color: brandColor });
     y -= 25;
 
-    // সাইনার লুপ
     doc.parties.forEach((p, index) => {
       if (y < 150) {
         page = pdfDoc.addPage([600, 850]);
@@ -7261,7 +7509,6 @@ const generateAndSendFinalDoc = async (doc) => {
         y -= 12;
       }
 
-      // 🌟 ফিক্সড টাইমজোন: Bangladesh Time (BST)
       const signedTime = p.signedAt ? new Date(p.signedAt).toLocaleString('en-US', { 
         timeZone: 'Asia/Dhaka',
         dateStyle: 'medium',
@@ -7275,9 +7522,14 @@ const generateAndSendFinalDoc = async (doc) => {
     const pdfBytesFinal = await pdfDoc.save(); 
     const pdfBuffer = Buffer.from(pdfBytesFinal);
 
+    // 🌟 ফিক্স: ক্লাউডিনারি আপলোড অপশন এবং এরর হ্যান্ডলিং
     const uploadResult = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
-        { resource_type: "raw", folder: "completed_docs", public_id: `final_${doc._id}_${Date.now()}.pdf` },
+        { 
+          resource_type: "raw", 
+          folder: "completed_docs", 
+          public_id: `final_${doc._id}_${Date.now()}` // 🌟 .pdf এক্সটেনশন ক্লাউডিনারি নিজে হ্যান্ডেল করবে
+        },
         (err, res) => err ? reject(err) : resolve(res)
       );
       stream.end(pdfBuffer);
@@ -7291,81 +7543,39 @@ const generateAndSendFinalDoc = async (doc) => {
     const validCCs = (doc.ccEmails || []).filter(e => e && e.trim() !== "");
     const allRecipients = [...new Set([...signers, ...validCCs])];
     
-    // if (allRecipients.length > 0) {
-    //   // 🌟 ইমেইল টেমপ্লেটেও টাইমজোন ফিক্স করা হয়েছে
-    //   const completedTime = new Date().toLocaleString('en-US', { 
-    //     timeZone: 'Asia/Dhaka',
-    //     dateStyle: 'medium',
-    //     timeStyle: 'short'
-    //   });
-
-    //   await transporter.sendMail({
-    //     from: `"NexSign" <${process.env.EMAIL_USER}>`,
-    //     to: allRecipients.join(','), 
-    //     subject: `Fully Executed: ${doc.title}`,
-    //     html: `
-    //       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e1e1e1; border-radius: 8px; overflow: hidden;">
-    //         <div style="background-color: #2AAAE0; padding: 20px; text-align: center; color: #ffffff;">
-    //           <h1 style="margin: 0; font-size: 24px;">Signing Complete!</h1>
-    //         </div>
-    //         <div style="padding: 20px; color: #333333; line-height: 1.6;">
-    //           <p>Hello,</p>
-    //           <p>Great news! The document <b>"${doc.title}"</b> has been fully executed by all parties.</p>
-    //           <p>You can find the final signed PDF attached to this email. This version includes a <b>Digital Audit Certificate</b> for your secure record-keeping.</p>
-    //           <div style="background-color: #f4f7f9; border-left: 4px solid #2AAAE0; padding: 15px; margin: 20px 0;">
-    //             <p style="margin: 0;"><b>Document Details:</b></p>
-    //             <p style="margin: 5px 0 0;">ID: ${doc._id}</p>
-    //             <p style="margin: 0;">Completed On: ${completedTime} (BST)</p>
-    //           </div>
-    //           <p>Thank you for choosing <b>NexSign</b> for your digital document needs.</p>
-    //           <p style="margin-top: 30px;">Best regards,<br/>The NexSign Team</p>
-    //         </div>
-    //         <div style="background-color: #f9f9f9; padding: 15px; text-align: center; font-size: 12px; color: #888888;">
-    //           This is an automated message. Please do not reply to this email.
-    //         </div>
-    //       </div>
-    //     `,
-    //     attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
-    //   });
-    // }
     if (allRecipients.length > 0) {
-  const completedTime = new Date().toLocaleString('en-US', { 
-    timeZone: 'Asia/Dhaka',
-    dateStyle: 'medium',
-    timeStyle: 'short'
-  });
+      const completedTime = new Date().toLocaleString('en-US', { 
+        timeZone: 'Asia/Dhaka',
+        dateStyle: 'medium',
+        timeStyle: 'short'
+      });
 
-  await transporter.sendMail({
-    from: `"NeXsign" <${process.env.EMAIL_USER}>`,
-    to: allRecipients.join(','), 
-    subject: `Fully Executed: ${doc.title}`,
-    html: `
-      <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e1e1e1; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.05);">
-        <div style="background-color: #2AAAE0; padding: 30px; text-align: center; color: #ffffff;">
-          <h1 style="margin: 0; font-size: 26px;">Document Fully Signed!</h1>
-          <p style="margin: 10px 0 0; opacity: 0.9;">Great news! Everyone has finished signing.</p>
-        </div>
-        <div style="padding: 30px; color: #444444; line-height: 1.6;">
-          <p>Hello,</p>
-          <p>The signing process for <b>"${doc.title}"</b> is now complete. A copy of the fully executed document, including the digital audit certificate, is attached to this email for your records.</p>
-          
-          <div style="background-color: #f8fcfe; border-left: 4px solid #2AAAE0; padding: 20px; margin: 25px 0; border-radius: 4px;">
-            <p style="margin: 0; font-weight: bold; color: #2AAAE0;">Document Summary:</p>
-            <p style="margin: 8px 0 0;">📄 <b>Name:</b> ${doc.title}</p>
-            <p style="margin: 4px 0 0;">📅 <b>Completed On:</b> ${completedTime} (BST)</p>
+      await transporter.sendMail({
+        from: `"NeXsign" <${process.env.EMAIL_USER}>`,
+        to: allRecipients.join(','), 
+        subject: `Fully Executed: ${doc.title}`,
+        html: `
+          <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e1e1e1; border-radius: 12px; overflow: hidden;">
+            <div style="background-color: #2AAAE0; padding: 30px; text-align: center; color: #ffffff;">
+              <h1 style="margin: 0; font-size: 26px;">Document Fully Signed!</h1>
+            </div>
+            <div style="padding: 30px; color: #444444; line-height: 1.6;">
+              <p>Hello,</p>
+              <p>The signing process for <b>"${doc.title}"</b> is now complete. Final PDF is attached.</p>
+              <div style="background-color: #f8fcfe; border-left: 4px solid #2AAAE0; padding: 20px; margin: 25px 0;">
+                <p style="margin: 0;"><b>Completed On:</b> ${completedTime} (BST)</p>
+              </div>
+              <p>Best regards,<br/><b>The NexSign Team</b></p>
+            </div>
           </div>
-
-          <p>You can also view or download this document anytime from your NexSign dashboard.</p>
-          <p style="margin-top: 30px;">Best regards,<br/><b>The NexSign Team</b></p>
-        </div>
-        <div style="background-color: #f9f9f9; padding: 20px; text-align: center; font-size: 12px; color: #999999; border-top: 1px solid #eee;">
-          Securely processed by NexSign Digital Signature Service.
-        </div>
-      </div>
-    `,
-    attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
-  });
-}
+        `,
+        attachments: [{ 
+          filename: `${doc.title}_Final.pdf`, 
+          content: pdfBuffer, 
+          contentType: 'application/pdf' 
+        }]
+      });
+    }
   } catch (err) { 
     console.error("Finalize Error:", err); 
   }
