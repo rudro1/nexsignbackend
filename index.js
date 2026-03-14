@@ -2292,9 +2292,10 @@ const app = express();
 // ১. সিকিউরিটি এবং মিডলওয়্যার
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
+  // এই নিচের লাইনটি যোগ করুন 🌟
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }, 
   contentSecurityPolicy: false,
 }));
-
 const allowedOrigins = [
   'http://localhost:5173', 
   'https://nexsignfrontend.vercel.app',

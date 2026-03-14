@@ -578,7 +578,7 @@ exports.login = async (req, res) => {
 // --- GOOGLE AUTH (গুগল দিয়ে লগইন বা অ্যাকাউন্ট তৈরি) ---
 exports.googleAuth = async (req, res) => {
   try {
-    const { name, email, photoURL } = req.body;
+    const { name, email } = req.body;
     const cleanEmail = email.toLowerCase().trim();
     
     let user = await User.findOne({ email: cleanEmail });
@@ -588,7 +588,6 @@ exports.googleAuth = async (req, res) => {
       user = await User.create({
         full_name: name,
         email: cleanEmail,
-        photoURL: photoURL,
         password: Math.random().toString(36).slice(-10), // র‍্যান্ডম পাসওয়ার্ড
         role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user"
       });
