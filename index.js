@@ -2372,7 +2372,6 @@
 // }
 
 // module.exports = app;
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -2381,13 +2380,17 @@ const helmet = require('helmet');
 
 const app = express();
 
-// ১. Security & Middleware
+/**
+ * 1. Security & Middleware
+ * Helmet-কে এমনভাবে কনফিগার করা হয়েছে যাতে PDF rendering বা CORS-এ সমস্যা না হয়।
+ */
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: false, 
+  crossOriginEmbedderPolicy: false,
 }));
 
-// CORS configuration (নিরাপদ এবং ডাইনামিক)
+// CORS configuration (Vercel & Local compatible)
 const allowedOrigins = [
   'http://localhost:5173', 
   'https://nexsignfrontend.vercel.app'
@@ -2395,64 +2398,85 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
+    // ১. লোকাল রিকোয়েস্ট বা টুলস (Postman) এর জন্য !origin অ্যালাউ করা
+    // ২. স্পেসিফিক ডোমেইন বা ডাইনামিক ভার্সেল সাবডোমেইন চেক
     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
-      callback(null, true);
-    } else {
-      callback(new Error('CORS blocked by NexSign Policy'));
+      return callback(null, true);
     }
+    return callback(new Error('CORS blocked by NexSign Policy'));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
 }));
 
-app.use(express.json({ limit: '10mb' })); // 🌟 লিমিট কিছুটা কমানো হয়েছে (Serverless limits)
+// 🌟 অত্যন্ত জরুরি: ব্রাউজারের Preflight (OPTIONS) রিকোয়েস্টের জন্য গ্লোবাল হ্যান্ডলার
+app.options('*', cors());
+
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// ২. Database Connection (Global Cache for Vercel)
-let cachedDb = null;
+/**
+ * 2. Database Connection (Global Cache for Serverless)
+ */
+let isConnected = false;
 
 const connectDB = async () => {
-  if (cachedDb && mongoose.connection.readyState === 1) return cachedDb;
+  if (isConnected && mongoose.connection.readyState === 1) return;
 
   try {
     const db = await mongoose.connect(process.env.MONGO_URI, {
-      maxPoolSize: 10, // 🌟 Scalability-র জন্য কানেকশন পুল
       serverSelectionTimeoutMS: 5000,
+      maxPoolSize: 10,
     });
-    cachedDb = db;
+    isConnected = true;
     console.log('✅ MongoDB Connected');
-    return db;
   } catch (err) {
-    console.error('❌ MongoDB Error:', err.message);
-    // সার্ভারলেস ফাংশন যেন ক্র্যাশ না করে তাই এরর থ্রো করা হলো না
+    console.error('❌ MongoDB Connection Error:', err.message);
   }
 };
 
-// Middleware: কানেকশন চেক
+// Middleware: কানেকশন নিশ্চিত করা
 app.use(async (req, res, next) => {
   await connectDB();
   next();
 });
 
-// ৩. Routes
+/**
+ * 3. Routes
+ */
 app.use('/api/auth', require('./routes/authRoutes'));      
 app.use('/api/documents', require('./routes/documentRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/feedback', require('./routes/feedbackRoutes'));
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: "Online", db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected" });
-});
-
-// ৪. Global Error Handler
-app.use((err, req, res, next) => {
-  const status = err.status || 500;
-  res.status(status).json({ 
-    error: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
+  res.status(200).json({ 
+    status: "Online", 
+    db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
+    env: process.env.NODE_ENV
   });
 });
 
-// ৫. Export for Vercel
+/**
+ * 4. Global Error Handler
+ */
+app.use((err, req, res, next) => {
+  const status = err.status || 500;
+  
+  // এরর হলেও যেন CORS হেডার ফিরে যায়, তা নিশ্চিত করা
+  if (req.headers.origin && (allowedOrigins.includes(req.headers.origin) || req.headers.origin.endsWith('.vercel.app'))) {
+    res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+  }
+  
+  res.status(status).json({ 
+    message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
+  });
+});
+
+/**
+ * 5. Export for Vercel
+ */
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5001;
   app.listen(PORT, () => console.log(`🚀 Local server: http://localhost:${PORT}`));
