@@ -8265,7 +8265,7 @@ router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields: incomingFields } = req.body;
     
-    // ১. ডকুমেন্ট এবং সাইনার খুঁজে বের করা
+    // ১. টোকেন দিয়ে ডকুমেন্ট এবং সঠিক সাইনার খুঁজে বের করা
     const doc = await Document.findOne({ "parties.token": token });
     if (!doc) return res.status(404).json({ error: "Invalid link or session expired" });
 
@@ -8283,7 +8283,7 @@ router.post('/sign/submit', async (req, res) => {
     let locationData = "Unknown Location";
     if (ip !== '127.0.0.1' && ip !== '::1') {
       try {
-        const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 2000 }); // Timeout কমিয়ে ২ সেকেন্ড করা হয়েছে
+        const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 2000 });
         if (locRes.data?.status === 'success') {
           locationData = `${locRes.data.city}, ${locRes.data.regionName}, ${locRes.data.country}`;
         }
@@ -8292,7 +8292,7 @@ router.post('/sign/submit', async (req, res) => {
       }
     }
 
-    // ৩. ডকুমেন্ট আপডেট
+    // ৩. বর্তমান সাইনারের ডাটা আপডেট
     doc.fields = incomingFields;
     doc.parties[idx].status = 'signed';
     doc.parties[idx].signedAt = new Date();
@@ -8300,7 +8300,7 @@ router.post('/sign/submit', async (req, res) => {
     doc.parties[idx].ipAddress = ip;
     doc.parties[idx].location = locationData;
 
-    // অডিট লগ
+    // অডিট লগ তৈরি
     await AuditLog.create({
       document_id: doc._id,
       action: 'signed',
@@ -8310,21 +8310,31 @@ router.post('/sign/submit', async (req, res) => {
       details: `Digitally signed from ${locationData}.`
     });
 
+    // মঙ্গুজকে জানানো যে অ্যারের ভেতর পরিবর্তন হয়েছে
     doc.markModified('fields'); 
     doc.markModified('parties');
 
-    // ৪. নেক্সট স্টেপ লজিক
+    // ৪. নেক্সট স্টেপ লজিক (Sequential Signing)
     if (idx + 1 < doc.parties.length) {
       // পরবর্তী সাইনার আছে
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
+      doc.parties[idx + 1].sentAt = new Date();
       doc.currentPartyIndex = idx + 1;
       
+      // ডাটাবেসে সেভ হওয়া পর্যন্ত অপেক্ষা করুন
       await doc.save();
       
-      // ইমেইলটি পাঠিয়ে সাথে সাথে রেসপন্স দিন
-      sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken, doc); 
+      // 🌟 ফিক্স: মেইল পাঠানোর সময় অবশ্যই await করুন 🌟
+      // এটি না করলে Vercel-এ মেইল যাওয়ার আগেই প্রসেস বন্ধ হয়ে যায়
+      try {
+        await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken, doc);
+        console.log(`Email successfully sent to next party: ${doc.parties[idx + 1].email}`);
+      } catch (mailErr) {
+        console.error("Next Signer Mail Delivery Failed:", mailErr.message);
+      }
+
       return res.json({ next: true });
 
     } else {
@@ -8333,17 +8343,18 @@ router.post('/sign/submit', async (req, res) => {
       doc.currentPartyIndex = idx;
       await doc.save(); 
 
-      // 🌟 ৫. স্পিড অপ্টিমাইজেশন: আগে রেসপন্স দিন, ব্যাকগ্রাউন্ডে সার্টিফিকেট পাঠান
+      // ইউজারকে দ্রুত রেসপন্স পাঠানো
       res.json({ completed: true });
 
-      // রেসপন্স দেওয়ার পর এই হেভি প্রসেসটি চলবে
+      // ৫. হেভি প্রসেসিং (পিডিএফ মার্জ ও সার্টিফিকেট জেনারেশন) ব্যাকগ্রাউন্ডে চলবে
       setImmediate(async () => {
         try {
+          // লেটেস্ট ডাটা নিয়ে আসা
           const finalDoc = await Document.findById(doc._id);
           await generateAndSendFinalDoc(finalDoc);
-          console.log(`Document ${doc._id} finalized and emails sent.`);
+          console.log(`Document ${doc._id} finalized and all emails sent.`);
         } catch (err) {
-          console.error("Finalization Error (Background):", err);
+          console.error("Finalization Background Error:", err);
         }
       });
       return;
