@@ -2270,14 +2270,13 @@
 
 // module.exports = app;
 
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
 
-// মডেল ইমপোর্ট
+// Model Imports
 require('./models/User');
 require('./models/Document');
 require('./models/AuditLog'); 
@@ -2289,13 +2288,13 @@ const feedbackRoutes = require('./routes/feedbackRoutes');
 
 const app = express();
 
-// ১. সিকিউরিটি এবং মিডলওয়্যার
+// 1. Security & Middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
-  // এই নিচের লাইনটি যোগ করুন 🌟
   crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }, 
   contentSecurityPolicy: false,
 }));
+
 const allowedOrigins = [
   'http://localhost:5173', 
   'https://nexsignfrontend.vercel.app',
@@ -2304,10 +2303,11 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: (origin, callback) => {
+    // Allows requests with no origin (like mobile apps/curl) or specific allowed domains
     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
       callback(null, true);
     } else {
-      callback(new Error('CORS blocked this request'));
+      callback(new Error('CORS policy: This origin is not allowed'));
     }
   },
   credentials: true,
@@ -2318,28 +2318,32 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// ২. ডাটাবেস কানেকশন (Vercel-এর জন্য অপ্টিমাইজড)
+// 2. Database Connection (Optimized for Serverless)
+let isConnected = false;
 const connectDB = async () => {
-  if (mongoose.connection.readyState >= 1) return;
+  if (isConnected) return;
+  
   try {
-    await mongoose.connect(process.env.MONGO_URI);
+    const db = await mongoose.connect(process.env.MONGO_URI);
+    isConnected = db.connections[0].readyState === 1;
     console.log('✅ MongoDB Connected');
   } catch (err) {
-    console.error('❌ MongoDB Error:', err.message);
+    console.error('❌ MongoDB Connection Error:', err.message);
     throw new Error('Database connection failed');
   }
 };
 
+// Middleware to ensure DB is connected before processing requests
 app.use(async (req, res, next) => {
   try {
     await connectDB();
     next();
   } catch (err) {
-    res.status(503).json({ error: "Service Unavailable" });
+    res.status(503).json({ error: "Service temporarily unavailable due to DB connection" });
   }
 });
 
-// ৩. রাউটস
+// 3. Routes
 app.get('/', (req, res) => res.send('NexSign Server is Online'));
 app.use('/api/auth', authRoutes);      
 app.use('/api/documents', documentRoutes);
@@ -2353,18 +2357,18 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// ৪. গ্লোবাল এরর হ্যান্ডলার
+// 4. Global Error Handler
 app.use((err, req, res, next) => {
-  console.error("Error:", err.stack);
+  console.error("Critical Error:", err.stack);
   res.status(err.status || 500).json({ 
     error: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
   });
 });
 
-// ৫. লোকাল সার্ভার রান
+// 5. Port Listening (Only for Local Development)
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5001;
-  app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+  app.listen(PORT, () => console.log(`🚀 Local server running on port ${PORT}`));
 }
 
 module.exports = app;
