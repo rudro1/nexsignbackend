@@ -2378,25 +2378,35 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
 
+// Model Imports (নিশ্চিত করুন এই ফাইলগুলো আপনার প্রজেক্টে আছে)
+require('./models/User');
+require('./models/Document');
+require('./models/AuditLog'); 
+
+const authRoutes = require('./routes/authRoutes'); 
+const documentRoutes = require('./routes/documentRoutes');
+const adminRoutes = require('./routes/adminRoutes');
+const feedbackRoutes = require('./routes/feedbackRoutes');
+
 const app = express();
 
 /**
  * 1. Security & Middleware
- * Helmet-কে এমনভাবে কনফিগার করা হয়েছে যাতে PDF rendering বা CORS-এ সমস্যা না হয়।
  */
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
-  contentSecurityPolicy: false, 
-  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }, 
+  contentSecurityPolicy: false,
 }));
 
-// CORS configuration (Vercel & Local compatible)
+// CORS Configuration
 const allowedOrigins = [
   'http://localhost:5173', 
-  'https://nexsignfrontend.vercel.app'
+  'https://nexsignfrontend.vercel.app',
+  'https://nexsignfrontend-git-main-bisal-sahas-projects.vercel.app'
 ];
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, callback) => {
     // ১. লোকাল রিকোয়েস্ট বা টুলস (Postman) এর জন্য !origin অ্যালাউ করা
     // ২. স্পেসিফিক ডোমেইন বা ডাইনামিক ভার্সেল সাবডোমেইন চেক
@@ -2408,12 +2418,15 @@ app.use(cors({
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-}));
+  optionsSuccessStatus: 200 // 🌟 গুরুত্বপূর্ণ: এটি Preflight-কে ২০০ স্ট্যাটাস দিবে
+};
 
-// 🌟 অত্যন্ত জরুরি: ব্রাউজারের Preflight (OPTIONS) রিকোয়েস্টের জন্য গ্লোবাল হ্যান্ডলার
-app.options('*', cors());
+app.use(cors(corsOptions));
 
-app.use(express.json({ limit: '10mb' }));
+// 🌟 অত্যন্ত জরুরি: ব্রাউজারের Preflight (OPTIONS) রিকোয়েস্ট সরাসরি হ্যান্ডেল করা
+app.options('*', cors(corsOptions));
+
+app.use(express.json({ limit: '10mb' })); // Vercel Free তে ১০MB এর বেশি সাপোর্ট করবে না
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 /**
@@ -2425,36 +2438,46 @@ const connectDB = async () => {
   if (isConnected && mongoose.connection.readyState === 1) return;
 
   try {
-    const db = await mongoose.connect(process.env.MONGO_URI, {
+    // mongoose.connect সরাসরি ব্যবহার করা হয়েছে ক্যাশিং সুবিধার জন্য
+    await mongoose.connect(process.env.MONGO_URI, {
       serverSelectionTimeoutMS: 5000,
-      maxPoolSize: 10,
     });
     isConnected = true;
     console.log('✅ MongoDB Connected');
   } catch (err) {
     console.error('❌ MongoDB Connection Error:', err.message);
+    // সার্ভারলেস ফাংশনে এরর থ্রো করলে ভার্সেল লগ দেখাবে
+    throw err; 
   }
 };
 
-// Middleware: কানেকশন নিশ্চিত করা
+// Middleware: প্রতিটি রিকোয়েস্টের আগে DB কানেকশন চেক করা
 app.use(async (req, res, next) => {
-  await connectDB();
-  next();
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    res.status(503).json({ 
+      error: "Database connection failed. Please try again." 
+    });
+  }
 });
 
 /**
  * 3. Routes
  */
-app.use('/api/auth', require('./routes/authRoutes'));      
-app.use('/api/documents', require('./routes/documentRoutes'));
-app.use('/api/admin', require('./routes/adminRoutes'));
-app.use('/api/feedback', require('./routes/feedbackRoutes'));
+app.get('/', (req, res) => res.send('NexSign Server is Online 🚀'));
+
+app.use('/api/auth', authRoutes);      
+app.use('/api/documents', documentRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/feedback', feedbackRoutes);
 
 app.get('/api/health', (req, res) => {
   res.status(200).json({ 
     status: "Online", 
     db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
-    env: process.env.NODE_ENV
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -2464,9 +2487,11 @@ app.get('/api/health', (req, res) => {
 app.use((err, req, res, next) => {
   const status = err.status || 500;
   
-  // এরর হলেও যেন CORS হেডার ফিরে যায়, তা নিশ্চিত করা
-  if (req.headers.origin && (allowedOrigins.includes(req.headers.origin) || req.headers.origin.endsWith('.vercel.app'))) {
-    res.setHeader('Access-Control-Allow-Origin', req.headers.origin);
+  // এরর হলেও যেন CORS হেডার ফিরে যায় তা নিশ্চিত করা
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
   }
   
   res.status(status).json({ 
