@@ -2378,133 +2378,76 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
 
-// Model Imports (নিশ্চিত করুন এই ফাইলগুলো আপনার প্রজেক্টে আছে)
-require('./models/User');
-require('./models/Document');
-require('./models/AuditLog'); 
-
-const authRoutes = require('./routes/authRoutes'); 
-const documentRoutes = require('./routes/documentRoutes');
-const adminRoutes = require('./routes/adminRoutes');
-const feedbackRoutes = require('./routes/feedbackRoutes');
-
 const app = express();
 
-/**
- * 1. Security & Middleware
- */
+// ১. ট্রাস্ট প্রক্সি (Vercel-এর রেট লিমিটের জন্য জরুরি)
+app.set('trust proxy', 1);
+
+// ২. হেলমেট কনফিগারেশন
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
-  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }, 
   contentSecurityPolicy: false,
 }));
 
-// CORS Configuration
 const allowedOrigins = [
   'http://localhost:5173', 
   'https://nexsignfrontend.vercel.app',
   'https://nexsignfrontend-git-main-bisal-sahas-projects.vercel.app'
 ];
 
-const corsOptions = {
-  origin: (origin, callback) => {
-    // ১. লোকাল রিকোয়েস্ট বা টুলস (Postman) এর জন্য !origin অ্যালাউ করা
-    // ২. স্পেসিফিক ডোমেইন বা ডাইনামিক ভার্সেল সাবডোমেইন চেক
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
-      return callback(null, true);
-    }
-    return callback(new Error('CORS blocked by NexSign Policy'));
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  optionsSuccessStatus: 200 // 🌟 গুরুত্বপূর্ণ: এটি Preflight-কে ২০০ স্ট্যাটাস দিবে
-};
+// ৩. CORS হেডার লজিক (Manual + Middleware)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+    res.setHeader('Access-Control-Allow-Origin', origin || '*');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
 
-app.use(cors(corsOptions));
+  // 🌟 Preflight রিকোয়েস্ট সরাসরি এখানেই শেষ করুন (ডাটাবেস কানেকশনের আগে)
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
 
-// 🌟 অত্যন্ত জরুরি: ব্রাউজারের Preflight (OPTIONS) রিকোয়েস্ট সরাসরি হ্যান্ডেল করা
-app.options('*', cors(corsOptions));
-
-app.use(express.json({ limit: '10mb' })); // Vercel Free তে ১০MB এর বেশি সাপোর্ট করবে না
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 /**
- * 2. Database Connection (Global Cache for Serverless)
+ * ৪. ডাটাবেস কানেকশন (Optimized)
  */
-let isConnected = false;
-
 const connectDB = async () => {
-  if (isConnected && mongoose.connection.readyState === 1) return;
-
+  if (mongoose.connection.readyState >= 1) return;
   try {
-    // mongoose.connect সরাসরি ব্যবহার করা হয়েছে ক্যাশিং সুবিধার জন্য
-    await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 5000,
-    });
-    isConnected = true;
+    await mongoose.connect(process.env.MONGO_URI);
     console.log('✅ MongoDB Connected');
   } catch (err) {
-    console.error('❌ MongoDB Connection Error:', err.message);
-    // সার্ভারলেস ফাংশনে এরর থ্রো করলে ভার্সেল লগ দেখাবে
-    throw err; 
+    console.error('❌ DB Error:', err.message);
   }
 };
 
-// Middleware: প্রতিটি রিকোয়েস্টের আগে DB কানেকশন চেক করা
-app.use(async (req, res, next) => {
-  try {
-    await connectDB();
-    next();
-  } catch (err) {
-    res.status(503).json({ 
-      error: "Database connection failed. Please try again." 
-    });
-  }
-});
+// ৫. রাউটস (মডেল ইমপোর্ট রাউটের ভেতরে বা উপরে রাখুন)
+app.use('/api/auth', async (req, res, next) => { await connectDB(); next(); }, require('./routes/authRoutes'));      
+app.use('/api/documents', async (req, res, next) => { await connectDB(); next(); }, require('./routes/documentRoutes'));
+app.use('/api/admin', async (req, res, next) => { await connectDB(); next(); }, require('./routes/adminRoutes'));
+app.use('/api/feedback', async (req, res, next) => { await connectDB(); next(); }, require('./routes/feedbackRoutes'));
 
-/**
- * 3. Routes
- */
 app.get('/', (req, res) => res.send('NexSign Server is Online 🚀'));
 
-app.use('/api/auth', authRoutes);      
-app.use('/api/documents', documentRoutes);
-app.use('/api/admin', adminRoutes);
-app.use('/api/feedback', feedbackRoutes);
-
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
+  await connectDB();
   res.status(200).json({ 
     status: "Online", 
-    db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
-    timestamp: new Date().toISOString()
+    db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected"
   });
 });
 
-/**
- * 4. Global Error Handler
- */
+// ৬. গ্লোবাল এরর হ্যান্ডলার
 app.use((err, req, res, next) => {
-  const status = err.status || 500;
-  
-  // এরর হলেও যেন CORS হেডার ফিরে যায় তা নিশ্চিত করা
-  const origin = req.headers.origin;
-  if (origin && (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))) {
-    res.header("Access-Control-Allow-Origin", origin);
-    res.header("Access-Control-Allow-Credentials", "true");
-  }
-  
-  res.status(status).json({ 
-    message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
-  });
+  console.error(err.stack);
+  res.status(500).json({ error: "Internal Server Error" });
 });
-
-/**
- * 5. Export for Vercel
- */
-if (process.env.NODE_ENV !== 'production') {
-  const PORT = process.env.PORT || 5001;
-  app.listen(PORT, () => console.log(`🚀 Local server: http://localhost:${PORT}`));
-}
 
 module.exports = app;
