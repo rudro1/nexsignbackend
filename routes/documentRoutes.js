@@ -7642,7 +7642,7 @@ const sendSigningEmail = async (party, docTitle, token) => {
                 <tr>
                   <td align="center" style="background-color: ${brandColor}; padding: 40px 20px;">
                     <h1 style="color: #ffffff; margin: 0; font-size: 32px; font-weight: 800; letter-spacing: -1px;">NexSign</h1>
-                    <p style="color: #ffffff; margin: 0; font-size: 32px; font-weight: 800; letter-spacing: -1px;">${doc.senderMeta?.name}</p>
+                    <p style="color: #ffffff; margin: 0; font-size: 32px; font-weight: 800; letter-spacing: -1px;">${senderName}</p>
                   </td>
                 </tr>
 
