@@ -20,7 +20,7 @@ const documentSchema = new mongoose.Schema({
   email: { type: String, lowercase: true, required: true },
   status: { 
     type: String, 
-    enum: ['pending', 'sent', 'signed'], 
+  enum: ['pending', 'sent', 'signed', 'completed'],
     default: 'pending' 
   },
   token: { type: String, index: true, sparse: true }, // sparse: true দিলে ড্রাফটে এরর হবে না
