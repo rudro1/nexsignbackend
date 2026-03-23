@@ -2270,215 +2270,215 @@
 
 // // module.exports = app;
 
-// require('dotenv').config();
-// const express = require('express');
-// const cors = require('cors');
-// const mongoose = require('mongoose');
-// const helmet = require('helmet');
-
-// // Model Imports
-// require('./models/User');
-// require('./models/Document');
-// require('./models/AuditLog'); 
-
-// const authRoutes = require('./routes/authRoutes'); 
-// const documentRoutes = require('./routes/documentRoutes');
-// const adminRoutes = require('./routes/adminRoutes');
-// const feedbackRoutes = require('./routes/feedbackRoutes');
-
-// const app = express();
-
-// // 1. Security & Middleware
-// app.use(helmet({
-//   crossOriginResourcePolicy: { policy: "cross-origin" },
-//   crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }, 
-//   contentSecurityPolicy: false,
-// }));
-
-// const allowedOrigins = [
-//   'http://localhost:5173', 
-//   'https://nexsignfrontend.vercel.app',
-//   'https://nexsignfrontend-git-main-bisal-sahas-projects.vercel.app'
-// ];
-
-// app.use(cors({
-//   origin: (origin, callback) => {
-//     // Allows requests with no origin (like mobile apps/curl) or specific allowed domains
-//     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
-//       callback(null, true);
-//     } else {
-//       callback(new Error('CORS policy: This origin is not allowed'));
-//     }
-//   },
-//   credentials: true,
-//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
-// }));
-
-// app.use(express.json({ limit: '50mb' }));
-// app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
-// // 2. Database Connection (Optimized for Serverless)
-// let isConnected = false;
-// const connectDB = async () => {
-//   if (isConnected) return;
-  
-//   try {
-//     const db = await mongoose.connect(process.env.MONGO_URI);
-//     isConnected = db.connections[0].readyState === 1;
-//     console.log('✅ MongoDB Connected');
-//   } catch (err) {
-//     console.error('❌ MongoDB Connection Error:', err.message);
-//     throw new Error('Database connection failed');
-//   }
-// };
-
-// // Middleware to ensure DB is connected before processing requests
-// app.use(async (req, res, next) => {
-//   try {
-//     await connectDB();
-//     next();
-//   } catch (err) {
-//     res.status(503).json({ error: "Service temporarily unavailable due to DB connection" });
-//   }
-// });
-
-// // 3. Routes
-// app.get('/', (req, res) => res.send('NexSign Server is Online'));
-// app.use('/api/auth', authRoutes);      
-// app.use('/api/documents', documentRoutes);
-// app.use('/api/admin', adminRoutes);
-// app.use('/api/feedback', feedbackRoutes);
-
-// app.get('/api/health', (req, res) => {
-//   res.json({ 
-//     status: "Online", 
-//     db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected" 
-//   });
-// });
-
-// // 4. Global Error Handler
-// app.use((err, req, res, next) => {
-//   console.error("Critical Error:", err.stack);
-//   res.status(err.status || 500).json({ 
-//     error: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
-//   });
-// });
-
-// // 5. Port Listening (Only for Local Development)
-// if (process.env.NODE_ENV !== 'production') {
-//   const PORT = process.env.PORT || 5001;
-//   app.listen(PORT, () => console.log(`🚀 Local server running on port ${PORT}`));
-// }
-
-// module.exports = app;
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
 
+// Model Imports
+require('./models/User');
+require('./models/Document');
+require('./models/AuditLog'); 
+
+const authRoutes = require('./routes/authRoutes'); 
+const documentRoutes = require('./routes/documentRoutes');
+const adminRoutes = require('./routes/adminRoutes');
+const feedbackRoutes = require('./routes/feedbackRoutes');
+
 const app = express();
 
-/**
- * 1. Security & Middleware
- * Note: Helmet can sometimes block preflight if not configured specifically.
- */
+// 1. Security & Middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
-  contentSecurityPolicy: false, // Required for PDF.js and Cloudinary assets
-  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }, 
+  contentSecurityPolicy: false,
 }));
 
-// CORS configuration (Refined for Vercel + Local)
 const allowedOrigins = [
   'http://localhost:5173', 
-  'https://nexsignfrontend.vercel.app'
+  'https://nexsignfrontend.vercel.app',
+  'https://nexsignfrontend-git-main-bisal-sahas-projects.vercel.app'
 ];
 
 app.use(cors({
   origin: (origin, callback) => {
-    // 1. Allow internal requests (no origin)
-    // 2. Allow explicit list
-    // 3. Allow all vercel.app subdomains for preview deployments
+    // Allows requests with no origin (like mobile apps/curl) or specific allowed domains
     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
-      return callback(null, true);
+      callback(null, true);
+    } else {
+      callback(new Error('CORS policy: This origin is not allowed'));
     }
-    return callback(new Error('CORS blocked by NexSign Policy'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
 }));
 
-// Handle Preflight Globally
-app.options('*', cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
-
-/**
- * 2. Database Connection (Global Cache)
- */
+// 2. Database Connection (Optimized for Serverless)
 let isConnected = false;
-
 const connectDB = async () => {
   if (isConnected) return;
-
+  
   try {
-    const db = await mongoose.connect(process.env.MONGO_URI, {
-      serverSelectionTimeoutMS: 5000,
-      socketTimeoutMS: 45000,
-    });
-    isConnected = db.connections[0].readyState;
+    const db = await mongoose.connect(process.env.MONGO_URI);
+    isConnected = db.connections[0].readyState === 1;
     console.log('✅ MongoDB Connected');
   } catch (err) {
     console.error('❌ MongoDB Connection Error:', err.message);
-    // Don't throw, let the request fail gracefully
+    throw new Error('Database connection failed');
   }
 };
 
-// Middleware: Connection check
+// Middleware to ensure DB is connected before processing requests
 app.use(async (req, res, next) => {
-  await connectDB();
-  next();
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    res.status(503).json({ error: "Service temporarily unavailable due to DB connection" });
+  }
 });
 
-/**
- * 3. Routes
- */
-app.use('/api/auth', require('./routes/authRoutes'));      
-app.use('/api/documents', require('./routes/documentRoutes'));
-app.use('/api/admin', require('./routes/adminRoutes'));
-app.use('/api/feedback', require('./routes/feedbackRoutes'));
+// 3. Routes
+app.get('/', (req, res) => res.send('NexSign Server is Online'));
+app.use('/api/auth', authRoutes);      
+app.use('/api/documents', documentRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/feedback', feedbackRoutes);
 
 app.get('/api/health', (req, res) => {
-  res.status(200).json({ 
+  res.json({ 
     status: "Online", 
-    db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
-    env: process.env.NODE_ENV
+    db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected" 
   });
 });
 
-/**
- * 4. Global Error Handler
- */
+// 4. Global Error Handler
 app.use((err, req, res, next) => {
-  const status = err.status || 500;
-  // Ensure CORS headers are sent even on error responses
-  res.header("Access-Control-Allow-Origin", req.headers.origin);
-  res.status(status).json({ 
-    message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
+  console.error("Critical Error:", err.stack);
+  res.status(err.status || 500).json({ 
+    error: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
   });
 });
 
-/**
- * 5. Export for Vercel
- */
+// 5. Port Listening (Only for Local Development)
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5001;
-  app.listen(PORT, () => console.log(`🚀 Local server: http://localhost:${PORT}`));
+  app.listen(PORT, () => console.log(`🚀 Local server running on port ${PORT}`));
 }
 
 module.exports = app;
+
+// require('dotenv').config();
+// const express = require('express');
+// const cors = require('cors');
+// const mongoose = require('mongoose');
+// const helmet = require('helmet');
+
+// const app = express();
+
+// /**
+//  * 1. Security & Middleware
+//  * Note: Helmet can sometimes block preflight if not configured specifically.
+//  */
+// app.use(helmet({
+//   crossOriginResourcePolicy: { policy: "cross-origin" },
+//   contentSecurityPolicy: false, // Required for PDF.js and Cloudinary assets
+//   crossOriginEmbedderPolicy: false,
+// }));
+
+// // CORS configuration (Refined for Vercel + Local)
+// const allowedOrigins = [
+//   'http://localhost:5173', 
+//   'https://nexsignfrontend.vercel.app'
+// ];
+
+// app.use(cors({
+//   origin: (origin, callback) => {
+//     // 1. Allow internal requests (no origin)
+//     // 2. Allow explicit list
+//     // 3. Allow all vercel.app subdomains for preview deployments
+//     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+//       return callback(null, true);
+//     }
+//     return callback(new Error('CORS blocked by NexSign Policy'));
+//   },
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+// }));
+
+// // Handle Preflight Globally
+// app.options('*', cors());
+
+// app.use(express.json({ limit: '10mb' }));
+// app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+// /**
+//  * 2. Database Connection (Global Cache)
+//  */
+// let isConnected = false;
+
+// const connectDB = async () => {
+//   if (isConnected) return;
+
+//   try {
+//     const db = await mongoose.connect(process.env.MONGO_URI, {
+//       serverSelectionTimeoutMS: 5000,
+//       socketTimeoutMS: 45000,
+//     });
+//     isConnected = db.connections[0].readyState;
+//     console.log('✅ MongoDB Connected');
+//   } catch (err) {
+//     console.error('❌ MongoDB Connection Error:', err.message);
+//     // Don't throw, let the request fail gracefully
+//   }
+// };
+
+// // Middleware: Connection check
+// app.use(async (req, res, next) => {
+//   await connectDB();
+//   next();
+// });
+
+// /**
+//  * 3. Routes
+//  */
+// app.use('/api/auth', require('./routes/authRoutes'));      
+// app.use('/api/documents', require('./routes/documentRoutes'));
+// app.use('/api/admin', require('./routes/adminRoutes'));
+// app.use('/api/feedback', require('./routes/feedbackRoutes'));
+
+// app.get('/api/health', (req, res) => {
+//   res.status(200).json({ 
+//     status: "Online", 
+//     db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
+//     env: process.env.NODE_ENV
+//   });
+// });
+
+// /**
+//  * 4. Global Error Handler
+//  */
+// app.use((err, req, res, next) => {
+//   const status = err.status || 500;
+//   // Ensure CORS headers are sent even on error responses
+//   res.header("Access-Control-Allow-Origin", req.headers.origin);
+//   res.status(status).json({ 
+//     message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
+//   });
+// });
+
+// /**
+//  * 5. Export for Vercel
+//  */
+// if (process.env.NODE_ENV !== 'production') {
+//   const PORT = process.env.PORT || 5001;
+//   app.listen(PORT, () => console.log(`🚀 Local server: http://localhost:${PORT}`));
+// }
+
+// module.exports = app;
