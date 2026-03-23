@@ -2380,20 +2380,23 @@ const helmet = require('helmet');
 
 const app = express();
 
-// ১. হেলমেট (CORS এর সাথে মিল রেখে কনফিগার করা)
+// ১. Vercel এর জন্য প্রক্সি ট্রাস্ট করা (Rate Limit এর জন্য জরুরি)
+app.set('trust proxy', 1);
+
+// ২. হেলমেট (Security)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
 }));
 
-// ২. CORS কনফিগারেশন
+// ৩. CORS কনফিগারেশন
 const allowedOrigins = [
   'http://localhost:5173', 
   'https://nexsignfrontend.vercel.app'
 ];
 
-const corsOptions = {
+app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
       return callback(null, true);
@@ -2401,13 +2404,12 @@ const corsOptions = {
     return callback(new Error('CORS blocked by NexSign Policy'));
   },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   optionsSuccessStatus: 204
-};
+}));
 
-app.use(cors(corsOptions));
-
-// ৩. ম্যানুয়াল OPTIONS হ্যান্ডলার (Vercel Preflight Fix)
-// এটি যেকোনো রাউটের আগেই প্রি-ফ্লাইট রিকোয়েস্টকে 'OK' স্ট্যাটাস দেবে।
+// ৪. CRITICAL: Manual OPTIONS Handler (Vercel Preflight Fix)
 app.options('*', (req, res) => {
   const origin = req.headers.origin;
   if (origin && (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))) {
@@ -2422,7 +2424,7 @@ app.options('*', (req, res) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// ৪. ডাটাবেস কানেকশন
+// ৫. ডাটাবেস কানেকশন (Optimized for Serverless)
 const connectDB = async () => {
   if (mongoose.connection.readyState >= 1) return;
   try {
@@ -2439,21 +2441,13 @@ app.use(async (req, res, next) => {
   next();
 });
 
-/**
- * ৫. Routes
- */
+// ৬. আপনার সমস্ত রাউটস
 app.use('/api/auth', require('./routes/authRoutes'));      
 app.use('/api/documents', require('./routes/documentRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/feedback', require('./routes/feedbackRoutes'));
 
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: "Online", db: mongoose.connection.readyState === 1 ? "Connected" : "Disconnected" });
-});
-
-/**
- * ৬. Global Error Handler
- */
+// ৭. গ্লোবাল এরর হ্যান্ডলার (CORS হেডারসহ)
 app.use((err, req, res, next) => {
   const status = err.status || 500;
   const origin = req.headers.origin;
@@ -2462,6 +2456,7 @@ app.use((err, req, res, next) => {
     res.header("Access-Control-Allow-Credentials", "true");
   }
   res.status(status).json({ 
+    success: false,
     message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
   });
 });

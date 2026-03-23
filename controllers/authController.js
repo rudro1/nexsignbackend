@@ -612,36 +612,52 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
 
-/**
- * ১. কমন টোকেন জেনারেটর
- */
 const generateToken = (user) => {
   return jwt.sign(
     { id: user._id, role: user.role }, 
-    process.env.JWT_SECRET, // fallback সরানো হয়েছে (env রিকোয়ার্ড)
+    process.env.JWT_SECRET, 
     { expiresIn: '7d' }
   );
 };
 
-// --- REGISTER (নতুন ইউজার তৈরি) ---
+// --- LOGIN ---
+exports.login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ message: "ইমেইল এবং পাসওয়ার্ড প্রয়োজন।" });
+
+    // ফিক্স: .select('+password') অবশ্যই দিতে হবে কারণ মডেলে password: { select: false } আছে
+    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
+
+    if (!user || !(await user.comparePassword(password))) {
+      return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
+    }
+
+    const token = generateToken(user);
+    res.json({ 
+      success: true,
+      token, 
+      user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } 
+    });
+  } catch (error) {
+    console.error("Login Error:", error);
+    res.status(500).json({ success: false, message: "লগইনে সমস্যা হয়েছে।" });
+  }
+};
+
+// --- REGISTER ---
 exports.register = async (req, res) => {
   try {
     const { full_name, email, password } = req.body;
     const cleanEmail = email.toLowerCase().trim();
 
-    // চেক করা ইমেইলটি আগে থেকে আছে কি না
     const existingUser = await User.findOne({ email: cleanEmail });
-    if (existingUser) {
-        return res.status(400).json({ message: "ইমেইলটি ইতিমধ্যে ব্যবহৃত।" });
-    }
+    if (existingUser) return res.status(400).json({ message: "ইমেইলটি ইতিমধ্যে ব্যবহৃত।" });
 
-    /** * 🌟 ফিক্স: এখানে ম্যানুয়াল হ্যাশিং বাদ দেওয়া হয়েছে। 
-     * User Model এর pre-save হুক এটি অটোমেটিক হ্যান্ডেল করবে।
-     */
     const user = new User({
       full_name,
       email: cleanEmail,
-      password: password, // সরাসরি প্লেইন টেক্সট পাস করুন, মডেল হ্যাশ করে নেবে
+      password, // মডেল অটোমেটিক হ্যাশ করবে
       role: cleanEmail === 'bisalsaha42@gmail.com' ? 'super_admin' : 'user'
     });
 
@@ -649,79 +665,36 @@ exports.register = async (req, res) => {
     const token = generateToken(user);
 
     res.status(201).json({ 
+      success: true,
       token, 
       user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } 
     });
   } catch (error) {
-    res.status(500).json({ message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।", error: error.message });
-  }
-};
-
-// --- LOGIN ---
-exports.login = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ message: "ইমেইল এবং পাসওয়ার্ড প্রয়োজন।" });
-    }
-
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
-
-    // comparePassword মেথডটি এখন হ্যাশড পাসওয়ার্ডের সাথে সঠিকভাবে ম্যাচ করবে
-    if (!user || !(await user.comparePassword(password))) {
-      return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
-    }
-
-    const token = generateToken(user);
-    
-    res.json({ 
-      token, 
-      user: { 
-        id: user._id, 
-        full_name: user.full_name, 
-        email: user.email, 
-        role: user.role 
-      } 
-    });
-  } catch (error) {
-    res.status(500).json({ message: "লগইনে সমস্যা হয়েছে।" });
+    res.status(500).json({ success: false, message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।" });
   }
 };
 
 // --- GOOGLE AUTH ---
 exports.googleAuth = async (req, res) => {
   try {
-    const { name, email, googleId } = req.body; // googleId যোগ করা হয়েছে
+    const { name, email, googleId, photoURL } = req.body;
     const cleanEmail = email.toLowerCase().trim();
-    
     let user = await User.findOne({ email: cleanEmail });
 
     if (!user) {
-      /**
-       * 🌟 স্কেলেবল লজিক: গুগল ইউজারের জন্য র‍্যান্ডম পাসওয়ার্ড এবং googleId স্টোর করা
-       */
       user = await User.create({
         full_name: name,
         email: cleanEmail,
-        googleId: googleId || 'google-auth',
-        password: Math.random().toString(36).slice(-10) + Date.now(), 
+        googleId,
+        photoURL,
+        password: Math.random().toString(36).slice(-10), 
         role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user"
       });
     }
 
     const token = generateToken(user);
-    
-    res.json({ 
-      token, 
-      user: { 
-        id: user._id, 
-        full_name: user.full_name, 
-        email: user.email, 
-        role: user.role 
-      } 
-    });
+    res.json({ success: true, token, user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } });
   } catch (error) {
-    console.error("Google Auth Error:", error);
-    res.status(500).json({ message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
+    res.status(500).json({ success: false, message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
   }
 };
