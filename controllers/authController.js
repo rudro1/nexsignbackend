@@ -1,495 +1,572 @@
-// // const User = require('../models/User');
-// // const jwt = require('jsonwebtoken');
-// // const bcrypt = require('bcryptjs'); // পাসওয়ার্ড এনক্রিপশনের জন্য
+// // // const User = require('../models/User');
+// // // const jwt = require('jsonwebtoken');
+// // // const bcrypt = require('bcryptjs'); // পাসওয়ার্ড এনক্রিপশনের জন্য
 
-// // // ১. রেজিস্ট্রেশন লজিক
+// // // // ১. রেজিস্ট্রেশন লজিক
+// // // // exports.register = async (req, res) => {
+// // // //   try {
+// // // //     const { full_name, email, password } = req.body;
+
+// // // //     // ইউজার অলরেডি আছে কি না চেক করা
+// // // //     let user = await User.findOne({ email });
+// // // //     if (user) {
+// // // //       return res.status(400).json({ message: "এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে।" });
+// // // //     }
+
+// // // //     // নতুন ইউজার তৈরি (আপনার User মডেলে যদি bcrypt প্রি-সেভ হুক না থাকে তবে এখানে হ্যাশ করতে হবে)
+// // // //     user = new User({
+// // // //       full_name,
+// // // //       email,
+// // // //       password // আপনার মডেলে পাসওয়ার্ড হ্যাশ করার লজিক থাকা উচিত
+// // // //     });
+
+// // // //     await user.save();
+
+// // // //     // টোকেন জেনারেট করা
+// // // //     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+// // // //     res.status(201).json({
+// // // //       message: "অ্যাকাউন্ট তৈরি সফল হয়েছে",
+// // // //       token,
+// // // //       user: {
+// // // //         id: user._id,
+// // // //         full_name: user.full_name,
+// // // //         email: user.email
+// // // //       }
+// // // //     });
+// // // //   } catch (error) {
+// // // //     console.error(error);
+// // // //     res.status(500).json({ message: "সার্ভারে সমস্যা হয়েছে।" });
+// // // //   }
+// // // // };
+
 // // // exports.register = async (req, res) => {
 // // //   try {
 // // //     const { full_name, email, password } = req.body;
 
-// // //     // ইউজার অলরেডি আছে কি না চেক করা
-// // //     let user = await User.findOne({ email });
+// // //     let user = await User.findOne({ email: email.toLowerCase() });
 // // //     if (user) {
-// // //       return res.status(400).json({ message: "এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে।" });
+// // //       return res.status(400).json({ message: "এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে।" });
 // // //     }
 
-// // //     // নতুন ইউজার তৈরি (আপনার User মডেলে যদি bcrypt প্রি-সেভ হুক না থাকে তবে এখানে হ্যাশ করতে হবে)
+// // //     // ✅ ডাটাবেজে সেভ করার আগে পাসওয়ার্ড হ্যাশ করা জরুরি
+// // //     const salt = await bcrypt.genSalt(10);
+// // //     const hashedPassword = await bcrypt.hash(password, salt);
+
 // // //     user = new User({
 // // //       full_name,
-// // //       email,
-// // //       password // আপনার মডেলে পাসওয়ার্ড হ্যাশ করার লজিক থাকা উচিত
+// // //       email: email.toLowerCase(),
+// // //       password: hashedPassword // হ্যাশ করা পাসওয়ার্ড সেভ হচ্ছে
 // // //     });
 
 // // //     await user.save();
 
-// // //     // টোকেন জেনারেট করা
 // // //     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
 // // //     res.status(201).json({
-// // //       message: "অ্যাকাউন্ট তৈরি সফল হয়েছে",
+// // //       message: "অ্যাকাউন্ট তৈরি সফল হয়েছে",
 // // //       token,
+// // //       user: { id: user._id, full_name: user.full_name, email: user.email }
+// // //     });
+// // //   } catch (error) {
+// // //     console.error(error);
+// // //     res.status(500).json({ message: "সার্ভারে সমস্যা হয়েছে।" });
+// // //   }
+// // // };
+
+// // // // ২. লগইন লজিক
+// // // exports.login = async (req, res) => {
+// // //   try {
+// // //     const { email, password } = req.body;
+    
+// // //     // ইউজার খুঁজে বের করা
+// // //     const user = await User.findOne({ email });
+// // //     if (!user) {
+// // //       return res.status(400).json({ message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।" });
+// // //     }
+
+// // //     // পাসওয়ার্ড চেক করা (bcrypt.compare ব্যবহার করুন)
+// // //     const isMatch = await bcrypt.compare(password, user.password);
+// // //     if (!isMatch) {
+// // //       return res.status(400).json({ message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।" });
+// // //     }
+
+// // //     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+// // //     res.json({ 
+// // //       message: "লগইন সফল হয়েছে", 
+// // //       token, 
 // // //       user: {
 // // //         id: user._id,
 // // //         full_name: user.full_name,
 // // //         email: user.email
-// // //       }
+// // //       } 
 // // //     });
 // // //   } catch (error) {
-// // //     console.error(error);
 // // //     res.status(500).json({ message: "সার্ভারে সমস্যা হয়েছে।" });
 // // //   }
 // // // };
+// // const User = require('../models/User'); // পাথ ঠিক আছে কি না নিশ্চিত করুন
+// // const jwt = require('jsonwebtoken');
+// // const bcrypt = require('bcryptjs');
 
+// // const User = require('../models/User'); // পাথ ঠিক আছে কি না নিশ্চিত করুন
+// // const jwt = require('jsonwebtoken');
+// // const bcrypt = require('bcryptjs');
+
+// // import User from '../models/User.js';
+// // import jwt from 'jsonwebtoken';
+// // import bcrypt from 'bcryptjs';
+
+// // // ১. রেজিস্ট্রেশন (পাসওয়ার্ড হ্যাশ করে সেভ করবে)
 // // exports.register = async (req, res) => {
 // //   try {
 // //     const { full_name, email, password } = req.body;
+    
+// //     if (!full_name || !email || !password) {
+// //       return res.status(400).json({ message: "সবগুলো তথ্য প্রদান করুন।" });
+// //     }
 
-// //     let user = await User.findOne({ email: email.toLowerCase() });
-// //     if (user) {
+// //     const cleanEmail = email.toLowerCase().trim();
+
+// //     // ✅ চেক: ইমেইল আগে থেকেই আছে কি না
+// //     const existingUser = await User.findOne({ email: cleanEmail });
+// //     if (existingUser) {
 // //       return res.status(400).json({ message: "এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে।" });
 // //     }
 
-// //     // ✅ ডাটাবেজে সেভ করার আগে পাসওয়ার্ড হ্যাশ করা জরুরি
+// //     // পাসওয়ার্ড হ্যাশ করা
 // //     const salt = await bcrypt.genSalt(10);
 // //     const hashedPassword = await bcrypt.hash(password, salt);
 
-// //     user = new User({
+// //     // ✅ আপনার দেওয়া স্পেশাল ইমেইল চেক
+// //     const isSuperAdmin = cleanEmail === 'bisalsaha42@gmail.com';
+
+// //     const user = new User({
 // //       full_name,
-// //       email: email.toLowerCase(),
-// //       password: hashedPassword // হ্যাশ করা পাসওয়ার্ড সেভ হচ্ছে
+// //       email: cleanEmail,
+// //       password: hashedPassword,
+// //       role: isSuperAdmin ? 'super_admin' : 'user'
 // //     });
 
 // //     await user.save();
 
-// //     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+// //     // টোকেন জেনারেট (রোলসহ)
+// //     const token = jwt.sign(
+// //       { id: user._id, role: user.role }, 
+// //       process.env.JWT_SECRET, 
+// //       { expiresIn: '7d' }
+// //     );
 
 // //     res.status(201).json({
 // //       message: "অ্যাকাউন্ট তৈরি সফল হয়েছে",
 // //       token,
-// //       user: { id: user._id, full_name: user.full_name, email: user.email }
+// //       user: { 
+// //         id: user._id, 
+// //         full_name: user.full_name, 
+// //         email: user.email,
+// //         role: user.role 
+// //       }
 // //     });
 // //   } catch (error) {
-// //     console.error(error);
+// //     console.error("Register Error Detail:", error); // টার্মিনালে আসল এরর দেখতে
+// //     res.status(500).json({ message: "সার্ভারে সমস্যা হয়েছে।", error: error.message });
+// //   }
+// // };
+
+// // // ২. লগইন (হ্যাশ করা পাসওয়ার্ড চেক করবে)
+// // exports.login = async (req, res) => {
+// //   try {
+// //     const { email, password } = req.body;
+// //     const cleanEmail = email.toLowerCase().trim();
+    
+// //     const user = await User.findOne({ email: cleanEmail });
+// //     if (!user) {
+// //       return res.status(400).json({ message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।" });
+// //     }
+
+// //     const isMatch = await bcrypt.compare(password, user.password);
+// //     if (!isMatch) {
+// //       return res.status(400).json({ message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।" });
+// //     }
+
+// //     const token = jwt.sign(
+// //       { id: user._id, role: user.role }, 
+// //       process.env.JWT_SECRET, 
+// //       { expiresIn: '7d' }
+// //     );
+
+// //     res.json({ 
+// //       token, 
+// //       user: { 
+// //         id: user._id, 
+// //         full_name: user.full_name, 
+// //         email: user.email,
+// //         role: user.role 
+// //       } 
+// //     });
+// //   } catch (error) {
+// //     console.error("Login Error Detail:", error);
 // //     res.status(500).json({ message: "সার্ভারে সমস্যা হয়েছে।" });
 // //   }
 // // };
 
-// // // ২. লগইন লজিক
-// // exports.login = async (req, res) => {
+
+
+
+
+// // // ৩. Google Login
+// // exports.googleAuth = async (req, res) => {
 // //   try {
-// //     const { email, password } = req.body;
-    
-// //     // ইউজার খুঁজে বের করা
-// //     const user = await User.findOne({ email });
+// //     const { name, email, photoURL } = req.body;
+
+// //     if (!email) {
+// //       return res.status(400).json({ message: "Email is required" });
+// //     }
+
+// //     let user = await User.findOne({ email });
+
 // //     if (!user) {
-// //       return res.status(400).json({ message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।" });
+// //       user = await User.create({
+// //         full_name: name,
+// //         email: email,
+// //         photo: photoURL,
+// //         role: "user",
+// //         status: "active"
+// //       });
 // //     }
 
-// //     // পাসওয়ার্ড চেক করা (bcrypt.compare ব্যবহার করুন)
-// //     const isMatch = await bcrypt.compare(password, user.password);
-// //     if (!isMatch) {
-// //       return res.status(400).json({ message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।" });
+// //     const token = jwt.sign(
+// //       { id: user._id, role: user.role },
+// //       process.env.JWT_SECRET,
+// //       { expiresIn: "7d" }
+// //     );
+
+// //     res.json({
+// //       token,
+// //       user
+// //     });
+
+// //   } catch (error) {
+// //     console.error(error);
+// //     res.status(500).json({ message: "Google authentication failed" });
+// //   }
+// // };
+
+
+// // import User from '../models/User.js';
+// // import jwt from 'jsonwebtoken';
+// // import bcrypt from 'bcryptjs';
+
+
+// // // ================= REGISTER =================
+// // export const register = async (req, res) => {
+// //   try {
+// //     const { full_name, email, password } = req.body;
+
+// //     if (!full_name || !email || !password) {
+// //       return res.status(400).json({ message: "সবগুলো তথ্য প্রদান করুন।" });
 // //     }
 
-// //     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+// //     const cleanEmail = email.toLowerCase().trim();
 
-// //     res.json({ 
-// //       message: "লগইন সফল হয়েছে", 
-// //       token, 
+// //     // email exist check
+// //     const existingUser = await User.findOne({ email: cleanEmail });
+// //     if (existingUser) {
+// //       return res.status(400).json({
+// //         message: "এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে।"
+// //       });
+// //     }
+
+// //     // password hash
+// //     const salt = await bcrypt.genSalt(10);
+// //     const hashedPassword = await bcrypt.hash(password, salt);
+
+// //     // super admin check
+// //     const isSuperAdmin = cleanEmail === "bisalsaha42@gmail.com";
+
+// //     const user = new User({
+// //       full_name,
+// //       email: cleanEmail,
+// //       password: hashedPassword,
+// //       role: isSuperAdmin ? "super_admin" : "user"
+// //     });
+
+// //     await user.save();
+
+// //     // JWT token
+// //     const token = jwt.sign(
+// //       { id: user._id, role: user.role },
+// //       process.env.JWT_SECRET,
+// //       { expiresIn: "7d" }
+// //     );
+
+// //     res.status(201).json({
+// //       message: "অ্যাকাউন্ট তৈরি সফল হয়েছে",
+// //       token,
 // //       user: {
 // //         id: user._id,
 // //         full_name: user.full_name,
-// //         email: user.email
+// //         email: user.email,
+// //         role: user.role
+// //       }
+// //     });
+
+// //   } catch (error) {
+// //     console.error("Register Error:", error);
+// //     res.status(500).json({
+// //       message: "সার্ভারে সমস্যা হয়েছে",
+// //       error: error.message
+// //     });
+// //   }
+// // };
+
+
+
+// // // ================= LOGIN =================
+// // export const login = async (req, res) => {
+// //   try {
+// //     const { email, password } = req.body;
+
+// //     const cleanEmail = email.toLowerCase().trim();
+
+// //     const user = await User.findOne({ email: cleanEmail });
+
+// //     if (!user) {
+// //       return res.status(400).json({
+// //         message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।"
+// //       });
+// //     }
+
+// //     const isMatch = await bcrypt.compare(password, user.password);
+
+// //     if (!isMatch) {
+// //       return res.status(400).json({
+// //         message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।"
+// //       });
+// //     }
+
+// //     const token = jwt.sign(
+// //       { id: user._id, role: user.role },
+// //       process.env.JWT_SECRET,
+// //       { expiresIn: "7d" }
+// //     );
+
+// //     res.json({
+// //       token,
+// //       user: {
+// //         id: user._id,
+// //         full_name: user.full_name,
+// //         email: user.email,
+// //         role: user.role
+// //       }
+// //     });
+
+// //   } catch (error) {
+// //     console.error("Login Error:", error);
+// //     res.status(500).json({
+// //       message: "সার্ভারে সমস্যা হয়েছে।"
+// //     });
+// //   }
+// // };
+
+
+
+// // // ================= GOOGLE AUTH =================
+// // export const googleAuth = async (req, res) => {
+// //   try {
+
+// //     const { name, email, photoURL } = req.body;
+
+// //     if (!email) {
+// //       return res.status(400).json({
+// //         message: "Email is required"
+// //       });
+// //     }
+
+// //     let user = await User.findOne({ email });
+
+// //     // create user if not exist
+// //     if (!user) {
+// //       user = await User.create({
+// //         full_name: name,
+// //         email,
+// //         photo: photoURL,
+// //         role: "user",
+// //         status: "active"
+// //       });
+// //     }
+
+// //     const token = jwt.sign(
+// //       { id: user._id, role: user.role },
+// //       process.env.JWT_SECRET,
+// //       { expiresIn: "7d" }
+// //     );
+
+// //     res.json({
+// //       token,
+// //       user
+// //     });
+
+// //   } catch (error) {
+// //     console.error("Google Auth Error:", error);
+
+// //     res.status(500).json({
+// //       message: "Google authentication failed"
+// //     });
+// //   }
+// // };
+
+
+// // const User = require('../models/User');
+// // const jwt = require('jsonwebtoken');
+
+// // const generateToken = (user) => {
+// //   return jwt.sign(
+// //     { id: user._id, role: user.role }, 
+// //     process.env.JWT_SECRET || 'fallback_secret', // Secret নিশ্চিত করুন
+// //     { expiresIn: '7d' }
+// //   );
+// // };
+
+// // // REGISTER
+// // exports.register = async (req, res) => {
+// //   try {
+// //     const { full_name, email, password } = req.body;
+// //     const cleanEmail = email.toLowerCase().trim();
+
+// //     const existingUser = await User.findOne({ email: cleanEmail });
+// //     if (existingUser) return res.status(400).json({ message: "ইমেইলটি ইতিমধ্যে ব্যবহৃত।" });
+// //     const existingUser = await User.findOne({ email: cleanEmail });
+// //     if (existingUser) return res.status(400).json({ message: "Email already exists" });
+
+// //     const salt = await bcrypt.genSalt(10);
+// //     const hashedPassword = await bcrypt.hash(password, salt);
+
+// //     const user = new User({
+// //       full_name,
+// //       email: cleanEmail,
+// //       password, // মডেলে হ্যাশ হবে
+// //       role: cleanEmail === 'bisalsaha42@gmail.com' ? 'super_admin' : 'user'
+// //     });
+
+// //     await user.save();
+// //     const token = generateToken(user);
+
+// //     res.status(201).json({ token, user: { id: user._id, full_name, email: cleanEmail, role: user.role } });
+// //   } catch (error) {
+// //     res.status(500).json({ message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।", error: error.message });
+// //   }
+// // };
+
+// //       password: hashedPassword,
+// //       role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user"
+// //     });
+
+// //     await user.save();
+// //     const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
+// //     res.status(201).json({ token, user });
+// //   } catch (error) {
+// //     res.status(500).json({ message: error.message });
+// //   }
+// // };
+
+// // // LOGIN
+// // exports.login = async (req, res) => {
+// //   try {
+// //     const { email, password } = req.body;
+// //     const user = await User.findOne({ email: email.toLowerCase().trim() });
+
+// //     if (!user || !(await user.comparePassword(password))) {
+// //       return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
+// //     }
+
+// //     const token = generateToken(user);
+    
+// //     // 🌟 এখানে email: user.email যোগ করা হয়েছে
+// //     res.json({ 
+// //       token, 
+// //       user: { 
+// //         id: user._id, 
+// //         full_name: user.full_name, 
+// //         email: user.email, // এই লাইনটি যোগ করুন
+// //         role: user.role 
 // //       } 
 // //     });
 // //   } catch (error) {
-// //     res.status(500).json({ message: "সার্ভারে সমস্যা হয়েছে।" });
+// //     res.status(500).json({ message: "লগইনে সমস্যা হয়েছে।" });
 // //   }
 // // };
-// const User = require('../models/User'); // পাথ ঠিক আছে কি না নিশ্চিত করুন
-// const jwt = require('jsonwebtoken');
-// const bcrypt = require('bcryptjs');
-
-// const User = require('../models/User'); // পাথ ঠিক আছে কি না নিশ্চিত করুন
-// const jwt = require('jsonwebtoken');
-// const bcrypt = require('bcryptjs');
-
-// import User from '../models/User.js';
-// import jwt from 'jsonwebtoken';
-// import bcrypt from 'bcryptjs';
-
-// // ১. রেজিস্ট্রেশন (পাসওয়ার্ড হ্যাশ করে সেভ করবে)
-// exports.register = async (req, res) => {
-//   try {
-//     const { full_name, email, password } = req.body;
-    
-//     if (!full_name || !email || !password) {
-//       return res.status(400).json({ message: "সবগুলো তথ্য প্রদান করুন।" });
-//     }
-
-//     const cleanEmail = email.toLowerCase().trim();
-
-//     // ✅ চেক: ইমেইল আগে থেকেই আছে কি না
-//     const existingUser = await User.findOne({ email: cleanEmail });
-//     if (existingUser) {
-//       return res.status(400).json({ message: "এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে।" });
-//     }
-
-//     // পাসওয়ার্ড হ্যাশ করা
-//     const salt = await bcrypt.genSalt(10);
-//     const hashedPassword = await bcrypt.hash(password, salt);
-
-//     // ✅ আপনার দেওয়া স্পেশাল ইমেইল চেক
-//     const isSuperAdmin = cleanEmail === 'bisalsaha42@gmail.com';
-
-//     const user = new User({
-//       full_name,
-//       email: cleanEmail,
-//       password: hashedPassword,
-//       role: isSuperAdmin ? 'super_admin' : 'user'
-//     });
-
-//     await user.save();
-
-//     // টোকেন জেনারেট (রোলসহ)
-//     const token = jwt.sign(
-//       { id: user._id, role: user.role }, 
-//       process.env.JWT_SECRET, 
-//       { expiresIn: '7d' }
-//     );
-
-//     res.status(201).json({
-//       message: "অ্যাকাউন্ট তৈরি সফল হয়েছে",
-//       token,
-//       user: { 
-//         id: user._id, 
-//         full_name: user.full_name, 
-//         email: user.email,
-//         role: user.role 
-//       }
-//     });
-//   } catch (error) {
-//     console.error("Register Error Detail:", error); // টার্মিনালে আসল এরর দেখতে
-//     res.status(500).json({ message: "সার্ভারে সমস্যা হয়েছে।", error: error.message });
-//   }
-// };
-
-// // ২. লগইন (হ্যাশ করা পাসওয়ার্ড চেক করবে)
-// exports.login = async (req, res) => {
-//   try {
-//     const { email, password } = req.body;
-//     const cleanEmail = email.toLowerCase().trim();
-    
-//     const user = await User.findOne({ email: cleanEmail });
-//     if (!user) {
-//       return res.status(400).json({ message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।" });
-//     }
-
-//     const isMatch = await bcrypt.compare(password, user.password);
-//     if (!isMatch) {
-//       return res.status(400).json({ message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।" });
-//     }
-
-//     const token = jwt.sign(
-//       { id: user._id, role: user.role }, 
-//       process.env.JWT_SECRET, 
-//       { expiresIn: '7d' }
-//     );
-
-//     res.json({ 
-//       token, 
-//       user: { 
-//         id: user._id, 
-//         full_name: user.full_name, 
-//         email: user.email,
-//         role: user.role 
-//       } 
-//     });
-//   } catch (error) {
-//     console.error("Login Error Detail:", error);
-//     res.status(500).json({ message: "সার্ভারে সমস্যা হয়েছে।" });
-//   }
-// };
-
-
-
-
-
-// // ৩. Google Login
-// exports.googleAuth = async (req, res) => {
-//   try {
-//     const { name, email, photoURL } = req.body;
-
-//     if (!email) {
-//       return res.status(400).json({ message: "Email is required" });
-//     }
-
-//     let user = await User.findOne({ email });
-
-//     if (!user) {
-//       user = await User.create({
-//         full_name: name,
-//         email: email,
-//         photo: photoURL,
-//         role: "user",
-//         status: "active"
-//       });
-//     }
-
-//     const token = jwt.sign(
-//       { id: user._id, role: user.role },
-//       process.env.JWT_SECRET,
-//       { expiresIn: "7d" }
-//     );
-
-//     res.json({
-//       token,
-//       user
-//     });
-
-//   } catch (error) {
-//     console.error(error);
-//     res.status(500).json({ message: "Google authentication failed" });
-//   }
-// };
-
-
-// import User from '../models/User.js';
-// import jwt from 'jsonwebtoken';
-// import bcrypt from 'bcryptjs';
-
-
-// // ================= REGISTER =================
-// export const register = async (req, res) => {
-//   try {
-//     const { full_name, email, password } = req.body;
-
-//     if (!full_name || !email || !password) {
-//       return res.status(400).json({ message: "সবগুলো তথ্য প্রদান করুন।" });
-//     }
-
-//     const cleanEmail = email.toLowerCase().trim();
-
-//     // email exist check
-//     const existingUser = await User.findOne({ email: cleanEmail });
-//     if (existingUser) {
-//       return res.status(400).json({
-//         message: "এই ইমেইল দিয়ে আগেই অ্যাকাউন্ট খোলা হয়েছে।"
-//       });
-//     }
-
-//     // password hash
-//     const salt = await bcrypt.genSalt(10);
-//     const hashedPassword = await bcrypt.hash(password, salt);
-
-//     // super admin check
-//     const isSuperAdmin = cleanEmail === "bisalsaha42@gmail.com";
-
-//     const user = new User({
-//       full_name,
-//       email: cleanEmail,
-//       password: hashedPassword,
-//       role: isSuperAdmin ? "super_admin" : "user"
-//     });
-
-//     await user.save();
-
-//     // JWT token
-//     const token = jwt.sign(
-//       { id: user._id, role: user.role },
-//       process.env.JWT_SECRET,
-//       { expiresIn: "7d" }
-//     );
-
-//     res.status(201).json({
-//       message: "অ্যাকাউন্ট তৈরি সফল হয়েছে",
-//       token,
-//       user: {
-//         id: user._id,
-//         full_name: user.full_name,
-//         email: user.email,
-//         role: user.role
-//       }
-//     });
-
-//   } catch (error) {
-//     console.error("Register Error:", error);
-//     res.status(500).json({
-//       message: "সার্ভারে সমস্যা হয়েছে",
-//       error: error.message
-//     });
-//   }
-// };
-
-
-
-// // ================= LOGIN =================
-// export const login = async (req, res) => {
-//   try {
-//     const { email, password } = req.body;
-
-//     const cleanEmail = email.toLowerCase().trim();
-
-//     const user = await User.findOne({ email: cleanEmail });
-
-//     if (!user) {
-//       return res.status(400).json({
-//         message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।"
-//       });
-//     }
-
-//     const isMatch = await bcrypt.compare(password, user.password);
-
-//     if (!isMatch) {
-//       return res.status(400).json({
-//         message: "সঠিক ইমেইল বা পাসওয়ার্ড দিন।"
-//       });
-//     }
-
-//     const token = jwt.sign(
-//       { id: user._id, role: user.role },
-//       process.env.JWT_SECRET,
-//       { expiresIn: "7d" }
-//     );
-
-//     res.json({
-//       token,
-//       user: {
-//         id: user._id,
-//         full_name: user.full_name,
-//         email: user.email,
-//         role: user.role
-//       }
-//     });
-
-//   } catch (error) {
-//     console.error("Login Error:", error);
-//     res.status(500).json({
-//       message: "সার্ভারে সমস্যা হয়েছে।"
-//     });
-//   }
-// };
-
-
-
-// // ================= GOOGLE AUTH =================
-// export const googleAuth = async (req, res) => {
-//   try {
-
-//     const { name, email, photoURL } = req.body;
-
-//     if (!email) {
-//       return res.status(400).json({
-//         message: "Email is required"
-//       });
-//     }
-
-//     let user = await User.findOne({ email });
-
-//     // create user if not exist
-//     if (!user) {
-//       user = await User.create({
-//         full_name: name,
-//         email,
-//         photo: photoURL,
-//         role: "user",
-//         status: "active"
-//       });
-//     }
-
-//     const token = jwt.sign(
-//       { id: user._id, role: user.role },
-//       process.env.JWT_SECRET,
-//       { expiresIn: "7d" }
-//     );
-
-//     res.json({
-//       token,
-//       user
-//     });
-
-//   } catch (error) {
-//     console.error("Google Auth Error:", error);
-
-//     res.status(500).json({
-//       message: "Google authentication failed"
-//     });
-//   }
-// };
-
-
 // const User = require('../models/User');
 // const jwt = require('jsonwebtoken');
+// const bcrypt = require('bcryptjs');
 
+// /**
+//  * কমন টোকেন জেনারেটর ফাংশন
+//  * এটি ভালো কারণ টোকেন লজিক এক জায়গায় থাকলে মেইনটেইন করা সহজ হয়।
+//  */
 // const generateToken = (user) => {
 //   return jwt.sign(
 //     { id: user._id, role: user.role }, 
-//     process.env.JWT_SECRET || 'fallback_secret', // Secret নিশ্চিত করুন
+//     process.env.JWT_SECRET || 'fallback_secret', 
 //     { expiresIn: '7d' }
 //   );
 // };
 
-// // REGISTER
+// // --- REGISTER (নতুন ইউজার তৈরি) ---
 // exports.register = async (req, res) => {
 //   try {
 //     const { full_name, email, password } = req.body;
 //     const cleanEmail = email.toLowerCase().trim();
 
+//     // ১. চেক করা ইমেইলটি আগে থেকে আছে কি না
 //     const existingUser = await User.findOne({ email: cleanEmail });
-//     if (existingUser) return res.status(400).json({ message: "ইমেইলটি ইতিমধ্যে ব্যবহৃত।" });
-//     const existingUser = await User.findOne({ email: cleanEmail });
-//     if (existingUser) return res.status(400).json({ message: "Email already exists" });
+//     if (existingUser) {
+//         return res.status(400).json({ message: "ইমেইলটি ইতিমধ্যে ব্যবহৃত।" });
+//     }
 
+//     // ২. পাসওয়ার্ড হ্যাশিং (মডেলে সেভ করার আগে সিকিউরিটি)
 //     const salt = await bcrypt.genSalt(10);
 //     const hashedPassword = await bcrypt.hash(password, salt);
 
 //     const user = new User({
 //       full_name,
 //       email: cleanEmail,
-//       password, // মডেলে হ্যাশ হবে
+//       password: hashedPassword, 
 //       role: cleanEmail === 'bisalsaha42@gmail.com' ? 'super_admin' : 'user'
 //     });
 
 //     await user.save();
 //     const token = generateToken(user);
 
-//     res.status(201).json({ token, user: { id: user._id, full_name, email: cleanEmail, role: user.role } });
-//   } catch (error) {
-//     res.status(500).json({ message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।", error: error.message });
-//   }
-// };
-
-//       password: hashedPassword,
-//       role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user"
+//     res.status(201).json({ 
+//       token, 
+//       user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } 
 //     });
-
-//     await user.save();
-//     const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "7d" });
-//     res.status(201).json({ token, user });
 //   } catch (error) {
-//     res.status(500).json({ message: error.message });
+//     res.status(500).json({ message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।", error: error.message });
 //   }
 // };
 
-// // LOGIN
+// // --- LOGIN (ইমেইল ও পাসওয়ার্ড দিয়ে লগইন) ---
 // exports.login = async (req, res) => {
 //   try {
 //     const { email, password } = req.body;
 //     const user = await User.findOne({ email: email.toLowerCase().trim() });
 
+//     // ইউজার চেক এবং পাসওয়ার্ড ম্যাচিং (Model এর comparePassword মেথড ব্যবহার করে)
 //     if (!user || !(await user.comparePassword(password))) {
 //       return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
 //     }
 
 //     const token = generateToken(user);
     
-//     // 🌟 এখানে email: user.email যোগ করা হয়েছে
 //     res.json({ 
 //       token, 
 //       user: { 
 //         id: user._id, 
 //         full_name: user.full_name, 
-//         email: user.email, // এই লাইনটি যোগ করুন
+//         email: user.email, 
 //         role: user.role 
 //       } 
 //     });
@@ -497,18 +574,51 @@
 //     res.status(500).json({ message: "লগইনে সমস্যা হয়েছে।" });
 //   }
 // };
+
+// // --- GOOGLE AUTH (গুগল দিয়ে লগইন বা অ্যাকাউন্ট তৈরি) ---
+// exports.googleAuth = async (req, res) => {
+//   try {
+//     const { name, email } = req.body;
+//     const cleanEmail = email.toLowerCase().trim();
+    
+//     let user = await User.findOne({ email: cleanEmail });
+
+//     // ইউজার না থাকলে নতুন প্রোফাইল তৈরি (এটি ভালো কারণ ইউজারের সময় বাঁচে)
+//     if (!user) {
+//       user = await User.create({
+//         full_name: name,
+//         email: cleanEmail,
+//         password: Math.random().toString(36).slice(-10), // র‍্যান্ডম পাসওয়ার্ড
+//         role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user"
+//       });
+//     }
+
+//     const token = generateToken(user);
+    
+//     res.json({ 
+//       token, 
+//       user: { 
+//         id: user._id, 
+//         full_name: user.full_name, 
+//         email: user.email, 
+//         role: user.role 
+//       } 
+//     });
+//   } catch (error) {
+//     console.error("Google Auth Error:", error);
+//     res.status(500).json({ message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
+//   }
+// };
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
 
 /**
- * কমন টোকেন জেনারেটর ফাংশন
- * এটি ভালো কারণ টোকেন লজিক এক জায়গায় থাকলে মেইনটেইন করা সহজ হয়।
+ * ১. কমন টোকেন জেনারেটর
  */
 const generateToken = (user) => {
   return jwt.sign(
     { id: user._id, role: user.role }, 
-    process.env.JWT_SECRET || 'fallback_secret', 
+    process.env.JWT_SECRET, // fallback সরানো হয়েছে (env রিকোয়ার্ড)
     { expiresIn: '7d' }
   );
 };
@@ -519,20 +629,19 @@ exports.register = async (req, res) => {
     const { full_name, email, password } = req.body;
     const cleanEmail = email.toLowerCase().trim();
 
-    // ১. চেক করা ইমেইলটি আগে থেকে আছে কি না
+    // চেক করা ইমেইলটি আগে থেকে আছে কি না
     const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
         return res.status(400).json({ message: "ইমেইলটি ইতিমধ্যে ব্যবহৃত।" });
     }
 
-    // ২. পাসওয়ার্ড হ্যাশিং (মডেলে সেভ করার আগে সিকিউরিটি)
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
+    /** * 🌟 ফিক্স: এখানে ম্যানুয়াল হ্যাশিং বাদ দেওয়া হয়েছে। 
+     * User Model এর pre-save হুক এটি অটোমেটিক হ্যান্ডেল করবে।
+     */
     const user = new User({
       full_name,
       email: cleanEmail,
-      password: hashedPassword, 
+      password: password, // সরাসরি প্লেইন টেক্সট পাস করুন, মডেল হ্যাশ করে নেবে
       role: cleanEmail === 'bisalsaha42@gmail.com' ? 'super_admin' : 'user'
     });
 
@@ -548,13 +657,17 @@ exports.register = async (req, res) => {
   }
 };
 
-// --- LOGIN (ইমেইল ও পাসওয়ার্ড দিয়ে লগইন) ---
+// --- LOGIN ---
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: "ইমেইল এবং পাসওয়ার্ড প্রয়োজন।" });
+    }
+
     const user = await User.findOne({ email: email.toLowerCase().trim() });
 
-    // ইউজার চেক এবং পাসওয়ার্ড ম্যাচিং (Model এর comparePassword মেথড ব্যবহার করে)
+    // comparePassword মেথডটি এখন হ্যাশড পাসওয়ার্ডের সাথে সঠিকভাবে ম্যাচ করবে
     if (!user || !(await user.comparePassword(password))) {
       return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
     }
@@ -575,20 +688,23 @@ exports.login = async (req, res) => {
   }
 };
 
-// --- GOOGLE AUTH (গুগল দিয়ে লগইন বা অ্যাকাউন্ট তৈরি) ---
+// --- GOOGLE AUTH ---
 exports.googleAuth = async (req, res) => {
   try {
-    const { name, email } = req.body;
+    const { name, email, googleId } = req.body; // googleId যোগ করা হয়েছে
     const cleanEmail = email.toLowerCase().trim();
     
     let user = await User.findOne({ email: cleanEmail });
 
-    // ইউজার না থাকলে নতুন প্রোফাইল তৈরি (এটি ভালো কারণ ইউজারের সময় বাঁচে)
     if (!user) {
+      /**
+       * 🌟 স্কেলেবল লজিক: গুগল ইউজারের জন্য র‍্যান্ডম পাসওয়ার্ড এবং googleId স্টোর করা
+       */
       user = await User.create({
         full_name: name,
         email: cleanEmail,
-        password: Math.random().toString(36).slice(-10), // র‍্যান্ডম পাসওয়ার্ড
+        googleId: googleId || 'google-auth',
+        password: Math.random().toString(36).slice(-10) + Date.now(), 
         role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user"
       });
     }
@@ -606,6 +722,6 @@ exports.googleAuth = async (req, res) => {
     });
   } catch (error) {
     console.error("Google Auth Error:", error);
-    res.status(500).json({ message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
+    res.status(500).json({ message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
   }
 };

@@ -1,25 +1,42 @@
+/**
+ * Admin Authorization Middleware
+ * Ensures the user has 'admin' or 'super_admin' privileges.
+ */
 const adminAuth = (req, res, next) => {
   try {
-    // ১. req.user অবজেক্টটি নিশ্চিত করা (এটি আপনার 'auth' মিডলওয়্যার থেকে আসবে)
+    // 1. Verify req.user existence (Injected by the 'auth' middleware)
     if (!req.user) {
-      return res.status(401).json({ message: "অপ্রমাণিত ইউজার! দয়া করে আগে লগইন করুন।" });
+      return res.status(401).json({ 
+        success: false,
+        message: "Unauthorized! Please log in first." 
+      });
     }
 
-    // ২. রোল চেক করা (এখানে 'admin' এবং 'super_admin' উভয়কেই অনুমতি দিতে হবে)
-    const userRole = req.user.role?.toLowerCase();
-    
+    // 2. Role validation
+    // Using optional chaining and ensuring exact match with your Model Enums
+    const userRole = req.user.role; 
+
     if (userRole === 'admin' || userRole === 'super_admin') {
-      return next(); // ✅ অনুমতি দেওয়া হলো
+      return next(); // ✅ Access granted
     }
 
-    // ৩. এক্সেস ডিনাইড করা
+    // 3. Access Denied (Forbidden)
+    // Used when the user is authenticated but lacks required permissions
     return res.status(403).json({ 
+      success: false,
       error: "Access Forbidden", 
-      message: "আপনার এই অ্যাডমিন প্যানেলে প্রবেশের অনুমতি নেই।" 
+      message: "You do not have permission to access the admin panel." 
     });
+
   } catch (error) {
-    console.error("Admin Auth Error:", error);
-    res.status(500).json({ error: "সার্ভারে সমস্যা হয়েছে (Admin Middleware)" });
+    // Log error with context for easier debugging in production
+    console.error("Admin Auth Middleware Error:", error.message);
+    
+    return res.status(500).json({ 
+      success: false,
+      error: "Internal Server Error",
+      message: "An error occurred during administrative verification." 
+    });
   }
 };
 
