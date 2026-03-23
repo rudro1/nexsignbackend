@@ -8197,43 +8197,76 @@ router.get('/sign/:token', async (req, res) => {
 //     response.data.pipe(res);
 //   } catch (err) { res.status(404).send("File not found"); }
 // });
-router.get('/proxy/*', async (req, res) => {
+// router.get('/proxy/*', async (req, res) => {
+//   try {
+//     const cloudPath = req.params[0];
+//     if (!cloudPath) return res.status(400).send("Path is required");
+
+//     // 🌟 ফিক্স: নির্দিষ্ট অরিজিন সেট করা (CORS Error দূর করবে)
+//     const allowedOrigins = ['https://nexsignfrontend.vercel.app', 'http://localhost:5173'];
+//     const origin = req.headers.origin;
+    
+//     if (allowedOrigins.includes(origin)) {
+//       res.setHeader('Access-Control-Allow-Origin', origin);
+//       res.setHeader('Access-Control-Allow-Credentials', 'true');
+//     }
+
+//     const resourceTypes = ['image', 'raw'];
+    
+//     for (const type of resourceTypes) {
+//       try {
+//         const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/${type}/upload/${cloudPath}`;
+        
+//         const response = await axios.get(url, { 
+//           responseType: 'stream',
+//           timeout: 10000 
+//         });
+
+//         // ব্রাউজারকে জানানো এটি একটি পিডিএফ
+//         res.setHeader('Content-Type', 'application/pdf');
+//         return response.data.pipe(res);
+//       } catch (e) {
+//         continue; 
+//       }
+//     }
+
+//     res.status(404).send("PDF not found on Cloudinary storage");
+//   } catch (err) {
+//     console.error("Proxy Server Error:", err.message);
+//     res.status(500).send("Internal server error during PDF proxying");
+//   }
+// });
+
+router.get('/proxy/:path(*)', async (req, res) => { // :path(*) সবটুকু অংশ ক্যাপচার করবে
   try {
-    const cloudPath = req.params[0];
+    const cloudPath = req.params.path; // সরাসরি পাথটি নিন
     if (!cloudPath) return res.status(400).send("Path is required");
 
-    // 🌟 ফিক্স: নির্দিষ্ট অরিজিন সেট করা (CORS Error দূর করবে)
+    // CORS হ্যান্ডলিং (সঠিকভাবে)
     const allowedOrigins = ['https://nexsignfrontend.vercel.app', 'http://localhost:5173'];
     const origin = req.headers.origin;
-    
     if (allowedOrigins.includes(origin)) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
 
-    const resourceTypes = ['image', 'raw'];
+    // Cloudinary URL জেনারেট করা
+    // টিপস: সাধারণত PDF 'raw' টাইপে থাকে। 
+    const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${cloudPath}`;
     
-    for (const type of resourceTypes) {
-      try {
-        const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/${type}/upload/${cloudPath}`;
-        
-        const response = await axios.get(url, { 
-          responseType: 'stream',
-          timeout: 10000 
-        });
+    console.log("Fetching from Cloudinary:", url);
 
-        // ব্রাউজারকে জানানো এটি একটি পিডিএফ
-        res.setHeader('Content-Type', 'application/pdf');
-        return response.data.pipe(res);
-      } catch (e) {
-        continue; 
-      }
-    }
+    const response = await axios.get(url, { 
+      responseType: 'stream',
+      timeout: 15000 
+    });
 
-    res.status(404).send("PDF not found on Cloudinary storage");
+    res.setHeader('Content-Type', 'application/pdf');
+    return response.data.pipe(res);
+
   } catch (err) {
-    console.error("Proxy Server Error:", err.message);
-    res.status(500).send("Internal server error during PDF proxying");
+    console.error("Proxy Error:", err.message);
+    res.status(404).send("PDF not found or Cloudinary error");
   }
 });
 // ৭. ডাইনামিক আইডি রাউট (অবশ্যই সবার শেষে)
