@@ -7831,109 +7831,109 @@ router.post('/upload-metadata', auth, async (req, res) => {
   }
 });
 // ৩. সাইনিং লিঙ্ক পাঠানো
-router.post('/send', auth, async (req, res) => {
-  try {
-    const doc = await Document.findOne({ _id: req.body.id, owner: req.user.id });
-    if (!doc) return res.status(404).json({ error: "Not found" });
-    const token = crypto.randomBytes(32).toString('hex');
-    doc.parties[0].token = token;
-    doc.parties[0].status = 'sent';
-    doc.status = 'in_progress';
-    doc.currentPartyIndex = 0;
-    doc.markModified('parties');
-    await doc.save();
-    await sendSigningEmail(doc.parties[0], doc.title, token,doc);
-    res.json({ success: true, signLink: `${process.env.FRONTEND_URL}/sign?token=${token}` });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+// router.post('/send', auth, async (req, res) => {
+//   try {
+//     const doc = await Document.findOne({ _id: req.body.id, owner: req.user.id });
+//     if (!doc) return res.status(404).json({ error: "Not found" });
+//     const token = crypto.randomBytes(32).toString('hex');
+//     doc.parties[0].token = token;
+//     doc.parties[0].status = 'sent';
+//     doc.status = 'in_progress';
+//     doc.currentPartyIndex = 0;
+//     doc.markModified('parties');
+//     await doc.save();
+//     await sendSigningEmail(doc.parties[0], doc.title, token,doc);
+//     res.json({ success: true, signLink: `${process.env.FRONTEND_URL}/sign?token=${token}` });
+//   } catch (err) { res.status(500).json({ error: err.message }); }
+// });
 
-router.post('/sign/submit', async (req, res) => {
-  try {
-    const { token, fields: incomingFields } = req.body;
+// router.post('/sign/submit', async (req, res) => {
+//   try {
+//     const { token, fields: incomingFields } = req.body;
     
-    // ১. ডকুমেন্ট খুঁজে বের করা
-    const doc = await Document.findOne({ "parties.token": token });
-    if (!doc) return res.status(404).json({ error: "Invalid link or session expired" });
+//     // ১. ডকুমেন্ট খুঁজে বের করা
+//     const doc = await Document.findOne({ "parties.token": token });
+//     if (!doc) return res.status(404).json({ error: "Invalid link or session expired" });
 
-    const idx = doc.parties.findIndex(p => p.token === token);
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+//     const idx = doc.parties.findIndex(p => p.token === token);
+//     const userAgent = req.headers['user-agent'] || 'Unknown Device';
     
-    // ২. নির্ভরযোগ্য আইপি ডিটেকশন
-    const ip = (
-      req.headers['x-real-ip'] || 
-      req.headers['x-forwarded-for']?.split(',')[0] || 
-      req.socket.remoteAddress || 
-      '127.0.0.1'
-    ).trim();
+//     // ২. নির্ভরযোগ্য আইপি ডিটেকশন
+//     const ip = (
+//       req.headers['x-real-ip'] || 
+//       req.headers['x-forwarded-for']?.split(',')[0] || 
+//       req.socket.remoteAddress || 
+//       '127.0.0.1'
+//     ).trim();
 
-    // ৩. জিও-লোকেশন ফেচ করা
-    let locationData = "Unknown Location";
-    if (ip !== '127.0.0.1' && ip !== '::1') {
-      try {
-        const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 2500 });
-        if (locRes.data?.status === 'success') {
-          locationData = `${locRes.data.city}, ${locRes.data.regionName}, ${locRes.data.country}`;
-        }
-      } catch (locErr) {
-        console.error("Geo-location fallback initiated:", locErr.message);
-      }
-    }
+//     // ৩. জিও-লোকেশন ফেচ করা
+//     let locationData = "Unknown Location";
+//     if (ip !== '127.0.0.1' && ip !== '::1') {
+//       try {
+//         const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 2500 });
+//         if (locRes.data?.status === 'success') {
+//           locationData = `${locRes.data.city}, ${locRes.data.regionName}, ${locRes.data.country}`;
+//         }
+//       } catch (locErr) {
+//         console.error("Geo-location fallback initiated:", locErr.message);
+//       }
+//     }
 
-    // ৪. ডকুমেন্টের তথ্য আপডেট
-    doc.fields = incomingFields;
-    doc.parties[idx].status = 'signed';
-    doc.parties[idx].signedAt = new Date();
-    doc.parties[idx].device = userAgent;
-    doc.parties[idx].ipAddress = ip;
-    doc.parties[idx].location = locationData;
+//     // ৪. ডকুমেন্টের তথ্য আপডেট
+//     doc.fields = incomingFields;
+//     doc.parties[idx].status = 'signed';
+//     doc.parties[idx].signedAt = new Date();
+//     doc.parties[idx].device = userAgent;
+//     doc.parties[idx].ipAddress = ip;
+//     doc.parties[idx].location = locationData;
 
-    // ৫. অডিট লগ এন্ট্রি
-    await AuditLog.create({
-      document_id: doc._id,
-      action: 'signed',
-      performed_by: { 
-        name: doc.parties[idx].name, 
-        email: doc.parties[idx].email, 
-        role: 'signer' 
-      },
-      ip_address: ip,
-      user_agent: userAgent,
-      details: `Digitally signed from ${locationData}.`
-    });
+//     // ৫. অডিট লগ এন্ট্রি
+//     await AuditLog.create({
+//       document_id: doc._id,
+//       action: 'signed',
+//       performed_by: { 
+//         name: doc.parties[idx].name, 
+//         email: doc.parties[idx].email, 
+//         role: 'signer' 
+//       },
+//       ip_address: ip,
+//       user_agent: userAgent,
+//       details: `Digitally signed from ${locationData}.`
+//     });
 
-    doc.markModified('fields'); 
-    doc.markModified('parties');
+//     doc.markModified('fields'); 
+//     doc.markModified('parties');
 
-    // ৬. পরবর্তী সাইনার বা সমাপ্তি লজিক
-    if (idx + 1 < doc.parties.length) {
-      // পরবর্তী সাইনার আছে
-      const nextToken = crypto.randomBytes(32).toString('hex');
-      doc.parties[idx + 1].token = nextToken;
-      doc.parties[idx + 1].status = 'sent';
-      doc.currentPartyIndex = idx + 1;
+//     // ৬. পরবর্তী সাইনার বা সমাপ্তি লজিক
+//     if (idx + 1 < doc.parties.length) {
+//       // পরবর্তী সাইনার আছে
+//       const nextToken = crypto.randomBytes(32).toString('hex');
+//       doc.parties[idx + 1].token = nextToken;
+//       doc.parties[idx + 1].status = 'sent';
+//       doc.currentPartyIndex = idx + 1;
       
-      await doc.save();
-      await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken,doc); 
-      return res.json({ next: true });
-    } else {
-      // শেষ সাইনার, ডকুমেন্ট সম্পন্ন
-      doc.status = 'completed';
-      doc.currentPartyIndex = idx;
-      await doc.save(); 
+//       await doc.save();
+//       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken,doc); 
+//       return res.json({ next: true });
+//     } else {
+//       // শেষ সাইনার, ডকুমেন্ট সম্পন্ন
+//       doc.status = 'completed';
+//       doc.currentPartyIndex = idx;
+//       await doc.save(); 
 
-      // 🌟 গুরুত্বপূর্ণ: ডাটাবেস থেকে একদম লেটেস্ট কপি নিয়ে সার্টিফিকেট বানানো
-      const finalDoc = await Document.findById(doc._id);
+//       // 🌟 গুরুত্বপূর্ণ: ডাটাবেস থেকে একদম লেটেস্ট কপি নিয়ে সার্টিফিকেট বানানো
+//       const finalDoc = await Document.findById(doc._id);
       
-      // ব্যাকগ্রাউন্ডে প্রসেস না করে await করা ভালো যাতে রেসপন্স নিশ্চিত হয়
-      await generateAndSendFinalDoc(finalDoc); 
+//       // ব্যাকগ্রাউন্ডে প্রসেস না করে await করা ভালো যাতে রেসপন্স নিশ্চিত হয়
+//       await generateAndSendFinalDoc(finalDoc); 
       
-      return res.json({ completed: true });
-    }
-  } catch (err) { 
-    console.error("Signature Submission Error:", err);
-    res.status(500).json({ error: "Failed to process signature" }); 
-  }
-});
+//       return res.json({ completed: true });
+//     }
+//   } catch (err) { 
+//     console.error("Signature Submission Error:", err);
+//     res.status(500).json({ error: "Failed to process signature" }); 
+//   }
+// });
 
 // ৫. সাইনিং পেজের ডেটা লোড
 // fix for error the snap 
@@ -8033,6 +8033,150 @@ router.post('/sign/submit', async (req, res) => {
 //   }
 // });
 
+
+
+
+router.post('/send', auth, async (req, res) => {
+  try {
+    // ১. ডকুমেন্ট এবং ওনার ভেরিফিকেশন
+    const doc = await Document.findOne({ _id: req.body.id, owner: req.user.id });
+    if (!doc) return res.status(404).json({ error: "Document not found" });
+
+    // ২. চেক করুন ডকুমেন্ট অলরেডি পাঠানো হয়েছে কি না (ডুপ্লিকেট সেন্ডিং রোধ)
+    if (doc.status !== 'draft') {
+      return res.status(400).json({ error: "Document is already sent or completed" });
+    }
+
+    if (!doc.parties || doc.parties.length === 0) {
+      return res.status(400).json({ error: "No signers defined for this document" });
+    }
+
+    // ৩. প্রথম সাইনারের জন্য টোকেন এবং স্ট্যাটাস সেট করা
+    const token = crypto.randomBytes(32).toString('hex');
+    
+    // প্রথম পার্টির ইনডেক্স ০ ধরে কাজ করা
+    doc.parties[0].token = token;
+    doc.parties[0].status = 'sent';
+    doc.parties[0].sentAt = new Date(); // অডিট ট্রেইলের জন্য সময় রাখা ভালো
+
+    doc.status = 'in_progress';
+    doc.currentPartyIndex = 0;
+
+    // ৪. ডাটাবেসে সেভ করা (markModified প্রয়োজন কারণ parties একটি Array/Object)
+    doc.markModified('parties');
+    await doc.save();
+
+    // ৫. ইমেইল পাঠানো (এটি ব্যাকগ্রাউন্ডে পাঠানোই ভালো যাতে রেসপন্স দ্রুত হয়)
+    // await না করে সরাসরি কল করুন যদি আপনার মেইলার ফাংশন সেটি সাপোর্ট করে
+    sendSigningEmail(doc.parties[0], doc.title, token, doc)
+      .catch(mailErr => console.error("Initial Email Error:", mailErr));
+
+    // ৬. সাকসেস রেসপন্স
+    res.json({ 
+      success: true, 
+      message: "Document sent to the first signer.",
+      signLink: `${process.env.FRONTEND_URL}/sign?token=${token}` 
+    });
+
+  } catch (err) { 
+    console.error("Send Route Error:", err);
+    res.status(500).json({ error: "Internal Server Error" }); 
+  }
+});
+router.post('/sign/submit', async (req, res) => {
+  try {
+    const { token, fields: incomingFields } = req.body;
+    
+    // ১. ডকুমেন্ট এবং সাইনার খুঁজে বের করা
+    const doc = await Document.findOne({ "parties.token": token });
+    if (!doc) return res.status(404).json({ error: "Invalid link or session expired" });
+
+    const idx = doc.parties.findIndex(p => p.token === token);
+    
+    // যদি অলরেডি সাইন করা থাকে তবে নতুন করে প্রসেস করার দরকার নেই
+    if (doc.parties[idx].status === 'signed') {
+        return res.json({ already_signed: true, completed: doc.status === 'completed' });
+    }
+
+    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+    const ip = (req.headers['x-real-ip'] || req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1').trim();
+
+    // ২. জিও-লোকেশন (Non-blocking)
+    let locationData = "Unknown Location";
+    if (ip !== '127.0.0.1' && ip !== '::1') {
+      try {
+        const locRes = await axios.get(`http://ip-api.com/json/${ip}`, { timeout: 2000 }); // Timeout কমিয়ে ২ সেকেন্ড করা হয়েছে
+        if (locRes.data?.status === 'success') {
+          locationData = `${locRes.data.city}, ${locRes.data.regionName}, ${locRes.data.country}`;
+        }
+      } catch (locErr) {
+        console.error("Geo-location Error:", locErr.message);
+      }
+    }
+
+    // ৩. ডকুমেন্ট আপডেট
+    doc.fields = incomingFields;
+    doc.parties[idx].status = 'signed';
+    doc.parties[idx].signedAt = new Date();
+    doc.parties[idx].device = userAgent;
+    doc.parties[idx].ipAddress = ip;
+    doc.parties[idx].location = locationData;
+
+    // অডিট লগ
+    await AuditLog.create({
+      document_id: doc._id,
+      action: 'signed',
+      performed_by: { name: doc.parties[idx].name, email: doc.parties[idx].email, role: 'signer' },
+      ip_address: ip,
+      user_agent: userAgent,
+      details: `Digitally signed from ${locationData}.`
+    });
+
+    doc.markModified('fields'); 
+    doc.markModified('parties');
+
+    // ৪. নেক্সট স্টেপ লজিক
+    if (idx + 1 < doc.parties.length) {
+      // পরবর্তী সাইনার আছে
+      const nextToken = crypto.randomBytes(32).toString('hex');
+      doc.parties[idx + 1].token = nextToken;
+      doc.parties[idx + 1].status = 'sent';
+      doc.currentPartyIndex = idx + 1;
+      
+      await doc.save();
+      
+      // ইমেইলটি পাঠিয়ে সাথে সাথে রেসপন্স দিন
+      sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken, doc); 
+      return res.json({ next: true });
+
+    } else {
+      // শেষ সাইনার - ডকুমেন্ট সম্পন্ন
+      doc.status = 'completed';
+      doc.currentPartyIndex = idx;
+      await doc.save(); 
+
+      // 🌟 ৫. স্পিড অপ্টিমাইজেশন: আগে রেসপন্স দিন, ব্যাকগ্রাউন্ডে সার্টিফিকেট পাঠান
+      res.json({ completed: true });
+
+      // রেসপন্স দেওয়ার পর এই হেভি প্রসেসটি চলবে
+      setImmediate(async () => {
+        try {
+          const finalDoc = await Document.findById(doc._id);
+          await generateAndSendFinalDoc(finalDoc);
+          console.log(`Document ${doc._id} finalized and emails sent.`);
+        } catch (err) {
+          console.error("Finalization Error (Background):", err);
+        }
+      });
+      return;
+    }
+  } catch (err) { 
+    console.error("Signature Submission Error:", err);
+    if (!res.headersSent) {
+        res.status(500).json({ error: "Failed to process signature" }); 
+    }
+  }
+});
 
 router.get('/sign/:token', async (req, res) => {
   try {
