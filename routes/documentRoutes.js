@@ -7609,10 +7609,10 @@ const generateAndSendFinalDoc = async (doc) => {
 // ১. ড্যাশবোর্ড ডেটা
 //workable
 
-const sendSigningEmail = async (party, docTitle, token) => {
+const sendSigningEmail = async (party, docTitle, token,doc) => {
   const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
   const signLink = `${baseUrl}/sign?token=${token}`;
-  
+  const senderName = doc?.senderMeta?.name || "A NexSign User";
   // 🌟 আপনার ব্র্যান্ড কালার
   const brandColor = "#28ABDF"; 
 
@@ -7842,7 +7842,7 @@ router.post('/send', auth, async (req, res) => {
     doc.currentPartyIndex = 0;
     doc.markModified('parties');
     await doc.save();
-    await sendSigningEmail(doc.parties[0], doc.title, token);
+    await sendSigningEmail(doc.parties[0], doc.title, token,doc);
     res.json({ success: true, signLink: `${process.env.FRONTEND_URL}/sign?token=${token}` });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -7913,7 +7913,7 @@ router.post('/sign/submit', async (req, res) => {
       doc.currentPartyIndex = idx + 1;
       
       await doc.save();
-      await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken); 
+      await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken,doc); 
       return res.json({ next: true });
     } else {
       // শেষ সাইনার, ডকুমেন্ট সম্পন্ন
