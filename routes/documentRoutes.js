@@ -6963,7 +6963,15 @@ const mergeSignatures = async (doc) => {
           sigImg = await pdfDoc.embedJpg(imgBuffer);
         }
         
-        page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH });
+        // page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH }); 
+        // এই অংশটুকু পরিবর্তন করুন
+page.drawImage(sigImg, { 
+  x: drawX, 
+  y: drawY, 
+  width: drawW, 
+  height: drawH,
+  opacity: 1 // এটি নিশ্চিত করে ইমেজের স্বচ্ছ অংশ স্বচ্ছই থাকবে
+});
       } else {
         page.drawText(String(fd.value), {
           x: drawX + 2, 
