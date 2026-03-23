@@ -2380,10 +2380,10 @@ const helmet = require('helmet');
 
 const app = express();
 
-// ১. ট্রাস্ট প্রক্সি (Vercel-এর রেট লিমিটের জন্য জরুরি)
+// ১. Vercel-এর জন্য প্রক্সি ট্রাস্ট করা
 app.set('trust proxy', 1);
 
-// ২. হেলমেট কনফিগারেশন
+// ২. সিকিউরিটি মিডলওয়্যার
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: false,
@@ -2395,7 +2395,9 @@ const allowedOrigins = [
   'https://nexsignfrontend-git-main-bisal-sahas-projects.vercel.app'
 ];
 
-// ৩. CORS হেডার লজিক (Manual + Middleware)
+/**
+ * ৩. গ্লোবাল CORS এবং Preflight হ্যান্ডলার (সবকিছুর উপরে থাকবে)
+ */
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
@@ -2405,7 +2407,7 @@ app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
 
-  // 🌟 Preflight রিকোয়েস্ট সরাসরি এখানেই শেষ করুন (ডাটাবেস কানেকশনের আগে)
+  // 🌟 এটিই আসল ফিক্স: OPTIONS রিকোয়েস্ট আসলে ডাটাবেসে যাওয়ার আগেই ২০০ পাঠিয়ে দিন
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -2416,25 +2418,35 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 /**
- * ৪. ডাটাবেস কানেকশন (Optimized)
+ * ৪. ডাটাবেস কানেকশন লজিক (Cached)
  */
 const connectDB = async () => {
   if (mongoose.connection.readyState >= 1) return;
   try {
-    await mongoose.connect(process.env.MONGO_URI);
+    await mongoose.connect(process.env.MONGO_URI, {
+      serverSelectionTimeoutMS: 5000, // ৫ সেকেন্ডের বেশি সময় নিলে এরর দিবে
+    });
     console.log('✅ MongoDB Connected');
   } catch (err) {
-    console.error('❌ DB Error:', err.message);
+    console.error('❌ MongoDB Connection Error:', err.message);
   }
 };
 
-// ৫. রাউটস (মডেল ইমপোর্ট রাউটের ভেতরে বা উপরে রাখুন)
-app.use('/api/auth', async (req, res, next) => { await connectDB(); next(); }, require('./routes/authRoutes'));      
-app.use('/api/documents', async (req, res, next) => { await connectDB(); next(); }, require('./routes/documentRoutes'));
-app.use('/api/admin', async (req, res, next) => { await connectDB(); next(); }, require('./routes/adminRoutes'));
-app.use('/api/feedback', async (req, res, next) => { await connectDB(); next(); }, require('./routes/feedbackRoutes'));
+/**
+ * ৫. রাউটস (Middleware-এর মাধ্যমে DB কানেক্ট করা)
+ */
+const dbMiddleware = async (req, res, next) => {
+  await connectDB();
+  next();
+};
 
 app.get('/', (req, res) => res.send('NexSign Server is Online 🚀'));
+
+// সব এপিআই রাউটে dbMiddleware যোগ করা হয়েছে
+app.use('/api/auth', dbMiddleware, require('./routes/authRoutes'));      
+app.use('/api/documents', dbMiddleware, require('./routes/documentRoutes'));
+app.use('/api/admin', dbMiddleware, require('./routes/adminRoutes'));
+app.use('/api/feedback', dbMiddleware, require('./routes/feedbackRoutes'));
 
 app.get('/api/health', async (req, res) => {
   await connectDB();
@@ -2444,9 +2456,11 @@ app.get('/api/health', async (req, res) => {
   });
 });
 
-// ৬. গ্লোবাল এরর হ্যান্ডলার
+/**
+ * ৬. গ্লোবাল এরর হ্যান্ডলার
+ */
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  console.error("Critical Error:", err.stack);
   res.status(500).json({ error: "Internal Server Error" });
 });
 
