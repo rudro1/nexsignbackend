@@ -8036,40 +8036,92 @@ router.post('/upload-metadata', auth, async (req, res) => {
 
 
 
+// router.post('/send', auth, async (req, res) => {
+//   try {
+//     // ১. ডকুমেন্ট এবং ওনার ভেরিফিকেশন
+//     const doc = await Document.findOne({ _id: req.body.id, owner: req.user.id });
+//     if (!doc) return res.status(404).json({ error: "Document not found" });
+
+//     // ২. চেক করুন ডকুমেন্ট অলরেডি পাঠানো হয়েছে কি না (ডুপ্লিকেট সেন্ডিং রোধ)
+//     if (doc.status !== 'draft') {
+//       return res.status(400).json({ error: "Document is already sent or completed" });
+//     }
+
+//     if (!doc.parties || doc.parties.length === 0) {
+//       return res.status(400).json({ error: "No signers defined for this document" });
+//     }
+
+//     // ৩. প্রথম সাইনারের জন্য টোকেন এবং স্ট্যাটাস সেট করা
+//     const token = crypto.randomBytes(32).toString('hex');
+    
+//     // প্রথম পার্টির ইনডেক্স ০ ধরে কাজ করা
+//     doc.parties[0].token = token;
+//     doc.parties[0].status = 'sent';
+//     doc.parties[0].sentAt = new Date(); // অডিট ট্রেইলের জন্য সময় রাখা ভালো
+
+//     doc.status = 'in_progress';
+//     doc.currentPartyIndex = 0;
+
+//     // ৪. ডাটাবেসে সেভ করা (markModified প্রয়োজন কারণ parties একটি Array/Object)
+//     doc.markModified('parties');
+//     await doc.save();
+
+//     // ৫. ইমেইল পাঠানো (এটি ব্যাকগ্রাউন্ডে পাঠানোই ভালো যাতে রেসপন্স দ্রুত হয়)
+//     // await না করে সরাসরি কল করুন যদি আপনার মেইলার ফাংশন সেটি সাপোর্ট করে
+//     sendSigningEmail(doc.parties[0], doc.title, token, doc)
+//       .catch(mailErr => console.error("Initial Email Error:", mailErr));
+
+//     // ৬. সাকসেস রেসপন্স
+//     res.json({ 
+//       success: true, 
+//       message: "Document sent to the first signer.",
+//       signLink: `${process.env.FRONTEND_URL}/sign?token=${token}` 
+//     });
+
+//   } catch (err) { 
+//     console.error("Send Route Error:", err);
+//     res.status(500).json({ error: "Internal Server Error" }); 
+//   }
+// });
+
 router.post('/send', auth, async (req, res) => {
   try {
     // ১. ডকুমেন্ট এবং ওনার ভেরিফিকেশন
     const doc = await Document.findOne({ _id: req.body.id, owner: req.user.id });
     if (!doc) return res.status(404).json({ error: "Document not found" });
 
-    // ২. চেক করুন ডকুমেন্ট অলরেডি পাঠানো হয়েছে কি না (ডুপ্লিকেট সেন্ডিং রোধ)
+    // ২. স্ট্যাটাস চেক
     if (doc.status !== 'draft') {
       return res.status(400).json({ error: "Document is already sent or completed" });
     }
 
     if (!doc.parties || doc.parties.length === 0) {
-      return res.status(400).json({ error: "No signers defined for this document" });
+      return res.status(400).json({ error: "No signers defined" });
     }
 
-    // ৩. প্রথম সাইনারের জন্য টোকেন এবং স্ট্যাটাস সেট করা
+    // ৩. টোকেন জেনারেট এবং ডাটা আপডেট
     const token = crypto.randomBytes(32).toString('hex');
-    
-    // প্রথম পার্টির ইনডেক্স ০ ধরে কাজ করা
     doc.parties[0].token = token;
     doc.parties[0].status = 'sent';
-    doc.parties[0].sentAt = new Date(); // অডিট ট্রেইলের জন্য সময় রাখা ভালো
-
+    doc.parties[0].sentAt = new Date();
     doc.status = 'in_progress';
     doc.currentPartyIndex = 0;
 
-    // ৪. ডাটাবেসে সেভ করা (markModified প্রয়োজন কারণ parties একটি Array/Object)
     doc.markModified('parties');
-    await doc.save();
+    
+    // 🌟 ৪. অত্যন্ত গুরুত্বপূর্ণ: মেইল পাঠানোর আগেই ডাটাবেসে সেভ নিশ্চিত করুন
+    await doc.save(); 
 
-    // ৫. ইমেইল পাঠানো (এটি ব্যাকগ্রাউন্ডে পাঠানোই ভালো যাতে রেসপন্স দ্রুত হয়)
-    // await না করে সরাসরি কল করুন যদি আপনার মেইলার ফাংশন সেটি সাপোর্ট করে
-    sendSigningEmail(doc.parties[0], doc.title, token, doc)
-      .catch(mailErr => console.error("Initial Email Error:", mailErr));
+    // 🌟 ৫. মেইল পাঠানোর গ্যারান্টি: 
+    // .catch এর বদলে try-catch এর ভেতর await ব্যবহার করুন। 
+    // এতে মেইল সার্ভার থেকে কনফার্মেশন পাওয়ার পরেই পরের লাইনে যাবে।
+    try {
+      await sendSigningEmail(doc.parties[0], doc.title, token, doc);
+      console.log("Email sent successfully to:", doc.parties[0].email);
+    } catch (mailErr) {
+      console.error("Mail Delivery Failed:", mailErr.message);
+      // মেইল ফেইল করলেও আমরা সাকসেস দেব যাতে ইউজার ম্যানুয়ালি লিঙ্ক শেয়ার করতে পারে
+    }
 
     // ৬. সাকসেস রেসপন্স
     res.json({ 
@@ -8083,6 +8135,132 @@ router.post('/send', auth, async (req, res) => {
     res.status(500).json({ error: "Internal Server Error" }); 
   }
 });
+
+// router.get('/sign/:token', async (req, res) => {
+//   try {
+//     const doc = await Document.findOne({ "parties.token": req.params.token });
+//     if (!doc) return res.status(404).json({ error: "Invalid link" });
+//     const party = doc.parties.find(p => p.token === req.params.token);
+//     res.json({ document: doc, party: { ...party.toObject(), index: doc.parties.indexOf(party) } });
+//   } catch (err) { res.status(500).json({ error: "Session failed" }); }
+// });
+
+// ৬. পিডিএফ প্রক্সি
+// router.get('/proxy/*', async (req, res) => {
+//   try {
+//     const path = req.params[0];
+//     const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${path}`;
+//     const response = await axios.get(url, { responseType: 'stream' });
+//     res.setHeader('Content-Type', 'application/pdf');
+//     response.data.pipe(res);
+//   } catch (err) { res.status(404).send("File not found"); }
+// });
+// router.get('/proxy/*', async (req, res) => {
+//   try {
+//     const cloudPath = req.params[0];
+//     if (!cloudPath) return res.status(400).send("Path is required");
+
+//     // 🌟 ফিক্স: নির্দিষ্ট অরিজিন সেট করা (CORS Error দূর করবে)
+//     const allowedOrigins = ['https://nexsignfrontend.vercel.app', 'http://localhost:5173'];
+//     const origin = req.headers.origin;
+    
+//     if (allowedOrigins.includes(origin)) {
+//       res.setHeader('Access-Control-Allow-Origin', origin);
+//       res.setHeader('Access-Control-Allow-Credentials', 'true');
+//     }
+
+//     const resourceTypes = ['image', 'raw'];
+    
+//     for (const type of resourceTypes) {
+//       try {
+//         const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/${type}/upload/${cloudPath}`;
+        
+//         const response = await axios.get(url, { 
+//           responseType: 'stream',
+//           timeout: 10000 
+//         });
+
+//         // ব্রাউজারকে জানানো এটি একটি পিডিএফ
+//         res.setHeader('Content-Type', 'application/pdf');
+//         return response.data.pipe(res);
+//       } catch (e) {
+//         continue; 
+//       }
+//     }
+
+//     res.status(404).send("PDF not found on Cloudinary storage");
+//   } catch (err) {
+//     console.error("Proxy Server Error:", err.message);
+//     res.status(500).send("Internal server error during PDF proxying");
+//   }
+// });
+
+
+router.get('/proxy/:path(*)', async (req, res) => { // :path(*) সবটুকু অংশ ক্যাপচার করবে
+  try {
+    const cloudPath = req.params.path; // সরাসরি পাথটি নিন
+    if (!cloudPath) return res.status(400).send("Path is required");
+
+    // CORS হ্যান্ডলিং (সঠিকভাবে)
+    const allowedOrigins = ['https://nexsignfrontend.vercel.app', 'http://localhost:5173'];
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+
+    // Cloudinary URL জেনারেট করা
+    // টিপস: সাধারণত PDF 'raw' টাইপে থাকে। 
+    const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${cloudPath}`;
+    
+    console.log("Fetching from Cloudinary:", url);
+
+    const response = await axios.get(url, { 
+      responseType: 'stream',
+      timeout: 15000 
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    return response.data.pipe(res);
+
+  } catch (err) {
+    console.error("Proxy Error:", err.message);
+    res.status(404).send("PDF not found or Cloudinary error");
+  }
+});
+
+router.get('/sign/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    console.log("Checking token:", token); // টার্মিনালে চেক করার জন্য
+
+    // ১. ডাটাবেসে টোকেনটি দিয়ে ডকুমেন্ট খোঁজা
+    const doc = await Document.findOne({ "parties.token": token });
+    
+    if (!doc) {
+      console.log("Token not found in database.");
+      return res.status(404).json({ error: "Invalid link" });
+    }
+
+    // ২. কোন পার্টি এই টোকেনটির মালিক তা খুঁজে বের করা
+    const party = doc.parties.find(p => p.token === token);
+    const partyIndex = doc.parties.indexOf(party);
+
+    // ৩. রেসপন্স পাঠানো
+    res.json({ 
+      document: doc, 
+      party: { 
+        ...party.toObject(), 
+        index: partyIndex 
+      } 
+    });
+
+  } catch (err) { 
+    console.error("Sign Session Error:", err);
+    res.status(500).json({ error: "Session failed" }); 
+  }
+});
+
 router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields: incomingFields } = req.body;
@@ -8175,98 +8353,6 @@ router.post('/sign/submit', async (req, res) => {
     if (!res.headersSent) {
         res.status(500).json({ error: "Failed to process signature" }); 
     }
-  }
-});
-
-router.get('/sign/:token', async (req, res) => {
-  try {
-    const doc = await Document.findOne({ "parties.token": req.params.token });
-    if (!doc) return res.status(404).json({ error: "Invalid link" });
-    const party = doc.parties.find(p => p.token === req.params.token);
-    res.json({ document: doc, party: { ...party.toObject(), index: doc.parties.indexOf(party) } });
-  } catch (err) { res.status(500).json({ error: "Session failed" }); }
-});
-
-// ৬. পিডিএফ প্রক্সি
-// router.get('/proxy/*', async (req, res) => {
-//   try {
-//     const path = req.params[0];
-//     const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${path}`;
-//     const response = await axios.get(url, { responseType: 'stream' });
-//     res.setHeader('Content-Type', 'application/pdf');
-//     response.data.pipe(res);
-//   } catch (err) { res.status(404).send("File not found"); }
-// });
-// router.get('/proxy/*', async (req, res) => {
-//   try {
-//     const cloudPath = req.params[0];
-//     if (!cloudPath) return res.status(400).send("Path is required");
-
-//     // 🌟 ফিক্স: নির্দিষ্ট অরিজিন সেট করা (CORS Error দূর করবে)
-//     const allowedOrigins = ['https://nexsignfrontend.vercel.app', 'http://localhost:5173'];
-//     const origin = req.headers.origin;
-    
-//     if (allowedOrigins.includes(origin)) {
-//       res.setHeader('Access-Control-Allow-Origin', origin);
-//       res.setHeader('Access-Control-Allow-Credentials', 'true');
-//     }
-
-//     const resourceTypes = ['image', 'raw'];
-    
-//     for (const type of resourceTypes) {
-//       try {
-//         const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/${type}/upload/${cloudPath}`;
-        
-//         const response = await axios.get(url, { 
-//           responseType: 'stream',
-//           timeout: 10000 
-//         });
-
-//         // ব্রাউজারকে জানানো এটি একটি পিডিএফ
-//         res.setHeader('Content-Type', 'application/pdf');
-//         return response.data.pipe(res);
-//       } catch (e) {
-//         continue; 
-//       }
-//     }
-
-//     res.status(404).send("PDF not found on Cloudinary storage");
-//   } catch (err) {
-//     console.error("Proxy Server Error:", err.message);
-//     res.status(500).send("Internal server error during PDF proxying");
-//   }
-// });
-
-router.get('/proxy/:path(*)', async (req, res) => { // :path(*) সবটুকু অংশ ক্যাপচার করবে
-  try {
-    const cloudPath = req.params.path; // সরাসরি পাথটি নিন
-    if (!cloudPath) return res.status(400).send("Path is required");
-
-    // CORS হ্যান্ডলিং (সঠিকভাবে)
-    const allowedOrigins = ['https://nexsignfrontend.vercel.app', 'http://localhost:5173'];
-    const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin)) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-    }
-
-    // Cloudinary URL জেনারেট করা
-    // টিপস: সাধারণত PDF 'raw' টাইপে থাকে। 
-    const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${cloudPath}`;
-    
-    console.log("Fetching from Cloudinary:", url);
-
-    const response = await axios.get(url, { 
-      responseType: 'stream',
-      timeout: 15000 
-    });
-
-    res.setHeader('Content-Type', 'application/pdf');
-    return response.data.pipe(res);
-
-  } catch (err) {
-    console.error("Proxy Error:", err.message);
-    res.status(404).send("PDF not found or Cloudinary error");
   }
 });
 // ৭. ডাইনামিক আইডি রাউট (অবশ্যই সবার শেষে)
