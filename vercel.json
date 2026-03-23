@@ -3,8 +3,7 @@
   "builds": [
     {
       "src": "index.js",
-      "use": "@vercel/node",
-      "config": { "maxDuration": 60 }
+      "use": "@vercel/node"
     }
   ],
   "headers": [
@@ -14,14 +13,12 @@
         { "key": "Access-Control-Allow-Credentials", "value": "true" },
         { "key": "Access-Control-Allow-Origin", "value": "https://nexsignfrontend.vercel.app" },
         { "key": "Access-Control-Allow-Methods", "value": "GET,OPTIONS,PATCH,DELETE,POST,PUT" },
-        { "key": "Access-Control-Allow-Headers", "value": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization" },
-        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin-allow-popups" },
-        { "key": "Cross-Origin-Resource-Policy", "value": "cross-origin" }
+        { "key": "Access-Control-Allow-Headers", "value": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization" }
       ]
     }
   ],
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "index.js" },
-    { "source": "/(.*)", "destination": "index.js" }
+    { "source": "/api/(.*)", "destination": "/index.js" },
+    { "source": "/(.*)", "destination": "/index.js" }
   ]
 }

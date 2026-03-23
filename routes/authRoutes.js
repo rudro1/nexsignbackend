@@ -16,40 +16,27 @@
 
 // module.exports = router;
 
-
 const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
 const { login, register, googleAuth } = require('../controllers/authController');
 
-/**
- * 1. Security: Rate Limiting
- * Prevents automated scripts from brute-forcing passwords or spamming registration.
- */
+// Rate Limiter কনফিগারেশন
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // Limit each IP to 20 requests per window
+  windowMs: 15 * 60 * 1000, 
+  max: 20, 
   message: {
     success: false,
-    message: "Too many attempts from this IP, please try again after 15 minutes."
+    message: "Too many attempts, please try again after 15 minutes."
   },
   standardHeaders: true,
   legacyHeaders: false,
+  // skip: (req) => req.method === 'OPTIONS', // OPTIONS রিকোয়েস্ট স্কিপ করা নিরাপদ
 });
 
-/**
- * 2. Routes
- */
-
-// POST /api/auth/login
-// We apply the limiter here specifically to protect against password guessing
+// Routes
 router.post('/login', authLimiter, login);
-
-// POST /api/auth/register
 router.post('/register', authLimiter, register);
-
-// POST /api/auth/google
-// Google Auth is generally safer, but limiting prevents account creation spam
 router.post('/google', authLimiter, googleAuth);
 
 module.exports = router;
