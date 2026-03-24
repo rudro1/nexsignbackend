@@ -2470,7 +2470,7 @@ const helmet = require('helmet');
 
 const app = express();
 
-// 1. Trust proxy for Vercel
+// 1. Essential Vercel Settings
 app.set('trust proxy', 1);
 
 // 2. Optimized CORS Configuration
@@ -2481,7 +2481,7 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl) or allowed domains
+    // Allow requests with no origin (like mobile apps) or allowed domains
     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
       return callback(null, true);
     }
@@ -2490,13 +2490,13 @@ const corsOptions = {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  optionsSuccessStatus: 204 // Standard for preflight success
+  optionsSuccessStatus: 200 // Changed to 200 for better Vercel compatibility
 };
 
-// Apply CORS middleware
+// Apply CORS globally
 app.use(cors(corsOptions));
 
-// 3. Handle Preflight OPTIONS requests for all routes
+// 3. IMPORTANT: Explicitly handle preflight requests
 app.options('*', cors(corsOptions));
 
 // 4. Security Middleware (configured to allow cross-origin requests)
@@ -2516,6 +2516,8 @@ const connectDB = async () => {
     return cachedDb;
   } catch (err) {
     console.error('❌ MongoDB Error:', err.message);
+    // Don't let the process hang on error
+    throw err;
   }
 };
 
@@ -2524,8 +2526,12 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Middleware to ensure DB connection
 app.use(async (req, res, next) => {
-  await connectDB();
-  next();
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    res.status(500).json({ error: "Database connection failed" });
+  }
 });
 
 // 6. Routes
@@ -2543,4 +2549,5 @@ app.use((err, req, res, next) => {
   });
 });
 
+// Export the app for Vercel - DO NOT USE app.listen()
 module.exports = app;
