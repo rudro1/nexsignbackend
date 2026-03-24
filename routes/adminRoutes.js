@@ -393,129 +393,235 @@ const AuditLog = require('../models/AuditLog');
 const auth = require('../middleware/auth');
 const adminAuth = require('../middleware/adminAuth');
 
+// ✅ Rate Limiting (Admin Abuse Prevention)
+const adminLimiter = require('express-rate-limit')({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 100, // 100 admin actions/hour
+  message: { success: false, message: 'Admin actions limited. Try again later.' }
+});
+
 /**
- * 1. User List (With Pagination & Scalability)
+ * 1. User List (Enhanced with Search & Filters)
  */
-router.get('/users', auth, adminAuth, async (req, res) => {
+router.get('/users', [auth, adminAuth, adminLimiter], async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(10, parseInt(req.query.limit) || 20));
     const skip = (page - 1) * limit;
+    const search = req.query.search?.trim() || '';
+
+    // ✅ Search + Filter
+    const query = search 
+      ? {
+          $or: [
+            { email: { $regex: search, $options: 'i' } },
+            { full_name: { $regex: search, $options: 'i' } }
+          ]
+        }
+      : {};
 
     const [users, total] = await Promise.all([
-      User.find({})
-        .select('-password') 
+      User.find(query)
+        .select('-password -tokens') 
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
-      User.countDocuments()
+      User.countDocuments(query)
     ]);
 
     res.status(200).json({ 
       success: true,
       users: users || [], 
-      totalPages: Math.ceil(total / limit),
-      totalUsers: total 
+      pagination: {
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        totalUsers: total 
+      }
     });
   } catch (error) {
+    console.error('Admin Users Error:', error);
     res.status(500).json({ success: false, message: "Failed to fetch user list." });
   }
 });
 
 /**
- * 2. All Documents (With Ownership Safety)
+ * 2. All Documents (Paginated + Search)
  */
-router.get('/documents', auth, adminAuth, async (req, res) => {
+router.get('/documents', [auth, adminAuth, adminLimiter], async (req, res) => {
   try {
-    // For scalability, we limit this even if unpaginated to prevent server lag
-    const documents = await Document.find({})
-      .populate('owner', 'full_name email') 
-      .sort({ createdAt: -1 })
-      .limit(200) 
-      .lean();
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(10, parseInt(req.query.limit) || 50));
+    const skip = (page - 1) * limit;
+    const search = req.query.search?.trim() || '';
+
+    const query = search 
+      ? { title: { $regex: search, $options: 'i' } }
+      : {};
+
+    const [documents, total] = await Promise.all([
+      Document.find(query)
+        .populate('owner', 'full_name email')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      Document.countDocuments(query)
+    ]);
 
     const sanitizedDocs = documents.map(doc => ({
       ...doc,
       owner: doc.owner || { full_name: 'Deleted User', email: 'N/A' }
     }));
 
-    res.status(200).json({ success: true, documents: sanitizedDocs });
+    res.status(200).json({ 
+      success: true, 
+      documents: sanitizedDocs,
+      pagination: {
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        totalDocs: total
+      }
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "Failed to fetch document list." });
+    console.error('Admin Docs Error:', error);
+    res.status(500).json({ success: false, message: "Failed to fetch documents." });
   }
 });
 
 /**
- * 3. Audit Logs (Paginated & Reliable Population)
+ * 3. Audit Logs (Enhanced Filters)
  */
-router.get('/audit-logs', auth, adminAuth, async (req, res) => {
+router.get('/audit-logs', [auth, adminAuth, adminLimiter], async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 20;
-    
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 20);
+    const skip = (page - 1) * limit;
+    const action = req.query.action;
+    const days = parseInt(req.query.days) || 30;
+
+    const query = {
+      timestamp: {
+        $gte: new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+      }
+    };
+    if (action) query.action = action;
+
     const [logs, total] = await Promise.all([
-      AuditLog.find({})
+      AuditLog.find(query)
         .populate({
           path: 'document_id',
-          select: 'title',
-          model: 'Document' 
+          select: 'title status',
+          model: 'Document'
+        })
+        .populate({
+          path: 'performed_by.email',
+          model: 'User'
         })
         .sort({ timestamp: -1 })
-        .skip((page - 1) * limit)
+        .skip(skip)
         .limit(limit)
         .lean(),
-      AuditLog.countDocuments()
+      AuditLog.countDocuments(query)
     ]);
-
-    const sanitizedLogs = logs.map(log => ({
-      ...log,
-      document_id: log.document_id || { title: 'Removed Document' }
-    }));
 
     res.status(200).json({ 
       success: true,
-      logs: sanitizedLogs, 
-      totalPages: Math.ceil(total / limit),
-      totalLogs: total
+      logs,
+      pagination: {
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+        totalLogs: total
+      }
     });
   } catch (error) {
-    console.error("Audit Log Fetch Error:", error);
+    console.error("Audit Log Error:", error);
     res.status(500).json({ success: false, message: "Failed to fetch audit trail." });
   }
 });
 
 /**
- * 4. Delete User (Includes Cleanup of Orphaned Documents)
+ * 4. Delete User (Enhanced Safety)
  */
-router.delete('/users/:id', auth, adminAuth, async (req, res) => {
+router.delete('/users/:id', [auth, adminAuth, adminLimiter], async (req, res) => {
   try {
     const userId = req.params.id;
+    const userToDelete = await User.findById(userId).select('role email');
 
-    const userToDelete = await User.findById(userId);
     if (!userToDelete) {
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // Security: Prevent deletion of Super Admins via standard API
+    // ✅ Enhanced Security
     if (userToDelete.role === 'super_admin') {
-      return res.status(403).json({ success: false, message: "Super Admin accounts cannot be deleted." });
+      return res.status(403).json({ success: false, message: "Super Admin cannot be deleted." });
     }
-
-    // Security: Prevent Admins from deleting themselves
     if (userId === req.user.id) {
-      return res.status(400).json({ success: false, message: "You cannot delete your own account." });
+      return res.status(400).json({ success: false, message: "Cannot delete own account." });
     }
 
-    // Data Integrity: Remove associated documents and the user profile
+    // ✅ Soft Delete + Audit
     await Promise.all([
-      Document.deleteMany({ owner: userId }),
-      User.findByIdAndDelete(userId)
+      Document.updateMany(
+        { owner: userId }, 
+        { $set: { status: 'owner_deleted', owner: null } }
+      ),
+      User.findByIdAndUpdate(userId, { 
+        $set: { 
+          isDeleted: true, 
+          deletedAt: new Date(),
+          role: 'deleted'
+        }
+      })
     ]);
 
-    res.status(200).json({ success: true, message: "User and associated data deleted successfully." });
+    // ✅ Audit Log
+    await AuditLog.create({
+      action: 'admin_user_deleted',
+      performed_by: {
+        name: req.user.full_name || req.user.email,
+        email: req.user.email,
+        role: req.user.role
+      },
+      details: { target_user_id: userId, target_email: userToDelete.email },
+      ip_address: req.headers['x-forwarded-for'] || req.ip
+    });
+
+    res.status(200).json({ 
+      success: true, 
+      message: "User soft-deleted successfully (Documents preserved)." 
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: "An error occurred during deletion." });
+    console.error('User Delete Error:', error);
+    res.status(500).json({ success: false, message: "Deletion failed." });
+  }
+});
+
+// ✅ Admin Stats Dashboard
+router.get('/stats', [auth, adminAuth, adminLimiter], async (req, res) => {
+  try {
+    const [userCount, docCount, activeDocs, logsCount] = await Promise.all([
+      User.countDocuments({ isDeleted: { $ne: true } }),
+      Document.countDocuments(),
+      Document.countDocuments({ status: 'in_progress' }),
+      AuditLog.countDocuments({ timestamp: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } })
+    ]);
+
+    res.json({
+      success: true,
+      stats: {
+        users: userCount,
+        documents: docCount,
+        activeSigning: activeDocs,
+        recentActivity: logsCount,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Stats fetch failed' });
   }
 });
 

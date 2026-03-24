@@ -145,34 +145,140 @@
 
 // module.exports = mongoose.model('User', userSchema);
 
-
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 
 const userSchema = new mongoose.Schema({
-  full_name: { type: String, required: true, trim: true },
-  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  full_name: { 
+    type: String, 
+    required: [true, 'Full name required'], 
+    trim: true, 
+    maxlength: 100 
+  },
+  email: { 
+    type: String, 
+    required: [true, 'Email required'], 
+    unique: true, 
+    lowercase: true, 
+    trim: true,
+    match: [/^[^\s@]+@[^\s@]+\.[^\s@]+$/, 'Invalid email format']
+  },
   password: { 
     type: String, 
-    required: function() { return !this.googleId; }, 
-    minlength: 6,
-    select: false // ডাটাবেস কোয়েরিতে এটি অটোমেটিক আসবে না
+    required: [function() { return !this.googleId; }, 'Password required for email login'],
+    minlength: [8, 'Password must be 8+ characters'],
+    select: false,
+    set: value => value ? bcrypt.hashSync(value, 12) : value // ✅ Instant Hash
   },
-  googleId: { type: String, sparse: true, unique: true },
-  role: { type: String, enum: ['user', 'admin', 'super_admin'], default: 'user' },
-  createdAt: { type: Date, default: Date.now }
+  googleId: { 
+    type: String, 
+    sparse: true, 
+    unique: true,
+    index: true 
+  },
+  role: { 
+    type: String, 
+    enum: ['user', 'admin', 'super_admin'], 
+    default: 'user',
+    index: true 
+  },
+  // ✅ Security & Features
+  isEmailVerified: { type: Boolean, default: false },
+  isActive: { type: Boolean, default: true, index: true },
+  loginAttempts: { type: Number, default: 0 },
+  lockUntil: { type: Date },
+  lastLogin: Date,
+  tokens: [{
+    token: String,
+    expires: Date,
+    createdAt: { type: Date, default: Date.now }
+  }],
+  preferences: {
+    theme: { type: String, default: 'light' },
+    language: { type: String, default: 'en' },
+    notifications: { type: Boolean, default: true }
+  },
+  createdAt: { type: Date, default: Date.now, index: true },
+  updatedAt: Date
+}, {
+  timestamps: true
 });
 
+// ✅ Indexes (Lightning Fast)
+userSchema.index({ email: 1 });
+userSchema.index({ googleId: 1 });
+userSchema.index({ role: 1, isActive: 1 });
+userSchema.index({ lockUntil: 1 });
+
+// ✅ Password Hashing (Enhanced)
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('password') || !this.password) return next();
-  this.password = await bcrypt.hash(this.password, 10);
+  if (this.isModified('password') && this.password) {
+    this.password = await bcrypt.hash(this.password, 12); // Stronger salt
+  }
+  this.updatedAt = new Date();
   next();
 });
 
-userSchema.methods.comparePassword = async function(password) {
+// ✅ Password Compare
+userSchema.methods.comparePassword = async function(candidatePassword) {
   if (!this.password) return false;
-  return await bcrypt.compare(password, this.password);
+  return await bcrypt.compare(candidatePassword, this.password);
 };
+
+// ✅ JWT Token Methods
+userSchema.methods.generateAuthToken = function() {
+  const token = require('jsonwebtoken').sign(
+    { 
+      _id: this._id,
+      email: this.email,
+      role: this.role 
+    },
+    process.env.JWT_SECRET,
+    { expiresIn: '7d' }
+  );
+  
+  this.tokens = this.tokens.concat({ token, expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) });
+  return this.save().then(() => token);
+};
+
+// ✅ Remove Expired Tokens
+userSchema.methods.clearExpiredTokens = function() {
+  const now = new Date();
+  this.tokens = this.tokens.filter(t => t.expires > now);
+  return this.save();
+};
+
+// ✅ Check if Locked
+userSchema.methods.isLocked = function() {
+  return this.lockUntil && this.lockUntil > new Date();
+};
+
+// ✅ Virtual for Full Profile
+userSchema.virtual('profile').get(function() {
+  return {
+    id: this._id,
+    full_name: this.full_name,
+    email: this.email,
+    role: this.role,
+    isActive: this.isActive,
+    preferences: this.preferences
+  };
+});
+
+// ✅ JSON Output (No Sensitive Data)
+userSchema.methods.toJSON = function() {
+  const obj = this.toObject();
+  delete obj.password;
+  delete obj.tokens;
+  delete obj.__v;
+  return obj;
+};
+
+// ✅ Pre-find (Active Users Only)
+userSchema.pre(/^find/, function(next) {
+  this.where({ isActive: true });
+  next();
+});
 
 module.exports = mongoose.model('User', userSchema);
 

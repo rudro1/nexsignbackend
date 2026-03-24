@@ -609,79 +609,338 @@
 //     res.status(500).json({ message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
 //   }
 // };
+// const User = require('../models/User');
+// const jwt = require('jsonwebtoken');
+// const bcrypt = require('bcryptjs'); // ✅ ফিক্স: এটি ইমপোর্ট করা ছিল না
+
+// const generateToken = (user) => {
+//   return jwt.sign(
+//     { id: user._id, role: user.role }, 
+//     process.env.JWT_SECRET, 
+//     { expiresIn: '7d' }
+//   );
+// };
+
+// // --- LOGIN ---
+// exports.login = async (req, res) => {
+//   try {
+//     const { email, password } = req.body;
+//     if (!email || !password) return res.status(400).json({ success: false, message: "ইমেইল এবং পাসওয়ার্ড প্রয়োজন।" });
+
+//     // ফিক্স: .select('+password') দিতে হবে কারণ মডেলে password: { select: false } আছে
+//     const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
+
+//     if (!user || !(await user.comparePassword(password))) {
+//       return res.status(401).json({ success: false, message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
+//     }
+
+//     const token = generateToken(user);
+//     res.json({ 
+//       success: true,
+//       token, 
+//       user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } 
+//     });
+//   } catch (error) {
+//     console.error("Login Error:", error);
+//     res.status(500).json({ success: false, message: "লগইনে সমস্যা হয়েছে।" });
+//   }
+// };
+
+// // --- REGISTER ---
+// exports.register = async (req, res) => {
+//   try {
+//     const { full_name, email, password } = req.body;
+//     const cleanEmail = email.toLowerCase().trim();
+
+//     const existingUser = await User.findOne({ email: cleanEmail });
+//     if (existingUser) return res.status(400).json({ success: false, message: "এই ইমেইলটি ইতিপূর্বে ব্যবহৃত হয়েছে।" });
+
+//     // নোট: আপনার মডেলে যদি pre-save hook থাকে তবে আলাদা করে bcrypt করার দরকার নেই
+//     const user = new User({
+//       full_name,
+//       email: cleanEmail,
+//       password, 
+//       role: cleanEmail === 'bisalsaha42@gmail.com' ? 'super_admin' : 'user'
+//     });
+
+//     await user.save();
+//     const token = generateToken(user);
+
+//     res.status(201).json({ 
+//       success: true,
+//       token, 
+//       user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } 
+//     });
+//   } catch (error) {
+//     res.status(500).json({ success: false, message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।", error: error.message });
+//   }
+// };
+
+// // --- GOOGLE AUTH ---
+// exports.googleAuth = async (req, res) => {
+//   try {
+//     const { name, email, googleId, photoURL } = req.body;
+//     const cleanEmail = email.toLowerCase().trim();
+//     let user = await User.findOne({ email: cleanEmail });
+
+//     if (!user) {
+//       user = await User.create({
+//         full_name: name,
+//         email: cleanEmail,
+//         googleId,
+//         photoURL,
+//         password: Math.random().toString(36).slice(-10), 
+//         role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user"
+//       });
+//     }
+
+//     const token = generateToken(user);
+//     res.json({ success: true, token, user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } });
+//   } catch (error) {
+//     console.error("Google Auth Error:", error);
+//     res.status(500).json({ success: false, message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
+//   }
+// };
+
+// // --- SYNC PASSWORD ---
+// exports.syncPassword = async (req, res) => {
+//   try {
+//     const { email, password } = req.body;
+//     const cleanEmail = email.toLowerCase().trim();
+//     const user = await User.findOne({ email: cleanEmail });
+//     if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+//     // মডেলে pre-save hook থাকলে শুধু পাসওয়ার্ড এসাইন করে save করলেই হয়
+//     user.password = password;
+//     await user.save();
+
+//     const token = generateToken(user);
+//     res.status(200).json({
+//       success: true,
+//       token,
+//       user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role }
+//     });
+//   } catch (error) {
+//     res.status(500).json({ success: false, message: "Internal server error" });
+//   }
+// };
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs'); // ✅ ফিক্স: এটি ইমপোর্ট করা ছিল না
+const bcrypt = require('bcryptjs');
 
 const generateToken = (user) => {
   return jwt.sign(
-    { id: user._id, role: user.role }, 
+    { 
+      _id: user._id,  // ✅ Use _id (not id)
+      email: user.email,
+      role: user.role 
+    }, 
     process.env.JWT_SECRET, 
-    { expiresIn: '7d' }
+    { 
+      expiresIn: '7d',
+      algorithm: 'HS256' // ✅ Secure Algorithm
+    }
   );
 };
 
-// --- LOGIN ---
+// ✅ Rate Limit Helper (Per Email)
+const checkRateLimit = (email, req) => {
+  const ip = req.headers['x-forwarded-for'] || req.ip;
+  const key = `${email}_${ip}`;
+  
+  if (!req.rateLimit) req.rateLimit = new Map();
+  const attempts = req.rateLimit.get(key) || [];
+  const now = Date.now();
+  const window = 15 * 60 * 1000; // 15min
+  
+  const validAttempts = attempts.filter(t => now - t < window);
+  req.rateLimit.set(key, validAttempts);
+  
+  if (validAttempts.length >= 5) {
+    throw new Error('Too many attempts');
+  }
+  
+  validAttempts.push(now);
+};
+
+// --- LOGIN (Enhanced Security) ---
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ success: false, message: "ইমেইল এবং পাসওয়ার্ড প্রয়োজন।" });
-
-    // ফিক্স: .select('+password') দিতে হবে কারণ মডেলে password: { select: false } আছে
-    const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
-
-    if (!user || !(await user.comparePassword(password))) {
-      return res.status(401).json({ success: false, message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
+    
+    // ✅ Input Validation
+    if (!email || !password || password.length < 8) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Valid email & 8+ char password required" 
+      });
     }
 
+    const cleanEmail = email.toLowerCase().trim();
+    
+    // ✅ Rate Limiting
+    checkRateLimit(cleanEmail, req);
+
+    // ✅ Find User + Password
+    const user = await User.findOne({ email: cleanEmail })
+      .select('+password')
+      .lean();
+
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      throw new Error('Invalid credentials');
+    }
+
+    // ✅ Account Checks
+    if (!user.isActive) {
+      return res.status(403).json({ 
+        success: false, 
+        message: "Account deactivated" 
+      });
+    }
+
+    if (user.isLocked && user.lockUntil > new Date()) {
+      return res.status(423).json({ 
+        success: false, 
+        message: `Account locked until ${user.lockUntil}` 
+      });
+    }
+
+    // ✅ Generate Token + Update Last Login
     const token = generateToken(user);
+    
+    await User.findByIdAndUpdate(user._id, {
+      lastLogin: new Date(),
+      loginAttempts: 0,
+      lockUntil: null
+    });
+
+    console.log(`✅ Login Success: ${cleanEmail} (${user.role})`);
+
     res.json({ 
       success: true,
       token, 
-      user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } 
+      user: { 
+        id: user._id, 
+        full_name: user.full_name, 
+        email: user.email, 
+        role: user.role,
+        preferences: user.preferences 
+      },
+      expiresIn: 7 * 24 * 60 * 60 // 7 days seconds
     });
+
   } catch (error) {
-    console.error("Login Error:", error);
-    res.status(500).json({ success: false, message: "লগইনে সমস্যা হয়েছে।" });
+    console.error("Login Error:", error.message);
+    
+    // ✅ Failed Login Handling
+    const cleanEmail = req.body.email?.toLowerCase().trim();
+    if (cleanEmail) {
+      const user = await User.findOne({ email: cleanEmail });
+      if (user) {
+        user.loginAttempts = (user.loginAttempts || 0) + 1;
+        
+        if (user.loginAttempts >= 5) {
+          user.lockUntil = new Date(Date.now() + 60 * 60 * 1000); // 1hr lock
+        }
+        
+        await user.save();
+      }
+    }
+
+    res.status(401).json({ 
+      success: false, 
+      message: "Invalid credentials" 
+    });
   }
 };
 
-// --- REGISTER ---
+// --- REGISTER (Production Secure) ---
 exports.register = async (req, res) => {
   try {
     const { full_name, email, password } = req.body;
+    
+    // ✅ Strict Validation
+    if (!full_name?.trim() || !email || !password || password.length < 8) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Name, valid email & 8+ char password required" 
+      });
+    }
+
     const cleanEmail = email.toLowerCase().trim();
+    
+    // ✅ Email Rate Limit
+    checkRateLimit(cleanEmail, req);
 
-    const existingUser = await User.findOne({ email: cleanEmail });
-    if (existingUser) return res.status(400).json({ success: false, message: "এই ইমেইলটি ইতিপূর্বে ব্যবহৃত হয়েছে।" });
-
-    // নোট: আপনার মডেলে যদি pre-save hook থাকে তবে আলাদা করে bcrypt করার দরকার নেই
-    const user = new User({
-      full_name,
-      email: cleanEmail,
-      password, 
-      role: cleanEmail === 'bisalsaha42@gmail.com' ? 'super_admin' : 'user'
+    // ✅ Check Existing
+    const existingUser = await User.findOne({ 
+      $or: [{ email: cleanEmail }, { googleId: cleanEmail }] 
     });
 
-    await user.save();
+    if (existingUser) {
+      return res.status(409).json({ 
+        success: false, 
+        message: "Email already registered" 
+      });
+    }
+
+    // ✅ Password Strength
+    const hasUpper = /[A-Z]/.test(password);
+    const hasNumber = /\d/.test(password);
+    if (!hasUpper || !hasNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Password must contain uppercase & number"
+      });
+    }
+
+    // ✅ Create User
+    const user = await User.create({
+      full_name: full_name.trim(),
+      email: cleanEmail,
+      password,
+      role: cleanEmail === 'bisalsaha42@gmail.com' ? 'super_admin' : 'user',
+      isEmailVerified: false // ✅ Require verification
+    });
+
     const token = generateToken(user);
+    
+    console.log(`✅ New User Registered: ${cleanEmail}`);
 
     res.status(201).json({ 
       success: true,
       token, 
-      user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } 
+      user: { 
+        id: user._id, 
+        full_name: user.full_name, 
+        email: user.email, 
+        role: user.role 
+      },
+      message: "Registration successful! Please verify email."
     });
+
   } catch (error) {
-    res.status(500).json({ success: false, message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।", error: error.message });
+    if (error.code === 11000) {
+      return res.status(409).json({ 
+        success: false, 
+        message: "Email already exists" 
+      });
+    }
+    
+    console.error("Register Error:", error);
+    res.status(500).json({ success: false, message: "Registration failed" });
   }
 };
 
-// --- GOOGLE AUTH ---
+// --- GOOGLE AUTH (Enhanced) ---
 exports.googleAuth = async (req, res) => {
   try {
     const { name, email, googleId, photoURL } = req.body;
     const cleanEmail = email.toLowerCase().trim();
-    let user = await User.findOne({ email: cleanEmail });
+
+    let user = await User.findOne({ 
+      $or: [{ email: cleanEmail }, { googleId }] 
+    });
 
     if (!user) {
       user = await User.create({
@@ -689,38 +948,67 @@ exports.googleAuth = async (req, res) => {
         email: cleanEmail,
         googleId,
         photoURL,
-        password: Math.random().toString(36).slice(-10), 
-        role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user"
+        password: bcrypt.hashSync(Math.random().toString(36), 12),
+        role: cleanEmail === "bisalsaha42@gmail.com" ? "super_admin" : "user",
+        isEmailVerified: true // ✅ Google verified
       });
     }
 
     const token = generateToken(user);
-    res.json({ success: true, token, user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } });
+    
+    console.log(`✅ Google Login: ${cleanEmail}`);
+
+    res.json({ 
+      success: true, 
+      token, 
+      user: { 
+        id: user._id, 
+        full_name: user.full_name, 
+        email: user.email, 
+        role: user.role,
+        photoURL: user.photoURL 
+      } 
+    });
+
   } catch (error) {
     console.error("Google Auth Error:", error);
-    res.status(500).json({ success: false, message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
+    res.status(500).json({ success: false, message: "Google authentication failed" });
   }
 };
 
-// --- SYNC PASSWORD ---
+// --- SYNC PASSWORD (Admin Only) ---
 exports.syncPassword = async (req, res) => {
   try {
     const { email, password } = req.body;
     const cleanEmail = email.toLowerCase().trim();
+    
     const user = await User.findOne({ email: cleanEmail });
-    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
 
-    // মডেলে pre-save hook থাকলে শুধু পাসওয়ার্ড এসাইন করে save করলেই হয়
+    // ✅ Admin Check
+    if (req.user.role !== 'super_admin') {
+      return res.status(403).json({ success: false, message: "Super admin required" });
+    }
+
+    // ✅ Password Strength
+    if (password.length < 8) {
+      return res.status(400).json({ success: false, message: "Password too short" });
+    }
+
     user.password = password;
     await user.save();
 
     const token = generateToken(user);
-    res.status(200).json({
-      success: true,
-      token,
-      user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role }
+    res.json({ 
+      success: true, 
+      message: "Password synced successfully",
+      token 
     });
+
   } catch (error) {
-    res.status(500).json({ success: false, message: "Internal server error" });
+    console.error("Sync Password Error:", error);
+    res.status(500).json({ success: false, message: "Sync failed" });
   }
 };
