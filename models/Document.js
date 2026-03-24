@@ -156,5 +156,20 @@ documentSchema.index({ "parties.token": 1 });
 documentSchema.index({ owner: 1, status: 1 });
 // টেমপ্লেট দ্রুত খোঁজার জন্য ইনডেক্স
 documentSchema.index({ owner: 1, isTemplate: 1 });
-
+// আপনার module.exports এর ঠিক উপরে এটি যোগ করতে পারেন
+documentSchema.pre('save', function(next) {
+  if (this.fields && Array.isArray(this.fields)) {
+    this.fields = this.fields.map(field => {
+      if (typeof field === 'string') {
+        try {
+          return JSON.parse(field);
+        } catch (e) {
+          return field;
+        }
+      }
+      return field;
+    });
+  }
+  next();
+});
 module.exports = mongoose.model('Document', documentSchema);
