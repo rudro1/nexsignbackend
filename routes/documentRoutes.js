@@ -8613,8 +8613,11 @@ const mergeSignatures = async (doc) => {
   for (const fd of fieldsToProcess) {
     const pageIndex = Number(fd.page) - 1;
     if (pageIndex < 0 || pageIndex >= pages.length) continue;
+    
     const page = pages[pageIndex];
     const { width: pW, height: pH } = page.getSize();
+    
+    // কোঅর্ডিনেট ক্যালকুলেশন
     const dW = (parseFloat(fd.width) * pW) / 100;
     const dH = (parseFloat(fd.height) * pH) / 100;
     const dX = (parseFloat(fd.x) * pW) / 100;
@@ -8635,9 +8638,12 @@ const generateAndSendFinalDoc = async (docId) => {
   try {
     const doc = await Document.findById(docId);
     if (!doc) return;
+    
     const mergedPdfBytes = await mergeSignatures(doc);
     const finalPdf = await PDFDocument.load(mergedPdfBytes);
     const font = await finalPdf.embedFont(StandardFonts.HelveticaBold);
+    
+    // অডিট ট্রেইল পেইজ যোগ করা
     const page = finalPdf.addPage([600, 800]);
     page.drawText('COMPLETION CERTIFICATE', { x: 50, y: 750, size: 20, font, color: rgb(0.05, 0.64, 0.91) });
     
@@ -8648,14 +8654,22 @@ const generateAndSendFinalDoc = async (docId) => {
     });
 
     const pdfBuffer = Buffer.from(await finalPdf.save());
+    
+    // ক্লাউডিনারিতে ফাইনাল ডকুমেন্ট আপলোড
     const uploadRes = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream({ resource_type: "raw", folder: "completed_docs", format: "pdf" }, (err, res) => err ? reject(err) : resolve(res));
+      const stream = cloudinary.uploader.upload_stream({ 
+        resource_type: "raw", 
+        folder: "completed_docs", 
+        format: "pdf" 
+      }, (err, res) => err ? reject(err) : resolve(res));
       stream.end(pdfBuffer);
     });
 
     doc.fileUrl = uploadRes.secure_url;
     doc.status = 'completed';
+    
     const emails = [...doc.parties.map(p => p.email), ...doc.ccEmails];
+    
     await Promise.all([
       doc.save(),
       transporter.sendMail({
@@ -8665,12 +8679,14 @@ const generateAndSendFinalDoc = async (docId) => {
         attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer }]
       })
     ]);
-  } catch (err) { console.error("Finalize error:", err); }
+  } catch (err) { 
+    console.error("Finalize error:", err); 
+  }
 };
 
 // --- ROUTES ---
 
-// 🌟 ১. ড্যাশবোর্ড ফেচ (Optimized with Pagination & Recent First)
+// ১. ড্যাশবোর্ড ফেচ
 router.get('/', auth, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -8684,24 +8700,14 @@ router.get('/', auth, async (req, res) => {
       ]
     };
 
-    // lean() ব্যবহার করা হয়েছে যাতে মঙ্গুজ অবজেক্টের বদলে সরাসরি JSON রিটার্ন করে, যা অনেক ফাস্ট
     const [documents, total] = await Promise.all([
-      Document.find(query)
-        .sort({ createdAt: -1 }) 
-        .skip(skip)
-        .limit(limit)
-        .lean(),
+      Document.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       Document.countDocuments(query)
     ]);
 
-    res.json({
-      success: true,
-      documents,
-      total,
-      hasMore: total > skip + documents.length
-    });
+    res.json({ success: true, documents, total, hasMore: total > skip + documents.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch dashboard data" });
+    res.status(500).json({ success: false, error: "Failed to fetch dashboard data" });
   }
 });
 
@@ -8711,22 +8717,32 @@ router.get('/sign/:token', async (req, res) => {
     const doc = await Document.findOne({ "parties.token": req.params.token });
     if (!doc) return res.status(404).json({ error: "Invalid link" });
     res.json(doc);
-  } catch (err) { res.status(500).json({ error: "Failed" }); }
+  } catch (err) { 
+    res.status(500).json({ error: "Failed to fetch document" }); 
+  }
 });
 
 // ৩. আপলোড এবং সেন্ড
 router.post('/upload-and-send', auth, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: "No PDF provided" });
+
     const uploadRes = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream({ resource_type: "raw", folder: "nexsign_docs", format: 'pdf' }, (err, res) => err ? reject(err) : resolve(res));
+      const stream = cloudinary.uploader.upload_stream({ 
+        resource_type: "raw", 
+        folder: "nexsign_docs", 
+        format: 'pdf' 
+      }, (err, res) => err ? reject(err) : resolve(res));
       stream.end(req.file.buffer);
     });
 
     const parties = JSON.parse(req.body.parties || '[]');
     const firstToken = crypto.randomBytes(32).toString('hex');
-    parties[0].token = firstToken;
-    parties[0].status = 'sent';
+    
+    if (parties.length > 0) {
+      parties[0].token = firstToken;
+      parties[0].status = 'sent';
+    }
 
     const newDoc = new Document({
       title: req.body.title || 'Untitled',
@@ -8740,54 +8756,84 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
       totalPages: parseInt(req.body.totalPages) || 1
     });
 
-    await Promise.all([
-      newDoc.save(),
-      AuditLog.create({ document_id: newDoc._id, action: 'sent', performed_by: { name: req.user.name, email: req.user.email, role: 'owner' } }),
-      sendSigningEmail(parties[0], newDoc.title, firstToken)
-    ]);
+    await newDoc.save();
+
+    // অডিট লগ তৈরি
+    await AuditLog.create({ 
+      document_id: newDoc._id, 
+      action: 'sent', 
+      performed_by: { name: req.user.name, email: req.user.email, role: 'owner' } 
+    });
+
+    if (parties.length > 0) {
+      await sendSigningEmail(parties[0], newDoc.title, firstToken);
+    }
+
     res.json({ success: true, docId: newDoc._id });
-  } catch (err) { res.status(500).json({ error: "Server failed" }); }
+  } catch (err) { 
+    console.error(err);
+    res.status(500).json({ error: "Upload failed" }); 
+  }
 });
 
 // ৪. সাইন সাবমিট
 router.post('/sign/submit', async (req, res) => {
   try {
-    const { token, fields } = req.body;
+    const { token, fields, locationData } = req.body;
     const doc = await Document.findOne({ "parties.token": token });
     if (!doc) return res.status(404).json({ error: "Invalid link" });
 
     const idx = doc.parties.findIndex(p => p.token === token);
+    const signer = doc.parties[idx];
+
+    // ফিল্ডস আপডেট
     doc.fields = fields; 
     doc.markModified('fields');
 
-    const signer = doc.parties[idx];
+    // সাইনার স্ট্যাটাস আপডেট
     signer.status = 'signed';
     signer.signedAt = new Date();
+    
+    // অডিট লগ যোগ করা (লিগ্যাল প্রমাণের জন্য)
+    await AuditLog.create({
+      document_id: doc._id,
+      action: 'signed',
+      performed_by: { name: signer.name, email: signer.email, role: 'signer' },
+      ip_address: req.ip,
+      location: locationData || 'Unknown'
+    });
 
     if (idx + 1 < doc.parties.length) {
+      // পরবর্তী সাইনারের কাছে পাঠানো
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
       await doc.save();
       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
-      res.json({ next: true });
+      res.json({ success: true, next: true });
     } else {
+      // সবার সাইন শেষ
       doc.status = 'completed';
       await doc.save();
       generateAndSendFinalDoc(doc._id); 
-      res.json({ completed: true });
+      res.json({ success: true, completed: true });
     }
-  } catch (err) { res.status(500).json({ error: "Failed" }); }
+  } catch (err) { 
+    console.error(err);
+    res.status(500).json({ error: "Submission failed" }); 
+  }
 });
 
-// ৫. PDF প্রক্সি রাউট
+// ৫. PDF প্রক্সি রাউট (CORS সমস্যা এড়াতে)
 router.get('/proxy/:fileId', async (req, res) => {
   try {
     const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/nexsign_docs/${req.params.fileId}.pdf`;
     const response = await axios.get(url, { responseType: 'stream' });
     res.setHeader('Content-Type', 'application/pdf');
     response.data.pipe(res);
-  } catch (err) { res.status(404).send("PDF not found"); }
+  } catch (err) { 
+    res.status(404).send("PDF not found"); 
+  }
 });
 
 module.exports = router;

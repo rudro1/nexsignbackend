@@ -15,13 +15,17 @@
 // export default router;
 
 // module.exports = router;
-
 const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
-const { login, register, googleAuth } = require('../controllers/authController');
 
-const { login, register, googleAuth, syncPassword } = require('../controllers/authController');
+// ১. এখানে সব কন্ট্রোলার ফাংশন একবারই ইমপোর্ট করুন (Duplicate সরানো হয়েছে)
+const { 
+  login, 
+  register, 
+  googleAuth, 
+  syncPassword 
+} = require('../controllers/authController');
 
 // Rate Limiter কনফিগারেশন
 const authLimiter = rateLimit({
@@ -33,17 +37,14 @@ const authLimiter = rateLimit({
   },
   standardHeaders: true,
   legacyHeaders: false,
-  // skip: (req) => req.method === 'OPTIONS', // OPTIONS রিকোয়েস্ট স্কিপ করা নিরাপদ
 });
 
-// Routes
+// ২. Routes
 router.post('/login', authLimiter, login);
 router.post('/register', authLimiter, register);
 router.post('/google', authLimiter, googleAuth);
 
-
-// --- নতুন রুটটি এখানে ---
-// পাসওয়ার্ড সিংক্রোনাইজ করার জন্য (Firebase-এ পাসওয়ার্ড বদলালে MongoDB-তে আপডেট করতে)
+// পাসওয়ার্ড সিংক্রোনাইজ করার জন্য
 router.post('/sync-password', syncPassword);
 
 module.exports = router;
