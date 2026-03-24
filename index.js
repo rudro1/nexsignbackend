@@ -2463,91 +2463,63 @@
 
 // module.exports = app;
 require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
+const express  = require('express');
+const cors     = require('cors');
 const mongoose = require('mongoose');
-const helmet = require('helmet');
+const helmet   = require('helmet');
 
 const app = express();
-
-// 1. Essential Vercel Settings
 app.set('trust proxy', 1);
 
-// 2. Optimized CORS Configuration
 const allowedOrigins = [
-  'http://localhost:5173', 
-  'https://nexsignfrontend.vercel.app'
+  'http://localhost:5173',
+  'https://nexsignfrontend.vercel.app',
 ];
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps) or allowed domains
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
+    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))
       return callback(null, true);
-    }
-    return callback(new Error('CORS blocked by NexSign Policy'));
+    return callback(new Error('CORS blocked'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  optionsSuccessStatus: 200 // Changed to 200 for better Vercel compatibility
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 200,
 };
 
-// Apply CORS globally
 app.use(cors(corsOptions));
-
-// 3. IMPORTANT: Explicitly handle preflight requests
 app.options('*', cors(corsOptions));
-
-// 4. Security Middleware (configured to allow cross-origin requests)
 app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" },
-  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy:     false,
   crossOriginEmbedderPolicy: false,
 }));
-
-// 5. Database Connection (Serverless Optimized)
-let cachedDb = null;
-const connectDB = async () => {
-  if (cachedDb && mongoose.connection.readyState >= 1) return cachedDb;
-  try {
-    cachedDb = await mongoose.connect(process.env.MONGO_URI);
-    console.log('✅ MongoDB Connected');
-    return cachedDb;
-  } catch (err) {
-    console.error('❌ MongoDB Error:', err.message);
-    // Don't let the process hang on error
-    throw err;
-  }
-};
-
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// Middleware to ensure DB connection
+// Serverless DB connection cache
+let cachedDb = null;
+const connectDB = async () => {
+  if (cachedDb && mongoose.connection.readyState >= 1) return;
+  cachedDb = await mongoose.connect(process.env.MONGO_URI);
+};
+
 app.use(async (req, res, next) => {
-  try {
-    await connectDB();
-    next();
-  } catch (err) {
-    res.status(500).json({ error: "Database connection failed" });
-  }
+  try { await connectDB(); next(); }
+  catch (err) { res.status(500).json({ error: 'Database connection failed' }); }
 });
 
-// 6. Routes
-app.use('/api/auth', require('./routes/authRoutes'));      
+app.use('/api/auth',      require('./routes/authRoutes'));
 app.use('/api/documents', require('./routes/documentRoutes'));
-app.use('/api/admin', require('./routes/adminRoutes'));
-app.use('/api/feedback', require('./routes/feedbackRoutes'));
+app.use('/api/admin',     require('./routes/adminRoutes'));
+app.use('/api/feedback',  require('./routes/feedbackRoutes'));
 
-// 7. Global Error Handler
 app.use((err, req, res, next) => {
-  const status = err.status || 500;
-  res.status(status).json({ 
+  res.status(err.status || 500).json({
     success: false,
-    message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message 
+    message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message,
   });
 });
 
-// Export the app for Vercel - DO NOT USE app.listen()
 module.exports = app;

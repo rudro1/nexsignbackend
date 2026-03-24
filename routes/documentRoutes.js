@@ -8554,238 +8554,354 @@
 
 // module.exports = router; 
 const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
-const express = require('express');
-const router = express.Router();
-const multer = require('multer');
-const axios = require('axios');
+const express    = require('express');
+const router     = express.Router();
+const multer     = require('multer');
+const axios      = require('axios');
 const { v2: cloudinary } = require('cloudinary');
-const crypto = require('crypto');
+const crypto     = require('crypto');
 const nodemailer = require('nodemailer');
-const Document = require('../models/Document');
-const AuditLog = require('../models/AuditLog');
-const auth = require('../middleware/auth');
+const Document   = require('../models/Document');
+const AuditLog   = require('../models/AuditLog');
+const auth       = require('../middleware/auth');
 
-// ১. কনফিগারেশন
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
 const transporter = nodemailer.createTransport({
   service: 'gmail',
-  pool: true, 
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+  pool: true,
+  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
 });
 
-const upload = multer({ 
+const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 } 
+  limits: { fileSize: 15 * 1024 * 1024 },
 });
 
-// --- হেল্পার ফাংশনস ---
+// ── Helpers ───────────────────────────────────────────────────────────────
 
-const sendSigningEmail = async (party, docTitle, token) => {
+const uploadToCloudinary = (buffer, options) =>
+  new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(options, (err, res) =>
+      err ? reject(err) : resolve(res)
+    );
+    stream.end(buffer);
+  });
+
+const sendSigningEmail = (party, docTitle, token) => {
   const signLink = `${process.env.FRONTEND_URL}/sign/${token}`;
   return transporter.sendMail({
-    from: `"NeXsign" <${process.env.EMAIL_USER}>`,
-    to: party.email,
+    from:    `"NeXsign" <${process.env.EMAIL_USER}>`,
+    to:      party.email,
     subject: `Signature Requested: ${docTitle}`,
     html: `
-      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 12px; padding: 20px; border-top: 4px solid #28ABDF;">
-        <h2 style="color: #28ABDF;">NeXsign</h2>
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #eee;
+                  border-radius:12px;padding:20px;border-top:4px solid #28ABDF;">
+        <h2 style="color:#28ABDF;">NeXsign</h2>
         <p>Hello <b>${party.name}</b>,</p>
-        <p>You have been requested to sign the document: <b>${docTitle}</b></p>
-        <div style="margin: 30px 0; text-align: center;">
-          <a href="${signLink}" style="background-color: #28ABDF; color: white; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">View & Sign Document</a>
+        <p>You have been requested to sign: <b>${docTitle}</b></p>
+        <div style="margin:30px 0;text-align:center;">
+          <a href="${signLink}"
+             style="background:#28ABDF;color:#fff;padding:14px 30px;
+                    text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">
+            View & Sign Document
+          </a>
         </div>
-        <p style="font-size: 12px; color: #666;">If the button doesn't work, copy this link: ${signLink}</p>
-      </div>
-    `
+        <p style="font-size:12px;color:#666;">Or copy this link: ${signLink}</p>
+      </div>`,
   });
 };
 
 const mergeSignatures = async (doc) => {
-  try {
-    const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
-    const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
-    const pages = pdfDoc.getPages();
-    
-    // ফিল্ডস পার্সিং
-    const fieldsToProcess = (doc.fields || []).map(f => typeof f === 'string' ? JSON.parse(f) : f).filter(f => f && f.value);
+  const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
+  const pdfDoc   = await PDFDocument.load(response.data, { ignoreEncryption: true });
+  const pages    = pdfDoc.getPages();
 
-    for (const fd of fieldsToProcess) {
-      const pageIndex = Number(fd.page) - 1;
-      if (pageIndex < 0 || pageIndex >= pages.length) continue;
-      
-      const page = pages[pageIndex];
-      const { width: pW, height: pH } = page.getSize();
-      
-      const dW = (parseFloat(fd.width) * pW) / 100;
-      const dH = (parseFloat(fd.height) * pH) / 100;
-      const dX = (parseFloat(fd.x) * pW) / 100;
-      const dY = pH - ((parseFloat(fd.y) * pH) / 100) - dH;
+  const fieldsToProcess = (doc.fields || [])
+    .map(f => typeof f === 'string' ? JSON.parse(f) : f)
+    .filter(f => f?.value);
 
-      if (fd.value.startsWith('data:image')) {
-        const imgData = Buffer.from(fd.value.split(',')[1], 'base64');
-        const sigImg = fd.value.includes('image/png') ? await pdfDoc.embedPng(imgData) : await pdfDoc.embedJpg(imgData);
-        page.drawImage(sigImg, { x: dX, y: dY, width: dW, height: dH });
-      } else {
-        page.drawText(String(fd.value), { x: dX + 5, y: dY + (dH / 4), size: 10, color: rgb(0, 0, 0) });
-      }
+  for (const fd of fieldsToProcess) {
+    const pageIndex = Number(fd.page) - 1;
+    if (pageIndex < 0 || pageIndex >= pages.length) continue;
+    const page = pages[pageIndex];
+    const { width: pW, height: pH } = page.getSize();
+    const dW = (parseFloat(fd.width)  * pW) / 100;
+    const dH = (parseFloat(fd.height) * pH) / 100;
+    const dX = (parseFloat(fd.x)      * pW) / 100;
+    const dY = pH - ((parseFloat(fd.y) * pH) / 100) - dH;
+
+    if (fd.value.startsWith('data:image')) {
+      const imgData = Buffer.from(fd.value.split(',')[1], 'base64');
+      const sigImg  = fd.value.includes('image/png')
+        ? await pdfDoc.embedPng(imgData)
+        : await pdfDoc.embedJpg(imgData);
+      page.drawImage(sigImg, { x: dX, y: dY, width: dW, height: dH });
+    } else {
+      page.drawText(String(fd.value), {
+        x: dX + 5, y: dY + dH / 4, size: 10, color: rgb(0, 0, 0),
+      });
     }
-    return await pdfDoc.save();
-  } catch (err) {
-    console.error("Merge error:", err);
-    throw err;
   }
+  return pdfDoc.save();
 };
 
+// Fire-and-forget — does NOT block the response
 const generateAndSendFinalDoc = async (docId) => {
   try {
-    const doc = await Document.findById(docId);
+    const doc            = await Document.findById(docId);
     if (!doc) return;
-    
     const mergedPdfBytes = await mergeSignatures(doc);
-    const finalPdf = await PDFDocument.load(mergedPdfBytes);
-    const font = await finalPdf.embedFont(StandardFonts.HelveticaBold);
-    
-    const page = finalPdf.addPage([600, 800]);
-    page.drawText('COMPLETION CERTIFICATE & AUDIT TRAIL', { x: 50, y: 750, size: 18, font, color: rgb(0.05, 0.64, 0.91) });
-    
+    const finalPdf       = await PDFDocument.load(mergedPdfBytes);
+    const font           = await finalPdf.embedFont(StandardFonts.HelveticaBold);
+    const page           = finalPdf.addPage([600, 800]);
+
+    page.drawText('COMPLETION CERTIFICATE & AUDIT TRAIL', {
+      x: 50, y: 750, size: 18, font, color: rgb(0.05, 0.64, 0.91),
+    });
     let yPos = 700;
     page.drawText(`Document Name: ${doc.title}`, { x: 50, y: yPos, size: 12 });
     yPos -= 30;
-
     doc.parties.forEach((p, i) => {
-      page.drawText(`${i+1}. ${p.name} (${p.email})`, { x: 50, y: yPos, size: 10, font });
-      page.drawText(`Status: ${p.status.toUpperCase()} | Date: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`, { x: 70, y: yPos - 15, size: 9 });
+      page.drawText(`${i + 1}. ${p.name} (${p.email})`, { x: 50, y: yPos, size: 10, font });
+      page.drawText(
+        `Status: ${p.status.toUpperCase()} | Date: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`,
+        { x: 70, y: yPos - 15, size: 9 }
+      );
       yPos -= 45;
     });
 
     const pdfBuffer = Buffer.from(await finalPdf.save());
-    
-    const uploadRes = await new Promise((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream({ 
-        resource_type: "raw", 
-        folder: "completed_docs", 
-        format: "pdf" 
-      }, (err, res) => err ? reject(err) : resolve(res));
-      stream.end(pdfBuffer);
+    const uploadRes = await uploadToCloudinary(pdfBuffer, {
+      resource_type: 'raw', folder: 'completed_docs', format: 'pdf',
     });
 
     doc.fileUrl = uploadRes.secure_url;
-    doc.status = 'completed';
+    doc.status  = 'completed';
     await doc.save();
-    
+
     const emails = [...doc.parties.map(p => p.email), ...doc.ccEmails];
-    
     await transporter.sendMail({
-      from: `"NeXsign" <${process.env.EMAIL_USER}>`,
-      to: emails.join(','),
-      subject: `[Completed] ${doc.title}`,
-      html: `<p>The signing process for <b>${doc.title}</b> is complete.</p>`,
-      attachments: [{ filename: `${doc.title.replace(/\s+/g, '_')}_Signed.pdf`, content: pdfBuffer }]
+      from:        `"NeXsign" <${process.env.EMAIL_USER}>`,
+      to:          emails.join(','),
+      subject:     `[Completed] ${doc.title}`,
+      html:        `<p>All parties have signed <b>${doc.title}</b>. Please find the completed document attached.</p>`,
+      attachments: [{
+        filename: `${doc.title.replace(/\s+/g, '_')}_Signed.pdf`,
+        content:  pdfBuffer,
+      }],
     });
-  } catch (err) { console.error("Finalize error:", err); }
+  } catch (err) {
+    console.error('Finalize error:', err);
+  }
 };
 
-// --- ROUTES ---
+// ── Routes ────────────────────────────────────────────────────────────────
 
-// ১. PDF Proxy Route (CORS সমস্যার সমাধানের জন্য সবচেয়ে গুরুত্বপূর্ণ)
-router.get('/proxy/:path(*)', async (req, res) => {
+// 1. Upload & Send — THE MISSING ROUTE
+router.post('/upload-and-send', auth, upload.single('file'), async (req, res) => {
   try {
-    const cloudPath = req.params.path.replace(/_/g, '/');
-    // Cloudinary resource_type check: Most PDFs are treated as 'image' or 'raw'
-    const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/${cloudPath}`;
-    
-    const response = await axios.get(url, { responseType: 'stream', timeout: 15000 });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Access-Control-Allow-Origin', '*'); 
-    response.data.pipe(res);
+    const { title, parties, ccEmails, fields, totalPages } = req.body;
+
+    const parsedParties  = JSON.parse(parties  || '[]');
+    const parsedCcEmails = JSON.parse(ccEmails  || '[]');
+    const parsedFields   = JSON.parse(fields    || '[]');
+
+    if (!parsedParties.length)
+      return res.status(400).json({ success: false, error: 'At least one party is required' });
+
+    // Upload PDF to Cloudinary
+    let fileUrl, fileId;
+    if (req.file) {
+      const uploadRes = await uploadToCloudinary(req.file.buffer, {
+        resource_type: 'raw',
+        folder:        'nexsign_docs',
+        format:        'pdf',
+      });
+      fileUrl = uploadRes.secure_url;
+      fileId  = uploadRes.public_id;
+    } else {
+      return res.status(400).json({ success: false, error: 'PDF file is required' });
+    }
+
+    // Assign token to first party
+    const firstToken = crypto.randomBytes(32).toString('hex');
+    const partiesWithTokens = parsedParties.map((p, i) => ({
+      ...p,
+      status: i === 0 ? 'sent' : 'pending',
+      token:  i === 0 ? firstToken : undefined,
+    }));
+
+    const doc = await Document.create({
+      title:      title || 'Untitled',
+      fileUrl,
+      fileId,
+      parties:    partiesWithTokens,
+      ccEmails:   parsedCcEmails,
+      fields:     parsedFields,
+      totalPages: Number(totalPages) || 1,
+      status:     'in_progress',
+      owner:      req.user.id,
+    });
+
+    await AuditLog.create({
+      document_id:  doc._id,
+      action:       'sent',
+      performed_by: { name: req.user.full_name || 'Owner', email: req.user.email, role: 'owner' },
+      ip_address:   req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+    });
+
+    // Send email to first party — non-blocking
+    sendSigningEmail(partiesWithTokens[0], doc.title, firstToken).catch(console.error);
+
+    // Respond immediately — don't wait for email
+    res.json({ success: true, documentId: doc._id });
   } catch (err) {
-    console.error("Proxy Error:", err.message);
-    res.status(404).send("PDF file not found");
+    console.error('Upload-and-send error:', err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// ২. গেট ডকুমেন্ট বাই আইডি
+// 2. PDF Proxy — fixes CORS for Cloudinary
+router.get('/proxy/:path(*)', async (req, res) => {
+  try {
+    const cloudPath = req.params.path.replace(/_/g, '/');
+    let response;
+    try {
+      response = await axios.get(
+        `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${cloudPath}`,
+        { responseType: 'stream', timeout: 15000 }
+      );
+    } catch {
+      response = await axios.get(
+        `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/${cloudPath}`,
+        { responseType: 'stream', timeout: 15000 }
+      );
+    }
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    response.data.pipe(res);
+  } catch (err) {
+    console.error('Proxy Error:', err.message);
+    res.status(404).send('PDF not found');
+  }
+});
+
+// 3. Get signing page data (no auth — public token link)
+router.get('/sign/:token', async (req, res) => {
+  try {
+    const doc = await Document.findOne({ 'parties.token': req.params.token });
+    if (!doc) return res.status(404).json({ error: 'Invalid or expired link' });
+
+    const party = doc.parties.find(p => p.token === req.params.token);
+    if (party?.status === 'signed')
+      return res.status(400).json({ error: 'Already signed' });
+
+    res.json({
+      success:    true,
+      title:      doc.title,
+      fileUrl:    doc.fileUrl,
+      fields:     doc.fields,
+      partyIndex: doc.parties.findIndex(p => p.token === req.params.token),
+      partyName:  party?.name,
+      totalPages: doc.totalPages,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Sign submit
+router.post('/sign/submit', async (req, res) => {
+  try {
+    const { token, fields, locationData } = req.body;
+    const doc = await Document.findOne({ 'parties.token': token });
+    if (!doc) return res.status(404).json({ error: 'Invalid link' });
+
+    const idx    = doc.parties.findIndex(p => p.token === token);
+    const signer = doc.parties[idx];
+    if (signer.status === 'signed')
+      return res.status(400).json({ error: 'Already signed' });
+
+    doc.fields = fields;
+    doc.markModified('fields');
+    signer.status   = 'signed';
+    signer.signedAt = new Date();
+
+    await AuditLog.create({
+      document_id:  doc._id,
+      action:       'signed',
+      performed_by: { name: signer.name, email: signer.email, role: 'signer' },
+      ip_address:   req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+      location:     locationData || 'Unknown',
+    });
+
+    if (idx + 1 < doc.parties.length) {
+      const nextToken = crypto.randomBytes(32).toString('hex');
+      doc.parties[idx + 1].token  = nextToken;
+      doc.parties[idx + 1].status = 'sent';
+      await doc.save();
+      sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken).catch(console.error);
+      res.json({ success: true, next: true });
+    } else {
+      doc.status = 'completed';
+      await doc.save();
+      generateAndSendFinalDoc(doc._id); // fire and forget
+      res.json({ success: true, completed: true });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Submission failed' });
+  }
+});
+
+// 5. Dashboard list
+router.get('/', auth, async (req, res) => {
+  try {
+    const page  = parseInt(req.query.page)  || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip  = (page - 1) * limit;
+    const query = { $or: [{ owner: req.user.id }, { 'parties.email': req.user.email }] };
+
+    const [documents, total] = await Promise.all([
+      Document.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Document.countDocuments(query),
+    ]);
+    res.json({ success: true, documents, total, hasMore: total > skip + documents.length });
+  } catch (err) {
+    res.status(500).json({ success: false, error: 'Dashboard fetch failed' });
+  }
+});
+
+// 6. Get single document
 router.get('/:id', auth, async (req, res) => {
   try {
     const doc = await Document.findById(req.params.id);
-    if (!doc) return res.status(404).json({ success: false, message: "Document not found" });
-    
+    if (!doc) return res.status(404).json({ success: false, message: 'Document not found' });
     const isOwner = doc.owner.toString() === req.user.id;
     const isParty = doc.parties.some(p => p.email === req.user.email);
-    
-    if (!isOwner && !isParty) return res.status(403).json({ success: false, message: "Unauthorized" });
-    
+    if (!isOwner && !isParty)
+      return res.status(403).json({ success: false, message: 'Unauthorized' });
     res.json({ success: true, document: doc });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
-
-// ৩. ড্যাশবোর্ড ডেটা
-router.get('/', auth, async (req, res) => {
+// Admin: Delete document
+router.delete('/:id', auth, async (req, res) => {
   try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10; 
-    const skip = (page - 1) * limit;
-
-    const query = { $or: [{ owner: req.user.id }, { "parties.email": req.user.email }] };
-    const [documents, total] = await Promise.all([
-      Document.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      Document.countDocuments(query)
-    ]);
-
-    res.json({ success: true, documents, total, hasMore: total > skip + documents.length });
+    const doc = await Document.findById(req.params.id);
+    if (!doc) return res.status(404).json({ success: false, message: 'Not found' });
+    if (doc.owner.toString() !== req.user.id && req.user.role !== 'admin' && req.user.role !== 'super_admin')
+      return res.status(403).json({ success: false, message: 'Unauthorized' });
+    await Document.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ success: false, error: "Dashboard fetch failed" });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
-
-// ৪. সাইন সাবমিট
-router.post('/sign/submit', async (req, res) => {
-  try {
-    const { token, fields, locationData } = req.body;
-    const doc = await Document.findOne({ "parties.token": token });
-    if (!doc) return res.status(404).json({ error: "Invalid link" });
-
-    const idx = doc.parties.findIndex(p => p.token === token);
-    const signer = doc.parties[idx];
-
-    if (signer.status === 'signed') return res.status(400).json({ error: "Already signed" });
-
-    doc.fields = fields; 
-    doc.markModified('fields');
-    signer.status = 'signed';
-    signer.signedAt = new Date();
-    
-    await AuditLog.create({
-      document_id: doc._id,
-      action: 'signed',
-      performed_by: { name: signer.name, email: signer.email, role: 'signer' },
-      ip_address: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
-      location: locationData || 'Unknown'
-    });
-
-    if (idx + 1 < doc.parties.length) {
-      const nextToken = crypto.randomBytes(32).toString('hex');
-      doc.parties[idx + 1].token = nextToken;
-      doc.parties[idx + 1].status = 'sent';
-      await doc.save();
-      await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken);
-      res.json({ success: true, next: true });
-    } else {
-      doc.status = 'completed';
-      await doc.save();
-      generateAndSendFinalDoc(doc._id); 
-      res.json({ success: true, completed: true });
-    }
-  } catch (err) { 
-    res.status(500).json({ error: "Submission failed" }); 
-  }
-});
-
 module.exports = router;
