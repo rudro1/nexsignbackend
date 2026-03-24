@@ -611,6 +611,7 @@
 // };
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs'); // ✅ ফিক্স: এটি ইমপোর্ট করা ছিল না
 
 const generateToken = (user) => {
   return jwt.sign(
@@ -624,13 +625,13 @@ const generateToken = (user) => {
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ message: "ইমেইল এবং পাসওয়ার্ড প্রয়োজন।" });
+    if (!email || !password) return res.status(400).json({ success: false, message: "ইমেইল এবং পাসওয়ার্ড প্রয়োজন।" });
 
-    // ফিক্স: .select('+password') অবশ্যই দিতে হবে কারণ মডেলে password: { select: false } আছে
+    // ফিক্স: .select('+password') দিতে হবে কারণ মডেলে password: { select: false } আছে
     const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
 
     if (!user || !(await user.comparePassword(password))) {
-      return res.status(401).json({ message: "Worng Email or Password" });
+      return res.status(401).json({ success: false, message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
     }
 
     const token = generateToken(user);
@@ -641,7 +642,7 @@ exports.login = async (req, res) => {
     });
   } catch (error) {
     console.error("Login Error:", error);
-    res.status(500).json({ success: false, message: "Unable to login" });
+    res.status(500).json({ success: false, message: "লগইনে সমস্যা হয়েছে।" });
   }
 };
 
@@ -652,18 +653,13 @@ exports.register = async (req, res) => {
     const cleanEmail = email.toLowerCase().trim();
 
     const existingUser = await User.findOne({ email: cleanEmail });
-    if (existingUser) {
-        return res.status(400).json({ message: "This Email already in use" });
-    }
+    if (existingUser) return res.status(400).json({ success: false, message: "এই ইমেইলটি ইতিপূর্বে ব্যবহৃত হয়েছে।" });
 
-    // ২. পাসওয়ার্ড হ্যাশিং (মডেলে সেভ করার আগে সিকিউরিটি)
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-
+    // নোট: আপনার মডেলে যদি pre-save hook থাকে তবে আলাদা করে bcrypt করার দরকার নেই
     const user = new User({
       full_name,
       email: cleanEmail,
-      password, // মডেল অটোমেটিক হ্যাশ করবে
+      password, 
       role: cleanEmail === 'bisalsaha42@gmail.com' ? 'super_admin' : 'user'
     });
 
@@ -676,34 +672,7 @@ exports.register = async (req, res) => {
       user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } 
     });
   } catch (error) {
-    res.status(500).json({ message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।", error: error.message });
-  }
-};
-
-// --- LOGIN (ইমেইল ও পাসওয়ার্ড দিয়ে লগইন) ---
-exports.login = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email: email.toLowerCase().trim() });
-
-    // ইউজার চেক এবং পাসওয়ার্ড ম্যাচিং (Model এর comparePassword মেথড ব্যবহার করে)
-    if (!user || !(await user.comparePassword(password))) {
-      return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
-    }
-
-    const token = generateToken(user);
-    
-    res.json({ 
-      token, 
-      user: { 
-        id: user._id, 
-        full_name: user.full_name, 
-        email: user.email, 
-        role: user.role 
-      } 
-    });
-  } catch (error) {
-    res.status(500).json({ message: "লগইনে সমস্যা হয়েছে।" });
+    res.status(500).json({ success: false, message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।", error: error.message });
   }
 };
 
@@ -713,7 +682,6 @@ exports.googleAuth = async (req, res) => {
     const { name, email, googleId, photoURL } = req.body;
     const cleanEmail = email.toLowerCase().trim();
     let user = await User.findOne({ email: cleanEmail });
-
 
     if (!user) {
       user = await User.create({
@@ -726,66 +694,33 @@ exports.googleAuth = async (req, res) => {
       });
     }
 
-    
+    const token = generateToken(user);
+    res.json({ success: true, token, user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } });
+  } catch (error) {
+    console.error("Google Auth Error:", error);
+    res.status(500).json({ success: false, message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
+  }
+};
 
-// authController.js এর শেষে syncPassword ফাংশনটি ঠিক করুন
-// --- Sync Password Function ---
+// --- SYNC PASSWORD ---
 exports.syncPassword = async (req, res) => {
   try {
     const { email, password } = req.body;
     const cleanEmail = email.toLowerCase().trim();
     const user = await User.findOne({ email: cleanEmail });
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
 
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(password, salt);
-    user.password = hashedPassword;
+    // মডেলে pre-save hook থাকলে শুধু পাসওয়ার্ড এসাইন করে save করলেই হয়
+    user.password = password;
     await user.save();
 
     const token = generateToken(user);
     res.status(200).json({
+      success: true,
       token,
       user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role }
     });
   } catch (error) {
-    res.status(500).json({ message: "Internal server error" });
-  }
-};
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    const token = generateToken(user);
-    res.json({ success: true, token, user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } });
-  } catch (error) {
-    console.error("Google Auth Error:", error);
-    res.status(500).json({ message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
+    res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
