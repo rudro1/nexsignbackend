@@ -8565,6 +8565,7 @@ const Document = require('../models/Document');
 const AuditLog = require('../models/AuditLog');
 const auth = require('../middleware/auth');
 
+// ১. কনফিগারেশন
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -8579,13 +8580,12 @@ const transporter = nodemailer.createTransport({
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-// --- HELPER FUNCTIONS ---
-
+// 🌟 মার্জ সিগনেচার লজিক
 const mergeSignatures = async (doc) => {
   try {
     const response = await axios.get(doc.fileUrl, { 
       responseType: 'arraybuffer',
-      timeout: 20000 
+      timeout: 30000 
     });
     
     const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
@@ -8593,7 +8593,9 @@ const mergeSignatures = async (doc) => {
 
     const rawFields = Array.isArray(doc.fields) ? doc.fields : [];
     const fieldsToProcess = rawFields.map(f => {
-        try { return typeof f === 'string' ? JSON.parse(f) : f; } catch (e) { return f; }
+        try {
+            return typeof f === 'string' ? JSON.parse(f) : f;
+        } catch (e) { return f; }
     }).filter(f => f && f.value);
 
     for (const fd of fieldsToProcess) {
@@ -8612,10 +8614,28 @@ const mergeSignatures = async (doc) => {
         if (fd.value.startsWith('data:image')) {
           const base64Data = fd.value.split(',')[1];
           const imgBuffer = Buffer.from(base64Data, 'base64');
-          let sigImg = fd.value.includes('image/png') ? await pdfDoc.embedPng(imgBuffer) : await pdfDoc.embedJpg(imgBuffer);
-          page.drawImage(sigImg, { x: drawX, y: drawY, width: drawW, height: drawH, opacity: 1 });
-        } else if (fd.value) {
-          page.drawText(String(fd.value), { x: drawX + 2, y: drawY + (drawH / 4), size: 10, color: rgb(0, 0, 0) });
+          
+          let sigImg;
+          if (fd.value.includes('image/png')) {
+            sigImg = await pdfDoc.embedPng(imgBuffer);
+          } else {
+            sigImg = await pdfDoc.embedJpg(imgBuffer);
+          }
+          
+          page.drawImage(sigImg, { 
+            x: drawX, 
+            y: drawY, 
+            width: drawW, 
+            height: drawH,
+            opacity: 1
+          });
+        } else {
+          page.drawText(String(fd.value), {
+            x: drawX + 2, 
+            y: drawY + (drawH / 4),
+            size: 10, 
+            color: rgb(0, 0, 0),
+          });
         }
       } catch (e) { console.error("Field Render Error:", e.message); }
     }
@@ -8623,11 +8643,12 @@ const mergeSignatures = async (doc) => {
   } catch (err) { throw err; }
 };
 
+// 🌟 ফাইনাল ডকুমেন্ট এবং সার্টিফিকেট জেনারেশন
 const generateAndSendFinalDoc = async (docIdOrDoc) => {
   try {
     const docId = docIdOrDoc._id || docIdOrDoc;
     const doc = await Document.findById(docId); 
-    if (!doc) throw new Error("Document not found");
+    if (!doc) return;
 
     const basePdfBytes = await mergeSignatures(doc);
     const pdfDoc = await PDFDocument.load(basePdfBytes);
@@ -8637,8 +8658,27 @@ const generateAndSendFinalDoc = async (docIdOrDoc) => {
     let page = pdfDoc.addPage([600, 850]); 
     const { width, height } = page.getSize();
     
-    page.drawRectangle({ x: 21, y: height - 100, width: width - 42, height: 60, color: brandColor });
-    page.drawText('NEXSIGN DIGITAL AUDIT CERTIFICATE', { x: 50, y: height - 85, size: 20, font: boldFont, color: rgb(1, 1, 1) });
+    page.drawRectangle({
+      x: 20, y: 20, width: width - 40, height: height - 40,
+      borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1,
+    });
+
+    page.drawRectangle({
+      x: 21, y: height - 110, width: width - 42, height: 60,
+      color: brandColor, 
+    });
+
+    page.drawText('NEXSIGN DIGITAL AUDIT CERTIFICATE', {
+      x: 50, y: height - 75, size: 20, font: boldFont, color: rgb(1, 1, 1)
+    });
+
+    let currentY = height - 160;
+    doc.parties.forEach((p, index) => {
+        page.drawText(`${index + 1}. Signer: ${p.name} (${p.email})`, { x: 50, y: currentY, size: 12, font: boldFont });
+        page.drawText(`Status: ${p.status} | IP: ${p.ipAddress || 'N/A'}`, { x: 50, y: currentY - 15, size: 10 });
+        page.drawText(`Date: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`, { x: 50, y: currentY - 30, size: 10 });
+        currentY -= 60;
+    });
 
     const pdfBytesFinal = await pdfDoc.save(); 
     const pdfBuffer = Buffer.from(pdfBytesFinal);
@@ -8653,25 +8693,22 @@ const generateAndSendFinalDoc = async (docIdOrDoc) => {
 
     doc.fileUrl = uploadResult.secure_url;
     doc.status = 'completed';
-    doc.markModified('status');
-    doc.markModified('fileUrl');
     await doc.save();
 
-    const signers = doc.parties.map(p => p.email).filter(e => e);
-    const validCCs = (doc.ccEmails || []).filter(e => e && e.trim() !== "");
-    const allRecipients = [...new Set([...signers, ...validCCs])];
+    const allRecipients = [...new Set([...doc.parties.map(p => p.email), ...(doc.ccEmails || [])])].filter(e => e);
+    
+    await transporter.sendMail({
+      from: `"NeXsign" <${process.env.EMAIL_USER}>`,
+      to: allRecipients.join(','),
+      subject: `Completed: ${doc.title}`,
+      html: `<p>All parties have signed <b>${doc.title}</b>. Find the final executed PDF attached.</p>`,
+      attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
+    });
 
-    if (allRecipients.length > 0) {
-        await transporter.sendMail({
-            from: `"NeXsign" <${process.env.EMAIL_USER}>`,
-            to: allRecipients.join(','),
-            subject: `Completed: ${doc.title}`,
-            attachments: [{ filename: `${doc.title}_Final.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
-        });
-    }
   } catch (err) { console.error("Finalize Error:", err); }
 };
 
+// 🌟 সাইনিং ইমেইল টেমপ্লেট ফাংশন
 const sendSigningEmail = async (party, docTitle, token, doc) => {
   const baseUrl = process.env.FRONTEND_URL || "https://nexsignfrontend.vercel.app";
   const signLink = `${baseUrl}/sign?token=${token}`;
@@ -8683,19 +8720,36 @@ const sendSigningEmail = async (party, docTitle, token, doc) => {
     to: party.email,
     subject: `Signature Request: ${docTitle}`,
     html: `
-      <div style="font-family: 'Segoe UI', sans-serif; max-width: 600px; margin: auto; border: 1px solid #e1e4e8; border-radius: 12px; overflow: hidden;">
-        <div style="background-color: ${brandColor}; padding: 40px 20px; text-align: center; color: white;">
-          <h1 style="margin: 0;">NexSign</h1>
-          <p style="margin: 0; opacity: 0.9;">Requested by ${senderName}</p>
-        </div>
-        <div style="padding: 40px;">
-          <h2>Signature Requested</h2>
-          <p>Hello <strong>${party.name}</strong>, you have been invited to sign <strong>${docTitle}</strong>.</p>
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${signLink}" style="background: ${brandColor}; color: white; padding: 16px 32px; text-decoration: none; border-radius: 8px; font-weight: bold;">View & Sign Document</a>
-          </div>
-        </div>
-      </div>`
+      <!DOCTYPE html>
+      <html>
+      <body style="margin: 0; padding: 0; background-color: #f4f7f9; font-family: sans-serif;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td align="center" style="padding: 20px;">
+              <table width="600" style="background-color: #ffffff; border-radius: 12px; border: 1px solid #e1e4e8;">
+                <tr>
+                  <td align="center" style="background-color: ${brandColor}; padding: 40px; color: #fff;">
+                    <h1 style="margin: 0;">NexSign</h1>
+                    <p style="margin: 5px 0 0;">From: ${senderName}</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding: 40px;">
+                    <h2 style="color: #1a202c;">Signature Requested</h2>
+                    <p>Hello <b>${party.name || 'Signer'}</b>,</p>
+                    <p>You have been invited to review and sign <b>${docTitle}</b>.</p>
+                    <div style="text-align: center; margin: 30px 0;">
+                      <a href="${signLink}" style="background-color: ${brandColor}; color: #fff; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">View & Sign Document</a>
+                    </div>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `
   });
 };
 
@@ -8703,123 +8757,111 @@ const sendSigningEmail = async (party, docTitle, token, doc) => {
 
 router.get('/', auth, async (req, res) => {
   try {
-    const docs = await Document.find({ owner: req.user.id, isTemplate: false }).sort({ updatedAt: -1 });
+    const docs = await Document.find({ owner: req.user.id }).sort({ updatedAt: -1 });
     res.json(docs);
   } catch (err) { res.status(500).json({ error: "Load failed" }); }
 });
 
+router.post('/upload', auth, upload.single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    const result = await new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { resource_type: "raw", folder: "nexsign_docs", format: 'pdf' },
+        (err, res) => err ? reject(err) : resolve(res)
+      );
+      stream.end(req.file.buffer);
+    });
+
+    let partiesData = typeof req.body.parties === 'string' ? JSON.parse(req.body.parties) : (req.body.parties || []);
+
+    const newDoc = new Document({
+      title: req.body.title || 'Untitled Document',
+      fileUrl: result.secure_url,
+      fileId: result.public_id,
+      owner: req.user.id,
+      status: 'draft',
+      parties: partiesData,
+      fields: []
+    });
+    await newDoc.save();
+    res.json(newDoc);
+  } catch (err) { res.status(500).json({ error: "Upload failed" }); }
+});
+
 router.post('/send', auth, async (req, res) => {
   try {
-    const { id, title, fileUrl, fileId, parties, fields, saveAsTemplate, senderMeta, ccEmails } = req.body;
-
-    let doc;
-    if (id) {
-      doc = await Document.findOne({ _id: id, owner: req.user.id });
-    }
-
-    // টেমপ্লেট হিসেবে সেভ করার লজিক
-    if (saveAsTemplate) {
-      await Document.create({
-        title: title || 'Untitled Template',
-        fileUrl, fileId, owner: req.user.id,
-        isTemplate: true, fields, parties
-      });
-    }
-
-    // যদি ড্রাফট না থাকে তবে নতুন ইন-প্রগ্রেস ডকুমেন্ট তৈরি
-    if (!doc) {
-      doc = new Document({
-        title: title || 'Untitled Document',
-        fileUrl, fileId, owner: req.user.id,
-        parties, fields, senderMeta, ccEmails,
-        isTemplate: false
-      });
-    }
+    const doc = await Document.findOne({ _id: req.body.id, owner: req.user.id });
+    if (!doc || doc.status !== 'draft') return res.status(400).json({ error: "Invalid document" });
 
     const token = crypto.randomBytes(32).toString('hex');
     doc.parties[0].token = token;
     doc.parties[0].status = 'sent';
-    doc.parties[0].sentAt = new Date();
     doc.status = 'in_progress';
     doc.currentPartyIndex = 0;
-
-    doc.markModified('parties');
-    await doc.save(); 
-
-    try {
-      await sendSigningEmail(doc.parties[0], doc.title, token, doc);
-    } catch (mailErr) {
-      console.error("Mail Delivery Failed:", mailErr.message);
-    }
-
-    res.json({ success: true, signLink: `${process.env.FRONTEND_URL}/sign?token=${token}` });
-  } catch (err) { 
-    console.error("Send Route Error:", err);
-    res.status(500).json({ error: "Internal Server Error" }); 
-  }
+    
+    await doc.save();
+    await sendSigningEmail(doc.parties[0], doc.title, token, doc);
+    
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: "Send failed" }); }
 });
 
+// 🌟 ফিক্সড প্রক্সি রাউট
 router.get('/proxy/:path(*)', async (req, res) => {
   try {
     const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${req.params.path}`;
-    const response = await axios.get(url, { responseType: 'stream', timeout: 15000 });
+    const response = await axios.get(url, { responseType: 'stream' });
     res.setHeader('Content-Type', 'application/pdf');
-    return response.data.pipe(res);
+    response.data.pipe(res);
   } catch (err) { res.status(404).send("PDF not found"); }
+});
+
+// 🌟 ফিক্সড সাইনিং সেশন রাউট (টোকেন ডিটেকশন ফিক্স)
+router.get('/sign/:token', async (req, res) => {
+  try {
+    const doc = await Document.findOne({ "parties.token": req.params.token });
+    if (!doc) return res.status(404).json({ error: "Invalid link" });
+
+    const party = doc.parties.find(p => p.token === req.params.token);
+    res.json({ document: doc, party: { ...party.toObject(), index: doc.parties.indexOf(party) } });
+  } catch (err) { res.status(500).json({ error: "Session failed" }); }
 });
 
 router.post('/sign/submit', async (req, res) => {
   try {
-    const { token, fields: incomingFields } = req.body;
+    const { token, fields } = req.body;
     const doc = await Document.findOne({ "parties.token": token });
-    if (!doc) return res.status(404).json({ error: "Invalid link" });
+    if (!doc) return res.status(404).json({ error: "Invalid session" });
 
     const idx = doc.parties.findIndex(p => p.token === token);
-    if (doc.parties[idx].status === 'signed') return res.json({ already_signed: true });
-
-    const ip = (req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || '127.0.0.1').trim();
-    
-    // বর্তমান সাইনার আপডেট
-    doc.fields = incomingFields;
+    doc.fields = fields;
     doc.parties[idx].status = 'signed';
     doc.parties[idx].signedAt = new Date();
-    doc.parties[idx].ipAddress = ip;
-    doc.parties[idx].device = req.headers['user-agent'] || 'Unknown Device';
-
-    await AuditLog.create({
-      document_id: doc._id,
-      action: 'signed',
-      performed_by: { name: doc.parties[idx].name, email: doc.parties[idx].email, role: 'signer' },
-      ip_address: ip,
-      user_agent: req.headers['user-agent']
-    });
-
-    doc.markModified('fields'); 
-    doc.markModified('parties');
+    doc.parties[idx].ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
     if (idx + 1 < doc.parties.length) {
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
-      doc.parties[idx + 1].sentAt = new Date();
-      doc.currentPartyIndex = idx + 1;
       await doc.save();
       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken, doc);
-      return res.json({ next: true });
+      res.json({ next: true });
     } else {
       doc.status = 'completed';
-      await doc.save(); 
+      await doc.save();
       res.json({ completed: true });
-      setImmediate(() => generateAndSendFinalDoc(doc._id));
+      // Vercel-এর জন্য এখানে await ব্যবহার করা ভালো
+      await generateAndSendFinalDoc(doc._id);
     }
-  } catch (err) { res.status(500).json({ error: "Process failed" }); }
+  } catch (err) { res.status(500).json({ error: "Submit failed" }); }
 });
 
 router.get('/:id', auth, async (req, res) => {
   try {
     const doc = await Document.findOne({ _id: req.params.id, owner: req.user.id });
     res.json(doc);
-  } catch (err) { res.status(500).json({ error: "Invalid ID" }); }
+  } catch (err) { res.status(404).json({ error: "Not found" }); }
 });
 
 module.exports = router;
