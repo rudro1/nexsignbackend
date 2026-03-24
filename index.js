@@ -2571,16 +2571,20 @@ const allowedOrigins = [
   'https://localhost:5173'
 ];
 app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || origin?.endsWith('.vercel.app')) {
-      callback(null, true);
-    } else {
-      callback(new Error('CORS blocked'));
-    }
-  },
+  origin: [
+    'https://nexsignfrontend.vercel.app',
+    'https://nexsignfrontend.vercel.app', 
+    'http://localhost:5173',
+    'http://localhost:3000'
+  ],
   credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization','x-forwarded-for']
+  methods: ['GET','POST','PUT','DELETE','OPTIONS','PATCH'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',  // ✅ FIXED: এটা add করো
+    'X-Forwarded-For'
+  ]
 }));
 
 // ✅ Body Parsers (Production Limits)
