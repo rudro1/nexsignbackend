@@ -8831,30 +8831,42 @@ router.get('/sign/:token', async (req, res) => {
 router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields } = req.body;
+    // ১. সঠিক ডকুমেন্ট খুঁজে বের করা
     const doc = await Document.findOne({ "parties.token": token });
     if (!doc) return res.status(404).json({ error: "Invalid session" });
 
     const idx = doc.parties.findIndex(p => p.token === token);
-    doc.fields = fields;
+    
+    // ২. গুরুত্বপূর্ণ: ফ্রন্টএন্ড থেকে আসা লেটেস্ট ফিল্ডস (সিগনেচার ভ্যালুসহ) সেভ করা
+    // এখানে fields.map(JSON.stringify) করার প্রয়োজন নেই যদি মঙ্গুজ স্কিমা 'Array' বা 'Mixed' হয়
+    doc.fields = fields; 
+    doc.markModified('fields'); // মঙ্গুজকে জানানো যে ডাটা চেঞ্জ হয়েছে
+
     doc.parties[idx].status = 'signed';
     doc.parties[idx].signedAt = new Date();
     doc.parties[idx].ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
+    // ৩. চেইন সাইনিং (পরের জনের কাছে পাঠানো)
     if (idx + 1 < doc.parties.length) {
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
       await doc.save();
       await sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken, doc);
-      res.json({ next: true });
+      return res.json({ next: true });
     } else {
+      // ৪. সবাই সাইন করলে স্টেট আপডেট এবং PDF জেনারেশন
       doc.status = 'completed';
       await doc.save();
+      
+      // ৫. PDF-এ সাইন "Burn" করার ফাংশন কল
+      await generateAndSendFinalDoc(doc); 
       res.json({ completed: true });
-      // Vercel-এর জন্য এখানে await ব্যবহার করা ভালো
-      await generateAndSendFinalDoc(doc._id);
     }
-  } catch (err) { res.status(500).json({ error: "Submit failed" }); }
+  } catch (err) { 
+    console.error("Submit error:", err);
+    res.status(500).json({ error: "Submit failed" }); 
+  }
 });
 
 router.get('/:id', auth, async (req, res) => {
