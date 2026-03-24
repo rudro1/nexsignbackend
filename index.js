@@ -2462,223 +2462,225 @@
 // });
 
 // module.exports = app;
-// require('dotenv').config();
-// const express  = require('express');
-// const cors     = require('cors');
-// const mongoose = require('mongoose');
-// const helmet   = require('helmet');
-
-// const app = express();
-// app.set('trust proxy', 1);
-
-// const allowedOrigins = [
-//   'http://localhost:5173',
-//   'https://nexsignfrontend.vercel.app',
-// ];
-
-// const corsOptions = {
-//   origin: (origin, callback) => {
-//     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))
-//       return callback(null, true);
-//     return callback(new Error('CORS blocked'));
-//   },
-//   credentials: true,
-//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-//   allowedHeaders: ['Content-Type', 'Authorization'],
-//   optionsSuccessStatus: 200,
-// };
-
-// app.use(cors(corsOptions));
-// app.options('*', cors(corsOptions));
-// app.use(helmet({
-//   crossOriginResourcePolicy: { policy: 'cross-origin' },
-//   contentSecurityPolicy:     false,
-//   crossOriginEmbedderPolicy: false,
-// }));
-// app.use(express.json({ limit: '10mb' }));
-// app.use(express.urlencoded({ limit: '10mb', extended: true }));
-
-// // Serverless DB connection cache
-// let cachedDb = null;
-// const connectDB = async () => {
-//   if (cachedDb && mongoose.connection.readyState >= 1) return;
-//   cachedDb = await mongoose.connect(process.env.MONGO_URI);
-// };
-
-// app.use(async (req, res, next) => {
-//   try { await connectDB(); next(); }
-//   catch (err) { res.status(500).json({ error: 'Database connection failed' }); }
-// });
-
-// app.use('/api/auth',      require('./routes/authRoutes'));
-// app.use('/api/documents', require('./routes/documentRoutes'));
-// app.use('/api/admin',     require('./routes/adminRoutes'));
-// app.use('/api/feedback',  require('./routes/feedbackRoutes'));
-
-// app.use((err, req, res, next) => {
-//   res.status(err.status || 500).json({
-//     success: false,
-//     message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message,
-//   });
-// });
-
-// module.exports = app; workable
-
-
 require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
+const express  = require('express');
+const cors     = require('cors');
 const mongoose = require('mongoose');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
-const compression = require('compression');
+const helmet   = require('helmet');
 
 const app = express();
 app.set('trust proxy', 1);
-app.enable('trust proxy');
 
-// ✅ PRODUCTION SECURITY HEADERS
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
-      connectSrc: ["'self'", "https://*.cloudinary.com"]
-    }
-  },
-  crossOriginEmbedderPolicy: false
-}));
-
-// ✅ COMPRESSION (30% Size Reduce)
-app.use(compression());
-
-// ✅ RATE LIMITING (DDoS Protection)
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per IP
-  message: { error: 'Too many requests, please try again later.' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use('/api/', limiter);
-
-// ✅ ULTRA FAST CORS (Production Safe)
 const allowedOrigins = [
+  'http://localhost:5173',
   'https://nexsignfrontend.vercel.app',
-  'https://*.vercel.app',
-  'https://localhost:5173'
 ];
-app.use(cors({
-  origin: [
-    'https://nexsignfrontend.vercel.app',
-    'https://nexsignfrontend.vercel.app', 
-    'http://localhost:5173',
-    'http://localhost:3000'
-  ],
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))
+      return callback(null, true);
+    return callback(new Error('CORS blocked'));
+  },
   credentials: true,
-  methods: ['GET','POST','PUT','DELETE','OPTIONS','PATCH'],
-  allowedHeaders: [
-    'Content-Type',
-    'Authorization',
-    'X-Requested-With',  // ✅ FIXED: এটা add করো
-    'X-Forwarded-For'
-  ]
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy:     false,
+  crossOriginEmbedderPolicy: false,
 }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// ✅ Body Parsers (Production Limits)
-app.use(express.json({ limit: '15mb' }));
-app.use(express.urlencoded({ limit: '15mb', extended: true }));
+// Serverless DB connection cache
+let cachedDb = null;
+const connectDB = async () => {
+  if (cachedDb && mongoose.connection.readyState >= 1) return;
+  cachedDb = await mongoose.connect(process.env.MONGO_URI);
+};
 
-// ✅ WELCOME PAGE - STATIC SECURITY CHECK
-app.get('/', (req, res) => {
-  // Basic security check
-  const userAgent = req.get('User-Agent') || '';
-  if (userAgent.includes('bot') || userAgent.includes('crawler')) {
-    return res.status(403).json({ error: 'Access Denied' });
-  }
-  
-  res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <title>NeXsign - Enterprise eSign</title>
-  <meta name="robots" content="index,follow">
-  <style>/* Same fast CSS */</style>
-</head>
-<body>
-  <!-- Same Hero Content -->
-</body>
-</html>`);
+app.use(async (req, res, next) => {
+  try { await connectDB(); next(); }
+  catch (err) { res.status(500).json({ error: 'Database connection failed' }); }
 });
 
-// ✅ BACKGROUND DB CONNECT (No Block)
-let dbConnected = false;
-mongoose.connect(process.env.MONGO_URI, {
-  bufferCommands: false,
-  bufferMaxEntries: 0,
-  serverSelectionTimeoutMS: 5000,
-  socketTimeoutMS: 45000,
-  useNewUrlParser: true,
-  useUnifiedTopology: true
-}).then(() => {
-  dbConnected = true;
-  console.log('🛡️ MongoDB Connected - Production Ready');
-}).catch(err => {
-  console.error('❌ MongoDB Error:', err);
-});
-
-// ✅ API Middleware - Only if DB Ready
-app.use('/api/', async (req, res, next) => {
-  if (!dbConnected) {
-    return res.status(503).json({ 
-      error: 'Service temporarily unavailable. Please try again in a moment.' 
-    });
-  }
-  next();
-});
-
-// ✅ ROUTES
-app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/auth',      require('./routes/authRoutes'));
 app.use('/api/documents', require('./routes/documentRoutes'));
-app.use('/api/admin', require('./routes/adminRoutes'));
-app.use('/api/feedback', require('./routes/feedbackRoutes'));
+app.use('/api/admin',     require('./routes/adminRoutes'));
+app.use('/api/feedback',  require('./routes/feedbackRoutes'));
 
-// ✅ Health Check (Production Monitoring)
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    db: dbConnected,
-    timestamp: Date.now(),
-    uptime: process.uptime()
-  });
-});
-
-// ✅ PRODUCTION ERROR HANDLER
 app.use((err, req, res, next) => {
-  console.error('🚨 ERROR:', err.stack);
   res.status(err.status || 500).json({
     success: false,
-    message: process.env.NODE_ENV === 'production' 
-      ? 'Internal Server Error' 
-      : err.message,
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
-});
-
-// ✅ 404 Handler
-app.use('*', (req, res) => {
-  res.status(404).json({ 
-    success: false, 
-    error: 'Route not found' 
+    message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message,
   });
 });
 
 module.exports = app;
+
+
+
+
+// require('dotenv').config();
+// const express = require('express');
+// const cors = require('cors');
+// const mongoose = require('mongoose');
+// const helmet = require('helmet');
+// const rateLimit = require('express-rate-limit');
+// const compression = require('compression');
+
+// const app = express();
+// app.set('trust proxy', 1);
+// app.enable('trust proxy');
+
+// // ✅ PRODUCTION SECURITY HEADERS
+// app.use(helmet({
+//   contentSecurityPolicy: {
+//     directives: {
+//       defaultSrc: ["'self'"],
+//       styleSrc: ["'self'", "'unsafe-inline'"],
+//       scriptSrc: ["'self'"],
+//       imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
+//       connectSrc: ["'self'", "https://*.cloudinary.com"]
+//     }
+//   },
+//   crossOriginEmbedderPolicy: false
+// }));
+
+// // ✅ COMPRESSION (30% Size Reduce)
+// app.use(compression());
+
+// // ✅ RATE LIMITING (DDoS Protection)
+// const limiter = rateLimit({
+//   windowMs: 15 * 60 * 1000, // 15 minutes
+//   max: 100, // 100 requests per IP
+//   message: { error: 'Too many requests, please try again later.' },
+//   standardHeaders: true,
+//   legacyHeaders: false,
+// });
+// app.use('/api/', limiter);
+
+// // ✅ ULTRA FAST CORS (Production Safe)
+// const allowedOrigins = [
+//   'https://nexsignfrontend.vercel.app',
+//   'https://*.vercel.app',
+//   'https://localhost:5173'
+// ];
+// app.use(cors({
+//   origin: [
+//     'https://nexsignfrontend.vercel.app',
+//     'https://nexsignfrontend.vercel.app', 
+//     'http://localhost:5173',
+//     'http://localhost:3000'
+//   ],
+//   credentials: true,
+//   methods: ['GET','POST','PUT','DELETE','OPTIONS','PATCH'],
+//   allowedHeaders: [
+//     'Content-Type',
+//     'Authorization',
+//     'X-Requested-With',  // ✅ FIXED: এটা add করো
+//     'X-Forwarded-For'
+//   ]
+// }));
+
+// // ✅ Body Parsers (Production Limits)
+// app.use(express.json({ limit: '15mb' }));
+// app.use(express.urlencoded({ limit: '15mb', extended: true }));
+
+// // ✅ WELCOME PAGE - STATIC SECURITY CHECK
+// app.get('/', (req, res) => {
+//   // Basic security check
+//   const userAgent = req.get('User-Agent') || '';
+//   if (userAgent.includes('bot') || userAgent.includes('crawler')) {
+//     return res.status(403).json({ error: 'Access Denied' });
+//   }
+  
+//   res.send(`
+// <!DOCTYPE html>
+// <html>
+// <head>
+//   <meta charset="utf-8">
+//   <meta name="viewport" content="width=device-width, initial-scale=1">
+//   <meta http-equiv="X-UA-Compatible" content="IE=edge">
+//   <title>NeXsign - Enterprise eSign</title>
+//   <meta name="robots" content="index,follow">
+//   <style>/* Same fast CSS */</style>
+// </head>
+// <body>
+//   <!-- Same Hero Content -->
+// </body>
+// </html>`);
+// });
+
+// // ✅ BACKGROUND DB CONNECT (No Block)
+// let dbConnected = false;
+// mongoose.connect(process.env.MONGO_URI, {
+//   bufferCommands: false,
+//   bufferMaxEntries: 0,
+//   serverSelectionTimeoutMS: 5000,
+//   socketTimeoutMS: 45000,
+//   useNewUrlParser: true,
+//   useUnifiedTopology: true
+// }).then(() => {
+//   dbConnected = true;
+//   console.log('🛡️ MongoDB Connected - Production Ready');
+// }).catch(err => {
+//   console.error('❌ MongoDB Error:', err);
+// });
+
+// // ✅ API Middleware - Only if DB Ready
+// app.use('/api/', async (req, res, next) => {
+//   if (!dbConnected) {
+//     return res.status(503).json({ 
+//       error: 'Service temporarily unavailable. Please try again in a moment.' 
+//     });
+//   }
+//   next();
+// });
+
+// // ✅ ROUTES
+// app.use('/api/auth', require('./routes/authRoutes'));
+// app.use('/api/documents', require('./routes/documentRoutes'));
+// app.use('/api/admin', require('./routes/adminRoutes'));
+// app.use('/api/feedback', require('./routes/feedbackRoutes'));
+
+// // ✅ Health Check (Production Monitoring)
+// app.get('/health', (req, res) => {
+//   res.json({ 
+//     status: 'OK', 
+//     db: dbConnected,
+//     timestamp: Date.now(),
+//     uptime: process.uptime()
+//   });
+// });
+
+// // ✅ PRODUCTION ERROR HANDLER
+// app.use((err, req, res, next) => {
+//   console.error('🚨 ERROR:', err.stack);
+//   res.status(err.status || 500).json({
+//     success: false,
+//     message: process.env.NODE_ENV === 'production' 
+//       ? 'Internal Server Error' 
+//       : err.message,
+//     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+//   });
+// });
+
+// // ✅ 404 Handler
+// app.use('*', (req, res) => {
+//   res.status(404).json({ 
+//     success: false, 
+//     error: 'Route not found' 
+//   });
+// });
+
+// module.exports = app;
 
 
 
