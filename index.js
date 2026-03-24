@@ -2470,10 +2470,10 @@ const helmet = require('helmet');
 
 const app = express();
 
-// ১. Vercel এর জন্য প্রক্সি ট্রাস্ট করা
+// 1. Trust proxy for Vercel
 app.set('trust proxy', 1);
 
-// ২. CORS কনফিগারেশন (সবার আগে রাখা ভালো)
+// 2. Optimized CORS Configuration
 const allowedOrigins = [
   'http://localhost:5173', 
   'https://nexsignfrontend.vercel.app'
@@ -2481,7 +2481,7 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // origin না থাকলে (যেমন মোবাইল অ্যাপ বা পোস্টম্যান) এলাউ করা
+    // Allow requests with no origin (like mobile apps or curl) or allowed domains
     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
       return callback(null, true);
     }
@@ -2490,19 +2490,23 @@ const corsOptions = {
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  optionsSuccessStatus: 200 // Vercel এর জন্য ২০০ দেওয়া ভালো
+  optionsSuccessStatus: 204 // Standard for preflight success
 };
 
+// Apply CORS middleware
 app.use(cors(corsOptions));
 
-// ৩. হেলমেট (Security) - CORS এর পরে
+// 3. Handle Preflight OPTIONS requests for all routes
+app.options('*', cors(corsOptions));
+
+// 4. Security Middleware (configured to allow cross-origin requests)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
 }));
 
-// ৪. ডাটাবেস কানেকশন (Optimized for Serverless)
+// 5. Database Connection (Serverless Optimized)
 let cachedDb = null;
 const connectDB = async () => {
   if (cachedDb && mongoose.connection.readyState >= 1) return cachedDb;
@@ -2515,22 +2519,22 @@ const connectDB = async () => {
   }
 };
 
-// ৫. মিডলওয়্যার এবং রাউটস
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// প্রতিটি রিকোয়েস্টে ডিবি কানেকশন চেক
+// Middleware to ensure DB connection
 app.use(async (req, res, next) => {
   await connectDB();
   next();
 });
 
+// 6. Routes
 app.use('/api/auth', require('./routes/authRoutes'));      
 app.use('/api/documents', require('./routes/documentRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/feedback', require('./routes/feedbackRoutes'));
 
-// ৬. গ্লোবাল এরর হ্যান্ডলার
+// 7. Global Error Handler
 app.use((err, req, res, next) => {
   const status = err.status || 500;
   res.status(status).json({ 
