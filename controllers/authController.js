@@ -630,7 +630,7 @@ exports.login = async (req, res) => {
     const user = await User.findOne({ email: email.toLowerCase().trim() }).select('+password');
 
     if (!user || !(await user.comparePassword(password))) {
-      return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
+      return res.status(401).json({ message: "Worng Email or Password" });
     }
 
     const token = generateToken(user);
@@ -641,7 +641,7 @@ exports.login = async (req, res) => {
     });
   } catch (error) {
     console.error("Login Error:", error);
-    res.status(500).json({ success: false, message: "লগইনে সমস্যা হয়েছে।" });
+    res.status(500).json({ success: false, message: "Unable to login" });
   }
 };
 
@@ -652,7 +652,13 @@ exports.register = async (req, res) => {
     const cleanEmail = email.toLowerCase().trim();
 
     const existingUser = await User.findOne({ email: cleanEmail });
-    if (existingUser) return res.status(400).json({ message: "ইমেইলটি ইতিমধ্যে ব্যবহৃত।" });
+    if (existingUser) {
+        return res.status(400).json({ message: "This Email already in use" });
+    }
+
+    // ২. পাসওয়ার্ড হ্যাশিং (মডেলে সেভ করার আগে সিকিউরিটি)
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
     const user = new User({
       full_name,
@@ -670,7 +676,34 @@ exports.register = async (req, res) => {
       user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } 
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।" });
+    res.status(500).json({ message: "রেজিস্ট্রেশনে সমস্যা হয়েছে।", error: error.message });
+  }
+};
+
+// --- LOGIN (ইমেইল ও পাসওয়ার্ড দিয়ে লগইন) ---
+exports.login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+
+    // ইউজার চেক এবং পাসওয়ার্ড ম্যাচিং (Model এর comparePassword মেথড ব্যবহার করে)
+    if (!user || !(await user.comparePassword(password))) {
+      return res.status(401).json({ message: "ভুল ইমেইল বা পাসওয়ার্ড।" });
+    }
+
+    const token = generateToken(user);
+    
+    res.json({ 
+      token, 
+      user: { 
+        id: user._id, 
+        full_name: user.full_name, 
+        email: user.email, 
+        role: user.role 
+      } 
+    });
+  } catch (error) {
+    res.status(500).json({ message: "লগইনে সমস্যা হয়েছে।" });
   }
 };
 
@@ -680,6 +713,7 @@ exports.googleAuth = async (req, res) => {
     const { name, email, googleId, photoURL } = req.body;
     const cleanEmail = email.toLowerCase().trim();
     let user = await User.findOne({ email: cleanEmail });
+
 
     if (!user) {
       user = await User.create({
@@ -692,9 +726,66 @@ exports.googleAuth = async (req, res) => {
       });
     }
 
+    
+
+// authController.js এর শেষে syncPassword ফাংশনটি ঠিক করুন
+// --- Sync Password Function ---
+exports.syncPassword = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const cleanEmail = email.toLowerCase().trim();
+    const user = await User.findOne({ email: cleanEmail });
+    if (!user) return res.status(404).json({ message: "User not found" });
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    user.password = hashedPassword;
+    await user.save();
+
+    const token = generateToken(user);
+    res.status(200).json({
+      token,
+      user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role }
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     const token = generateToken(user);
     res.json({ success: true, token, user: { id: user._id, full_name: user.full_name, email: user.email, role: user.role } });
   } catch (error) {
-    res.status(500).json({ success: false, message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
+    console.error("Google Auth Error:", error);
+    res.status(500).json({ message: "গুগল অথেন্টিকেশন ব্যর্থ হয়েছে।" });
   }
 };
