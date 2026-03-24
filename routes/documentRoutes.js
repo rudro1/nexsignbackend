@@ -8767,29 +8767,60 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
 });
 
 // 2. PDF Proxy — fixes CORS for Cloudinary
+// router.get('/proxy/:path(*)', async (req, res) => {
+//   try {
+//     const cloudPath = req.params.path.replace(/_/g, '/');
+//     let response;
+//     try {
+//       response = await axios.get(
+//         `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${cloudPath}`,
+//         { responseType: 'stream', timeout: 15000 }
+//       );
+//     } catch {
+//       response = await axios.get(
+//         `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/${cloudPath}`,
+//         { responseType: 'stream', timeout: 15000 }
+//       );
+//     }
+//     res.setHeader('Content-Type', 'application/pdf');
+//     res.setHeader('Access-Control-Allow-Origin', '*');
+//     response.data.pipe(res);
+//   } catch (err) {
+//     console.error('Proxy Error:', err.message);
+//     res.status(404).send('PDF not found');
+//   }
+// });
 router.get('/proxy/:path(*)', async (req, res) => {
   try {
-    const cloudPath = req.params.path.replace(/_/g, '/');
+    // ✅ FIX: decode ~~ back to / (frontend encodes slashes as ~~)
+    const cloudPath = req.params.path.replace(/~~/g, '/');
+ 
+    // Try raw upload first (PDFs are uploaded as raw resources)
     let response;
     try {
       response = await axios.get(
         `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${cloudPath}`,
-        { responseType: 'stream', timeout: 15000 }
+        { responseType: 'stream', timeout: 20000 }
       );
     } catch {
+      // Fallback to image/upload in case resource_type was set differently
       response = await axios.get(
         `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/${cloudPath}`,
-        { responseType: 'stream', timeout: 15000 }
+        { responseType: 'stream', timeout: 20000 }
       );
     }
+ 
     res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline');
     res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=3600'); // cache for 1 hour
     response.data.pipe(res);
   } catch (err) {
     console.error('Proxy Error:', err.message);
-    res.status(404).send('PDF not found');
+    res.status(404).json({ error: 'PDF not found', path: req.params.path });
   }
 });
+ 
 
 // 3. Get signing page data (no auth — public token link)
 router.get('/sign/:token', async (req, res) => {
