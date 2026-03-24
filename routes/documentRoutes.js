@@ -8606,37 +8606,39 @@ const sendSigningEmail = async (party, docTitle, token) => {
 };
 
 const mergeSignatures = async (doc) => {
-  const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
-  const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
-  const pages = pdfDoc.getPages();
-  
-  // ফিল্ডস পার্সিং এবং ভ্যালিডেশন
-  const fieldsToProcess = (doc.fields || []).map(f => typeof f === 'string' ? JSON.parse(f) : f).filter(f => f && f.value);
-
-  for (const fd of fieldsToProcess) {
-    const pageIndex = Number(fd.page) - 1;
-    if (pageIndex < 0 || pageIndex >= pages.length) continue;
+  try {
+    const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
+    const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
+    const pages = pdfDoc.getPages();
     
-    const page = pages[pageIndex];
-    const { width: pW, height: pH } = page.getSize();
-    
-    // কোঅর্ডিনেট ক্যালকুলেশন (PDF এর জন্য সঠিক ম্যাপিং)
-    const dW = (parseFloat(fd.width) * pW) / 100;
-    const dH = (parseFloat(fd.height) * pH) / 100;
-    const dX = (parseFloat(fd.x) * pW) / 100;
-    const dY = pH - ((parseFloat(fd.y) * pH) / 100) - dH;
+    // ফিল্ডস পার্সিং
+    const fieldsToProcess = (doc.fields || []).map(f => typeof f === 'string' ? JSON.parse(f) : f).filter(f => f && f.value);
 
-    if (fd.value.startsWith('data:image')) {
-      try {
+    for (const fd of fieldsToProcess) {
+      const pageIndex = Number(fd.page) - 1;
+      if (pageIndex < 0 || pageIndex >= pages.length) continue;
+      
+      const page = pages[pageIndex];
+      const { width: pW, height: pH } = page.getSize();
+      
+      const dW = (parseFloat(fd.width) * pW) / 100;
+      const dH = (parseFloat(fd.height) * pH) / 100;
+      const dX = (parseFloat(fd.x) * pW) / 100;
+      const dY = pH - ((parseFloat(fd.y) * pH) / 100) - dH;
+
+      if (fd.value.startsWith('data:image')) {
         const imgData = Buffer.from(fd.value.split(',')[1], 'base64');
         const sigImg = fd.value.includes('image/png') ? await pdfDoc.embedPng(imgData) : await pdfDoc.embedJpg(imgData);
         page.drawImage(sigImg, { x: dX, y: dY, width: dW, height: dH });
-      } catch (e) { console.error("Image embed error:", e); }
-    } else {
-      page.drawText(String(fd.value), { x: dX + 5, y: dY + (dH / 4), size: 10, color: rgb(0, 0, 0) });
+      } else {
+        page.drawText(String(fd.value), { x: dX + 5, y: dY + (dH / 4), size: 10, color: rgb(0, 0, 0) });
+      }
     }
+    return await pdfDoc.save();
+  } catch (err) {
+    console.error("Merge error:", err);
+    throw err;
   }
-  return await pdfDoc.save();
 };
 
 const generateAndSendFinalDoc = async (docId) => {
@@ -8648,7 +8650,6 @@ const generateAndSendFinalDoc = async (docId) => {
     const finalPdf = await PDFDocument.load(mergedPdfBytes);
     const font = await finalPdf.embedFont(StandardFonts.HelveticaBold);
     
-    // অডিট ট্রেইল পেইজ যোগ করা
     const page = finalPdf.addPage([600, 800]);
     page.drawText('COMPLETION CERTIFICATE & AUDIT TRAIL', { x: 50, y: 750, size: 18, font, color: rgb(0.05, 0.64, 0.91) });
     
@@ -8683,7 +8684,7 @@ const generateAndSendFinalDoc = async (docId) => {
       from: `"NeXsign" <${process.env.EMAIL_USER}>`,
       to: emails.join(','),
       subject: `[Completed] ${doc.title}`,
-      html: `<p>The signing process for <b>${doc.title}</b> is complete. Attached is the final signed copy.</p>`,
+      html: `<p>The signing process for <b>${doc.title}</b> is complete.</p>`,
       attachments: [{ filename: `${doc.title.replace(/\s+/g, '_')}_Signed.pdf`, content: pdfBuffer }]
     });
   } catch (err) { console.error("Finalize error:", err); }
@@ -8691,19 +8692,33 @@ const generateAndSendFinalDoc = async (docId) => {
 
 // --- ROUTES ---
 
-// ১. আইডি দিয়ে নির্দিষ্ট ডকুমেন্ট গেট (যা আপনার মিসিং ছিল)
+// ১. PDF Proxy Route (CORS সমস্যার সমাধানের জন্য সবচেয়ে গুরুত্বপূর্ণ)
+router.get('/proxy/:path(*)', async (req, res) => {
+  try {
+    const cloudPath = req.params.path.replace(/_/g, '/');
+    // Cloudinary resource_type check: Most PDFs are treated as 'image' or 'raw'
+    const url = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/${cloudPath}`;
+    
+    const response = await axios.get(url, { responseType: 'stream', timeout: 15000 });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Access-Control-Allow-Origin', '*'); 
+    response.data.pipe(res);
+  } catch (err) {
+    console.error("Proxy Error:", err.message);
+    res.status(404).send("PDF file not found");
+  }
+});
+
+// ২. গেট ডকুমেন্ট বাই আইডি
 router.get('/:id', auth, async (req, res) => {
   try {
     const doc = await Document.findById(req.params.id);
     if (!doc) return res.status(404).json({ success: false, message: "Document not found" });
     
-    // সিকিউরিটি চেক
     const isOwner = doc.owner.toString() === req.user.id;
     const isParty = doc.parties.some(p => p.email === req.user.email);
     
-    if (!isOwner && !isParty) {
-      return res.status(403).json({ success: false, message: "Unauthorized access" });
-    }
+    if (!isOwner && !isParty) return res.status(403).json({ success: false, message: "Unauthorized" });
     
     res.json({ success: true, document: doc });
   } catch (err) {
@@ -8711,20 +8726,14 @@ router.get('/:id', auth, async (req, res) => {
   }
 });
 
-// ২. ড্যাশবোর্ড ফেচ
+// ৩. ড্যাশবোর্ড ডেটা
 router.get('/', auth, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10; 
     const skip = (page - 1) * limit;
 
-    const query = {
-      $or: [
-        { owner: req.user.id },
-        { "parties.email": req.user.email }
-      ]
-    };
-
+    const query = { $or: [{ owner: req.user.id }, { "parties.email": req.user.email }] };
     const [documents, total] = await Promise.all([
       Document.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       Document.countDocuments(query)
@@ -8732,27 +8741,24 @@ router.get('/', auth, async (req, res) => {
 
     res.json({ success: true, documents, total, hasMore: total > skip + documents.length });
   } catch (err) {
-    res.status(500).json({ success: false, error: "Dashboard data fetch failed" });
+    res.status(500).json({ success: false, error: "Dashboard fetch failed" });
   }
 });
 
-// ৩. সাইন সাবমিট (উন্নত লজিক)
+// ৪. সাইন সাবমিট
 router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields, locationData } = req.body;
     const doc = await Document.findOne({ "parties.token": token });
-    if (!doc) return res.status(404).json({ error: "Invalid or expired link" });
+    if (!doc) return res.status(404).json({ error: "Invalid link" });
 
     const idx = doc.parties.findIndex(p => p.token === token);
     const signer = doc.parties[idx];
 
-    if (signer.status === 'signed') {
-      return res.status(400).json({ error: "Already signed" });
-    }
+    if (signer.status === 'signed') return res.status(400).json({ error: "Already signed" });
 
     doc.fields = fields; 
     doc.markModified('fields');
-
     signer.status = 'signed';
     signer.signedAt = new Date();
     
@@ -8778,7 +8784,6 @@ router.post('/sign/submit', async (req, res) => {
       res.json({ success: true, completed: true });
     }
   } catch (err) { 
-    console.error(err);
     res.status(500).json({ error: "Submission failed" }); 
   }
 });
