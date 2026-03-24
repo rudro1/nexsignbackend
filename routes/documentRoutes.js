@@ -8565,7 +8565,7 @@ const Document = require('../models/Document');
 const AuditLog = require('../models/AuditLog');
 const auth = require('../middleware/auth');
 
-// ১. কনফিগারেশন
+// ১. ক্লাউডিনারি কনফিগারেশন
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -8577,15 +8577,15 @@ const transporter = nodemailer.createTransport({
   auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
 });
 
+// ২. মাল্টার কনফিগারেশন (Memory Storage)
 const storage = multer.memoryStorage();
 const upload = multer({ 
   storage,
-  limits: { fileSize: 15 * 1024 * 1024 } 
+  limits: { fileSize: 15 * 1024 * 1024 } // 15MB limit
 });
 
 // --- হেল্পার ফাংশনস ---
 
-// মেইল পাঠানোর ফাংশন
 const sendSigningEmail = async (party, docTitle, token) => {
   const signLink = `${process.env.FRONTEND_URL}/sign?token=${token}`;
   return transporter.sendMail({
@@ -8605,13 +8605,12 @@ const sendSigningEmail = async (party, docTitle, token) => {
   });
 };
 
-// পিডিএফ-এ সিগনেচার মার্জ করার ফাংশন
 const mergeSignatures = async (doc) => {
   const response = await axios.get(doc.fileUrl, { responseType: 'arraybuffer' });
   const pdfDoc = await PDFDocument.load(response.data, { ignoreEncryption: true });
   const pages = pdfDoc.getPages();
 
-  const fieldsToProcess = doc.fields.map(f => typeof f === 'string' ? JSON.parse(f) : f)
+  const fieldsToProcess = (doc.fields || []).map(f => typeof f === 'string' ? JSON.parse(f) : f)
     .filter(f => f && f.value);
 
   for (const fd of fieldsToProcess) {
@@ -8626,18 +8625,19 @@ const mergeSignatures = async (doc) => {
     const dX = (parseFloat(fd.x) * pW) / 100;
     const dY = pH - ((parseFloat(fd.y) * pH) / 100) - dH;
 
-    if (fd.value.startsWith('data:image')) {
-      const imgData = Buffer.from(fd.value.split(',')[1], 'base64');
-      const sigImg = fd.value.includes('image/png') ? await pdfDoc.embedPng(imgData) : await pdfDoc.embedJpg(imgData);
-      page.drawImage(sigImg, { x: dX, y: dY, width: dW, height: dH });
-    } else {
-      page.drawText(String(fd.value), { x: dX + 5, y: dY + (dH / 3), size: 11, color: rgb(0, 0, 0) });
-    }
+    try {
+      if (fd.value.startsWith('data:image')) {
+        const imgData = Buffer.from(fd.value.split(',')[1], 'base64');
+        const sigImg = fd.value.includes('image/png') ? await pdfDoc.embedPng(imgData) : await pdfDoc.embedJpg(imgData);
+        page.drawImage(sigImg, { x: dX, y: dY, width: dW, height: dH });
+      } else {
+        page.drawText(String(fd.value), { x: dX + 5, y: dY + (dH / 3), size: 11, color: rgb(0, 0, 0) });
+      }
+    } catch (e) { console.error("Field placement error:", e); }
   }
   return await pdfDoc.save();
 };
 
-// ফাইনাল জেনারেশন এবং মেইল (Certificate সহ)
 const generateAndSendFinalDoc = async (docId) => {
   try {
     const doc = await Document.findById(docId);
@@ -8647,20 +8647,18 @@ const generateAndSendFinalDoc = async (docId) => {
     const finalPdf = await PDFDocument.load(mergedPdfBytes);
     const font = await finalPdf.embedFont(StandardFonts.HelveticaBold);
 
-    // অডিট সার্টিফিকেট পেজ যোগ করা
     const page = finalPdf.addPage([600, 800]);
     page.drawText('COMPLETION CERTIFICATE', { x: 50, y: 750, size: 20, font, color: rgb(0.05, 0.64, 0.91) });
     page.drawText(`Document: ${doc.title}`, { x: 50, y: 720, size: 12 });
     
     let yPos = 680;
     doc.parties.forEach((p, i) => {
-      page.drawText(`${i+1}. ${p.name} (${p.email}) - Signed on ${new Date(p.signedAt).toLocaleString()}`, { x: 50, y: yPos, size: 10 });
+      page.drawText(`${i+1}. ${p.name} (${p.email}) - Signed on ${new Date(p.signedAt || Date.now()).toLocaleString()}`, { x: 50, y: yPos, size: 10 });
       yPos -= 20;
     });
 
     const pdfBuffer = Buffer.from(await finalPdf.save());
 
-    // ক্লাউডিনারিতে ফাইনাল ফাইল
     const uploadRes = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         { resource_type: "raw", folder: "completed_docs", format: "pdf" },
@@ -8673,7 +8671,6 @@ const generateAndSendFinalDoc = async (docId) => {
     doc.status = 'completed';
     await doc.save();
 
-    // সবাইকে মেইল পাঠানো
     const emails = [...doc.parties.map(p => p.email), ...doc.ccEmails];
     await transporter.sendMail({
       from: `"NeXsign" <${process.env.EMAIL_USER}>`,
@@ -8688,15 +8685,16 @@ const generateAndSendFinalDoc = async (docId) => {
 
 // --- ROUTES ---
 
+// ৩. মেইন আপলোড রাউট ফিক্স
 router.post('/upload-and-send', auth, upload.single('file'), async (req, res) => {
   try {
-    // ১. ফাইল চেক (এই নামটা ফ্রন্টএন্ডের formData.append('file', ...) এর সাথে মিলতে হবে)
+    // ডিবাগিং লগ (ভার্সেল কনসোলে দেখতে পাবেন)
     if (!req.file) {
-      console.log("Files received:", req.file); // ডিবাগিংয়ের জন্য
+      console.log("No file object in request. Check Multipart/form-data configuration.");
       return res.status(400).json({ error: "No PDF file provided" });
     }
 
-    // ২. ক্লাউডিনারি আপলোড
+    // ক্লাউডিনারিতে পিডিএফ আপলোড
     const uploadRes = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         { resource_type: "raw", folder: "nexsign_docs", format: 'pdf' },
@@ -8705,14 +8703,22 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
       stream.end(req.file.buffer);
     });
 
-    // ৩. ডাটা পার্সিং (Try-Catch এর ভেতরে রাখা নিরাপদ)
-    const parties = JSON.parse(req.body.parties || '[]');
-    const fields = JSON.parse(req.body.fields || '[]');
-    const ccEmails = JSON.parse(req.body.ccEmails || '[]');
+    // ডাটা পার্সিং (ফেইলসেফ সহ)
+    let parties = [];
+    let fields = [];
+    let ccEmails = [];
+
+    try {
+      parties = JSON.parse(req.body.parties || '[]');
+      fields = JSON.parse(req.body.fields || '[]');
+      ccEmails = JSON.parse(req.body.ccEmails || '[]');
+    } catch (e) {
+      return res.status(400).json({ error: "Invalid JSON data in body" });
+    }
 
     if (parties.length === 0) return res.status(400).json({ error: "Add at least one party" });
 
-    // ৪. প্রথম সাইনারের জন্য টোকেন জেনারেট
+    // প্রথম টোকেন জেনারেশন
     const firstToken = crypto.randomBytes(32).toString('hex');
     parties[0].token = firstToken;
     parties[0].status = 'sent';
@@ -8724,14 +8730,22 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
       owner: req.user.id,
       status: 'in_progress',
       parties, 
-      fields, // সরাসরি অ্যারে হিসেবে সেভ করুন
+      fields, 
       ccEmails,
       totalPages: parseInt(req.body.totalPages) || 1
     });
 
     await newDoc.save();
-    
-    // মেইল পাঠানো
+
+    // Audit Log
+    await AuditLog.create({
+      document_id: newDoc._id,
+      action: 'sent',
+      performed_by: { name: req.user.name, email: req.user.email, role: 'owner' },
+      ip_address: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+      details: `Document created and sent to ${parties[0].email}`
+    });
+
     await sendSigningEmail(parties[0], newDoc.title, firstToken);
     
     res.json({ success: true, docId: newDoc._id });
@@ -8756,7 +8770,6 @@ router.post('/sign/submit', async (req, res) => {
     signer.signedAt = new Date();
     signer.ipAddress = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-    // Audit Log: Signed
     await AuditLog.create({
       document_id: doc._id,
       action: 'signed',
@@ -8779,7 +8792,10 @@ router.post('/sign/submit', async (req, res) => {
       await generateAndSendFinalDoc(doc._id);
       res.json({ completed: true });
     }
-  } catch (err) { res.status(500).json({ error: "Failed" }); }
+  } catch (err) { 
+    console.error("Sign Error:", err);
+    res.status(500).json({ error: "Failed to submit signature" }); 
+  }
 });
 
 router.get('/proxy/:path(*)', async (req, res) => {
@@ -8792,8 +8808,10 @@ router.get('/proxy/:path(*)', async (req, res) => {
 });
 
 router.get('/', auth, async (req, res) => {
-  const docs = await Document.find({ owner: req.user.id }).sort({ updatedAt: -1 });
-  res.json(docs);
+  try {
+    const docs = await Document.find({ owner: req.user.id }).sort({ updatedAt: -1 });
+    res.json(docs);
+  } catch (err) { res.status(500).json({ error: "Failed to fetch" }); }
 });
 
 module.exports = router;
