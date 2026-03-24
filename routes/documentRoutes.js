@@ -8690,8 +8690,13 @@ const generateAndSendFinalDoc = async (docId) => {
 
 router.post('/upload-and-send', auth, upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "No PDF file provided" });
+    // ১. ফাইল চেক (এই নামটা ফ্রন্টএন্ডের formData.append('file', ...) এর সাথে মিলতে হবে)
+    if (!req.file) {
+      console.log("Files received:", req.file); // ডিবাগিংয়ের জন্য
+      return res.status(400).json({ error: "No PDF file provided" });
+    }
 
+    // ২. ক্লাউডিনারি আপলোড
     const uploadRes = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         { resource_type: "raw", folder: "nexsign_docs", format: 'pdf' },
@@ -8700,10 +8705,14 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
       stream.end(req.file.buffer);
     });
 
+    // ৩. ডাটা পার্সিং (Try-Catch এর ভেতরে রাখা নিরাপদ)
     const parties = JSON.parse(req.body.parties || '[]');
     const fields = JSON.parse(req.body.fields || '[]');
     const ccEmails = JSON.parse(req.body.ccEmails || '[]');
 
+    if (parties.length === 0) return res.status(400).json({ error: "Add at least one party" });
+
+    // ৪. প্রথম সাইনারের জন্য টোকেন জেনারেট
     const firstToken = crypto.randomBytes(32).toString('hex');
     parties[0].token = firstToken;
     parties[0].status = 'sent';
@@ -8714,24 +8723,22 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
       fileId: uploadRes.public_id,
       owner: req.user.id,
       status: 'in_progress',
-      parties, fields, ccEmails,
-      totalPages: req.body.totalPages || 1
+      parties, 
+      fields, // সরাসরি অ্যারে হিসেবে সেভ করুন
+      ccEmails,
+      totalPages: parseInt(req.body.totalPages) || 1
     });
 
     await newDoc.save();
-
-    // Audit Log: Created & Sent
-    await AuditLog.create({
-      document_id: newDoc._id,
-      action: 'sent',
-      performed_by: { name: req.user.name, email: req.user.email, role: 'owner' },
-      ip_address: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
-      details: `Document created and sent to ${parties[0].email}`
-    });
-
+    
+    // মেইল পাঠানো
     await sendSigningEmail(parties[0], newDoc.title, firstToken);
+    
     res.json({ success: true, docId: newDoc._id });
-  } catch (err) { res.status(500).json({ error: "Failed" }); }
+  } catch (err) { 
+    console.error("Upload Error:", err);
+    res.status(500).json({ error: "Server failed to process document" }); 
+  }
 });
 
 router.post('/sign/submit', async (req, res) => {
