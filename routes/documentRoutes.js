@@ -8651,21 +8651,107 @@ const mergeSignatures = async (doc) => {
 };
 
 // Fire-and-forget — does NOT block the response
+const generateAndSendFinalDoc = async (docId) => {
+  try {
+    // ১. ডাইনামিক ডেটা ফেচিং (lean() ব্যবহার করা হয়েছে পারফরম্যান্সের জন্য)
+    const doc = await Document.findById(docId).populate('owner').lean();
+    if (!doc) return;
+
+    // ২. প্যারালাল প্রসেসিং: পিডিএফ লোড এবং অডিট লগ ফেচিং একসাথে হবে
+    const [mergedPdfBytes, logs] = await Promise.all([
+      mergeSignatures(doc),
+      AuditLog.find({ document_id: doc._id }).sort({ createdAt: 1 }).lean()
+    ]);
+
+    const finalPdf = await PDFDocument.load(mergedPdfBytes);
+    const boldFont = await finalPdf.embedFont(StandardFonts.HelveticaBold);
+    const regularFont = await finalPdf.embedFont(StandardFonts.Helvetica);
+
+    // ৩. মেমোরি অপ্টিমাইজড পেজ জেনারেশন
+    const page = finalPdf.addPage([595, 842]);
+    const { width, height } = page.getSize();
+
+    // হেডার ড্রয়িং লজিক (একই থাকবে)
+    drawCertificateHeader(page, height, boldFont, regularFont);
+
+    // ৪. এফিশিয়েন্ট অডিট লগ রেন্ডারিং
+    let yPos = height - 170;
+    
+    // অডিট লগগুলো রেন্ডার করার জন্য একটি সাব-ফাংশন বা লুপ
+    for (const log of logs) {
+      if (yPos < 100) {
+        // নতুন পেজ দরকার হলে অটো-ক্রিয়েট হবে (Scalability)
+        const newPage = finalPdf.addPage([595, 842]);
+        yPos = 800; // রিসেট পজিশন
+      }
+      yPos = renderLogRow(page, log, yPos, boldFont, regularFont, width);
+    }
+
+    // ৫. সিসি লিস্ট (CC List)
+    if (doc.ccEmails?.length > 0) {
+      yPos = renderCCList(page, doc.ccEmails, yPos, boldFont, regularFont);
+    }
+
+    // ৬. ফাইনাল সেভ এবং স্ট্রিম আপলোড (Memory Efficient)
+    const finalPdfBytes = await finalPdf.save();
+    const pdfBuffer = Buffer.from(finalPdfBytes);
+
+    // ক্লাউডিনারি আপলোড এবং ইমেইল পাঠানো (এগুলো নন-ব্লকিং রাখা ভালো)
+    setImmediate(async () => {
+      try {
+        const uploadRes = await uploadToCloudinary(pdfBuffer, { 
+          resource_type: 'raw', 
+          folder: 'completed_docs',
+          public_id: `NeXsign_${doc._id}` 
+        });
+
+        await Document.findByIdAndUpdate(docId, { 
+          fileUrl: uploadRes.secure_url, 
+          status: 'completed' 
+        });
+
+        // ইমেইল ডেলিভারি
+        await sendCompletionEmail(doc, pdfBuffer);
+      } catch (err) {
+        console.error('Post-processing error:', err);
+      }
+    });
+
+    console.log(`Document ${docId} scale-optimized and processing started.`);
+  } catch (err) {
+    console.error('Scalability Error:', err);
+  }
+};
+
+// Helper function to keep main code clean
+function drawCertificateHeader(page, height, boldFont, regularFont) {
+  page.drawRectangle({ x: 50, y: height - 75, width: 35, height: 35, color: rgb(0.15, 0.67, 0.87) });
+  page.drawText('NeXsign', { x: 95, y: height - 62, size: 20, font: boldFont, color: rgb(0.1, 0.4, 0.6) });
+  page.drawText('by Fixensy', { x: 135, y: height - 72, size: 7, font: regularFont, color: rgb(0.15, 0.67, 0.87) });
+}
+
+
 // const generateAndSendFinalDoc = async (docId) => {
 //   try {
-//     const doc            = await Document.findById(docId);
+//     const doc = await Document.findById(docId);
 //     if (!doc) return;
+
+//     // ১. সিগনেচার মার্জ করা (আপনার আগের mergeSignatures ফাংশন ব্যবহার করে)
 //     const mergedPdfBytes = await mergeSignatures(doc);
-//     const finalPdf       = await PDFDocument.load(mergedPdfBytes);
-//     const font           = await finalPdf.embedFont(StandardFonts.HelveticaBold);
-//     const page           = finalPdf.addPage([600, 800]);
+    
+//     // ২. অডিট ট্রেইল বা সার্টিফিকেট পেজ যোগ করা
+//     const finalPdf = await PDFDocument.load(mergedPdfBytes);
+//     const font = await finalPdf.embedFont(StandardFonts.HelveticaBold);
+//     const page = finalPdf.addPage([600, 800]);
 
 //     page.drawText('COMPLETION CERTIFICATE & AUDIT TRAIL', {
 //       x: 50, y: 750, size: 18, font, color: rgb(0.05, 0.64, 0.91),
 //     });
+
 //     let yPos = 700;
 //     page.drawText(`Document Name: ${doc.title}`, { x: 50, y: yPos, size: 12 });
 //     yPos -= 30;
+
 //     doc.parties.forEach((p, i) => {
 //       page.drawText(`${i + 1}. ${p.name} (${p.email})`, { x: 50, y: yPos, size: 10, font });
 //       page.drawText(
@@ -8675,99 +8761,43 @@ const mergeSignatures = async (doc) => {
 //       yPos -= 45;
 //     });
 
-//     const pdfBuffer = Buffer.from(await finalPdf.save());
+//     // ৩. ফাইনাল পিডিএফ সেভ এবং বাফার তৈরি
+//     const finalPdfBytes = await finalPdf.save();
+//     const pdfBuffer = Buffer.from(finalPdfBytes);
+
+//     // ৪. ক্লাউডিনারিতে আপলোড (Signed Copy)
 //     const uploadRes = await uploadToCloudinary(pdfBuffer, {
-//       resource_type: 'raw', folder: 'completed_docs', format: 'pdf',
+//       resource_type: 'raw',
+//       folder: 'completed_docs',
+//       format: 'pdf',
+//       public_id: `final_${doc._id}_${Date.now()}`
 //     });
 
+//     // ৫. ডাটাবেস আপডেট
 //     doc.fileUrl = uploadRes.secure_url;
-//     doc.status  = 'completed';
+//     doc.status = 'completed';
+//     // Mongoose কে বলে দিন যে fileUrl পরিবর্তন হয়েছে
+//     doc.markModified('fileUrl'); 
 //     await doc.save();
 
-//     const emails = [...doc.parties.map(p => p.email), ...doc.ccEmails];
+//     // ৬. ইমেইল পাঠানো
+//     const emails = [...doc.parties.map(p => p.email), ...(doc.ccEmails || [])];
 //     await transporter.sendMail({
-//       from:        `"NeXsign" <${process.env.EMAIL_USER}>`,
-//       to:          emails.join(','),
-//       subject:     `[Completed] ${doc.title}`,
-//       html:        `<p>All parties have signed <b>${doc.title}</b>. Please find the completed document attached.</p>`,
+//       from: `"NeXsign" <${process.env.EMAIL_USER}>`,
+//       to: emails.join(','),
+//       subject: `[Completed] ${doc.title}`,
+//       html: `<p>All parties have signed <b>${doc.title}</b>. Final document is attached.</p>`,
 //       attachments: [{
-//         filename: `${doc.title.replace(/\s+/g, '_')}_Signed.pdf`,
-//         content:  pdfBuffer,
+//         filename: `${doc.title.replace(/\s+/g, '_')}_Final.pdf`,
+//         content: pdfBuffer,
 //       }],
 //     });
+
+//     console.log(`Document ${docId} finalized successfully.`);
 //   } catch (err) {
 //     console.error('Finalize error:', err);
 //   }
 // };
-
-
-const generateAndSendFinalDoc = async (docId) => {
-  try {
-    const doc = await Document.findById(docId);
-    if (!doc) return;
-
-    // ১. সিগনেচার মার্জ করা (আপনার আগের mergeSignatures ফাংশন ব্যবহার করে)
-    const mergedPdfBytes = await mergeSignatures(doc);
-    
-    // ২. অডিট ট্রেইল বা সার্টিফিকেট পেজ যোগ করা
-    const finalPdf = await PDFDocument.load(mergedPdfBytes);
-    const font = await finalPdf.embedFont(StandardFonts.HelveticaBold);
-    const page = finalPdf.addPage([600, 800]);
-
-    page.drawText('COMPLETION CERTIFICATE & AUDIT TRAIL', {
-      x: 50, y: 750, size: 18, font, color: rgb(0.05, 0.64, 0.91),
-    });
-
-    let yPos = 700;
-    page.drawText(`Document Name: ${doc.title}`, { x: 50, y: yPos, size: 12 });
-    yPos -= 30;
-
-    doc.parties.forEach((p, i) => {
-      page.drawText(`${i + 1}. ${p.name} (${p.email})`, { x: 50, y: yPos, size: 10, font });
-      page.drawText(
-        `Status: ${p.status.toUpperCase()} | Date: ${p.signedAt ? new Date(p.signedAt).toLocaleString() : 'N/A'}`,
-        { x: 70, y: yPos - 15, size: 9 }
-      );
-      yPos -= 45;
-    });
-
-    // ৩. ফাইনাল পিডিএফ সেভ এবং বাফার তৈরি
-    const finalPdfBytes = await finalPdf.save();
-    const pdfBuffer = Buffer.from(finalPdfBytes);
-
-    // ৪. ক্লাউডিনারিতে আপলোড (Signed Copy)
-    const uploadRes = await uploadToCloudinary(pdfBuffer, {
-      resource_type: 'raw',
-      folder: 'completed_docs',
-      format: 'pdf',
-      public_id: `final_${doc._id}_${Date.now()}`
-    });
-
-    // ৫. ডাটাবেস আপডেট
-    doc.fileUrl = uploadRes.secure_url;
-    doc.status = 'completed';
-    // Mongoose কে বলে দিন যে fileUrl পরিবর্তন হয়েছে
-    doc.markModified('fileUrl'); 
-    await doc.save();
-
-    // ৬. ইমেইল পাঠানো
-    const emails = [...doc.parties.map(p => p.email), ...(doc.ccEmails || [])];
-    await transporter.sendMail({
-      from: `"NeXsign" <${process.env.EMAIL_USER}>`,
-      to: emails.join(','),
-      subject: `[Completed] ${doc.title}`,
-      html: `<p>All parties have signed <b>${doc.title}</b>. Final document is attached.</p>`,
-      attachments: [{
-        filename: `${doc.title.replace(/\s+/g, '_')}_Final.pdf`,
-        content: pdfBuffer,
-      }],
-    });
-
-    console.log(`Document ${docId} finalized successfully.`);
-  } catch (err) {
-    console.error('Finalize error:', err);
-  }
-};
 // ── Routes ────────────────────────────────────────────────────────────────
 
 // 1. Upload & Send — THE MISSING ROUTE
