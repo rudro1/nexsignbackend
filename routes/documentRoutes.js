@@ -8955,36 +8955,46 @@ router.post('/sign/submit', async (req, res) => {
     const doc = await Document.findOne({ 'parties.token': token });
     if (!doc) return res.status(404).json({ error: 'Invalid link' });
 
-    const idx    = doc.parties.findIndex(p => p.token === token);
+    const idx = doc.parties.findIndex(p => p.token === token);
     const signer = doc.parties[idx];
-    if (signer.status === 'signed')
-      return res.status(400).json({ error: 'Already signed' });
+    if (signer.status === 'signed') return res.status(400).json({ error: 'Already signed' });
 
+    // ১. ডাটা আপডেট
     doc.fields = fields;
     doc.markModified('fields');
-    signer.status   = 'signed';
+    signer.status = 'signed';
     signer.signedAt = new Date();
 
+    // ২. অডিট লগ তৈরি
     await AuditLog.create({
-      document_id:  doc._id,
-      action:       'signed',
+      document_id: doc._id,
+      action: 'signed',
       performed_by: { name: signer.name, email: signer.email, role: 'signer' },
-      ip_address:   req.headers['x-forwarded-for'] || req.socket.remoteAddress,
-      location:     locationData || 'Unknown',
+      ip_address: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+      location: typeof locationData === 'object' ? JSON.stringify(locationData) : (locationData || 'Unknown'),
     });
 
+    // ৩. নেক্সট স্টেপ চেক
     if (idx + 1 < doc.parties.length) {
+      // আরও সাইনার বাকি আছে
       const nextToken = crypto.randomBytes(32).toString('hex');
-      doc.parties[idx + 1].token  = nextToken;
+      doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
       await doc.save();
+      
+      // পরের জনকে ইমেইল পাঠান (Non-blocking)
       sendSigningEmail(doc.parties[idx + 1], doc.title, nextToken).catch(console.error);
-      res.json({ success: true, next: true });
+      
+      return res.json({ success: true, next: true });
     } else {
+      // সবাই সাইন করেছে
       doc.status = 'completed';
       await doc.save();
-      generateAndSendFinalDoc(doc._id); // fire and forget
-      res.json({ success: true, completed: true });
+      
+      // ফাইনাল ডকুমেন্ট জেনারেট করা (Background process)
+      generateAndSendFinalDoc(doc._id).catch(console.error);
+      
+      return res.json({ success: true, completed: true });
     }
   } catch (err) {
     console.error(err);
