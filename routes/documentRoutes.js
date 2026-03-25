@@ -8651,13 +8651,154 @@ const mergeSignatures = async (doc) => {
 };
 
 // Fire-and-forget — does NOT block the response
+// const generateAndSendFinalDoc = async (docId) => {
+//   try {
+//     // ১. ডাইনামিক ডেটা ফেচিং (lean() ব্যবহার করা হয়েছে পারফরম্যান্সের জন্য)
+//     const doc = await Document.findById(docId).populate('owner').lean();
+//     if (!doc) return;
+
+//     // ২. প্যারালাল প্রসেসিং: পিডিএফ লোড এবং অডিট লগ ফেচিং একসাথে হবে
+//     const [mergedPdfBytes, logs] = await Promise.all([
+//       mergeSignatures(doc),
+//       AuditLog.find({ document_id: doc._id }).sort({ createdAt: 1 }).lean()
+//     ]);
+
+//     const finalPdf = await PDFDocument.load(mergedPdfBytes);
+//     const boldFont = await finalPdf.embedFont(StandardFonts.HelveticaBold);
+//     const regularFont = await finalPdf.embedFont(StandardFonts.Helvetica);
+
+//     // ৩. মেমোরি অপ্টিমাইজড পেজ জেনারেশন
+//     const page = finalPdf.addPage([595, 842]);
+//     const { width, height } = page.getSize();
+
+//     // হেডার ড্রয়িং লজিক (একই থাকবে)
+//     drawCertificateHeader(page, height, boldFont, regularFont);
+
+//     // ৪. এফিশিয়েন্ট অডিট লগ রেন্ডারিং
+//     let yPos = height - 170;
+    
+//     // অডিট লগগুলো রেন্ডার করার জন্য একটি সাব-ফাংশন বা লুপ
+//     for (const log of logs) {
+//       if (yPos < 100) {
+//         // নতুন পেজ দরকার হলে অটো-ক্রিয়েট হবে (Scalability)
+//         const newPage = finalPdf.addPage([595, 842]);
+//         yPos = 800; // রিসেট পজিশন
+//       }
+//       yPos = renderLogRow(page, log, yPos, boldFont, regularFont, width);
+//     }
+
+//     // ৫. সিসি লিস্ট (CC List)
+//     if (doc.ccEmails?.length > 0) {
+//       yPos = renderCCList(page, doc.ccEmails, yPos, boldFont, regularFont);
+//     }
+
+//     // ৬. ফাইনাল সেভ এবং স্ট্রিম আপলোড (Memory Efficient)
+//     const finalPdfBytes = await finalPdf.save();
+//     const pdfBuffer = Buffer.from(finalPdfBytes);
+
+//     // ক্লাউডিনারি আপলোড এবং ইমেইল পাঠানো (এগুলো নন-ব্লকিং রাখা ভালো)
+//     setImmediate(async () => {
+//       try {
+//         const uploadRes = await uploadToCloudinary(pdfBuffer, { 
+//           resource_type: 'raw', 
+//           folder: 'completed_docs',
+//           public_id: `NeXsign_${doc._id}` 
+//         });
+
+//         await Document.findByIdAndUpdate(docId, { 
+//           fileUrl: uploadRes.secure_url, 
+//           status: 'completed' 
+//         });
+
+//         // ইমেইল ডেলিভারি
+//         await sendCompletionEmail(doc, pdfBuffer);
+//       } catch (err) {
+//         console.error('Post-processing error:', err);
+//       }
+//     });
+
+//     console.log(`Document ${docId} scale-optimized and processing started.`);
+//   } catch (err) {
+//     console.error('Scalability Error:', err);
+//   }
+// };
+
+
+// ── Helper: Draw Certificate Header ──────────────────────────────────────────
+function drawCertificateHeader(page, height, boldFont, regularFont) {
+  // নীল রঙের একটি ছোট আইকন বক্স
+  page.drawRectangle({ x: 50, y: height - 75, width: 35, height: 35, color: rgb(0.15, 0.67, 0.87) });
+  page.drawText('NeXsign', { x: 95, y: height - 62, size: 20, font: boldFont, color: rgb(0.1, 0.4, 0.6) });
+  page.drawText('COMPLETION CERTIFICATE & AUDIT TRAIL', { x: 95, y: height - 75, size: 8, font: regularFont });
+}
+
+// ── Helper: Render Each Audit Log Row ─────────────────────────────────────────
+function renderLogRow(page, log, yPos, boldFont, regularFont, pageWidth) {
+  const displayTime = log.client_time || new Date(log.createdAt).toLocaleString('en-US', { 
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' 
+  });
+
+  // ১. সময়
+  page.drawText(displayTime, { x: 50, y: yPos, size: 8, font: regularFont });
+
+  // ২. অ্যাকশন এবং ইউজারের নাম
+  const actionText = (log.action || 'ACTION').toUpperCase();
+  page.drawText(actionText, { x: 180, y: yPos, size: 8, font: boldFont });
+  page.drawText(`${log.performed_by?.name || 'User'} (${log.performed_by?.email || ''})`, { 
+    x: 180, y: yPos - 12, size: 8, font: regularFont, color: rgb(0.2, 0.2, 0.2) 
+  });
+
+  // ৩. মেটাডেটা (IP & Location)
+  page.drawText(`IP: ${log.ip_address || 'N/A'}`, { x: 400, y: yPos, size: 7, font: regularFont });
+  const locText = typeof log.location === 'object' ? JSON.stringify(log.location) : (log.location || 'Unknown');
+  page.drawText(`Loc: ${locText.substring(0, 35)}...`, { x: 400, y: yPos - 10, size: 7, font: regularFont });
+
+  // ডিভাইডার লাইন
+  page.drawLine({ 
+    start: { x: 50, y: yPos - 25 }, 
+    end: { x: pageWidth - 50, y: yPos - 25 }, 
+    thickness: 0.2, color: rgb(0.9, 0.9, 0.9) 
+  });
+
+  return yPos - 45; // পরবর্তী লগের জন্য y পজিশন আপডেট
+}
+
+// ── Helper: Render CC List ────────────────────────────────────────────────────
+function renderCCList(page, emails, yPos, boldFont, regularFont) {
+  yPos -= 20;
+  page.drawText('CC Recipients:', { x: 50, y: yPos, size: 10, font: boldFont });
+  emails.forEach(email => {
+    yPos -= 15;
+    page.drawText(`• ${email}`, { x: 60, y: yPos, size: 9, font: regularFont });
+  });
+  return yPos;
+}
+
+// ── Helper: Send Completion Email ─────────────────────────────────────────────
+async function sendCompletionEmail(doc, pdfBuffer) {
+  const allEmails = [...doc.parties.map(p => p.email), ...(doc.ccEmails || [])];
+  await transporter.sendMail({
+    from: `"NeXsign" <${process.env.EMAIL_USER}>`,
+    to: allEmails.join(','),
+    subject: `[Completed] ${doc.title}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #eee;border-radius:12px;padding:20px;">
+        <h2 style="color:#28ABDF;">Document Completed!</h2>
+        <p>All parties have signed <b>${doc.title}</b>.</p>
+        <p>The final document with a secure audit trail is attached to this email.</p>
+      </div>`,
+    attachments: [{ filename: `${doc.title}_Signed.pdf`, content: pdfBuffer }],
+  });
+}
+
+// ── Main Function ─────────────────────────────────────────────────────────────
 const generateAndSendFinalDoc = async (docId) => {
   try {
-    // ১. ডাইনামিক ডেটা ফেচিং (lean() ব্যবহার করা হয়েছে পারফরম্যান্সের জন্য)
+    // ১. ডাইনামিক ডেটা ফেচিং
     const doc = await Document.findById(docId).populate('owner').lean();
     if (!doc) return;
 
-    // ২. প্যারালাল প্রসেসিং: পিডিএফ লোড এবং অডিট লগ ফেচিং একসাথে হবে
+    // ২. প্যারালাল প্রসেসিং
     const [mergedPdfBytes, logs] = await Promise.all([
       mergeSignatures(doc),
       AuditLog.find({ document_id: doc._id }).sort({ createdAt: 1 }).lean()
@@ -8667,42 +8808,39 @@ const generateAndSendFinalDoc = async (docId) => {
     const boldFont = await finalPdf.embedFont(StandardFonts.HelveticaBold);
     const regularFont = await finalPdf.embedFont(StandardFonts.Helvetica);
 
-    // ৩. মেমোরি অপ্টিমাইজড পেজ জেনারেশন
+    // ৩. সার্টিফিকেট পেজ তৈরি
     const page = finalPdf.addPage([595, 842]);
     const { width, height } = page.getSize();
 
-    // হেডার ড্রয়িং লজিক (একই থাকবে)
     drawCertificateHeader(page, height, boldFont, regularFont);
 
-    // ৪. এফিশিয়েন্ট অডিট লগ রেন্ডারিং
+    // ৪. অডিট লগ রেন্ডারিং
     let yPos = height - 170;
     
-    // অডিট লগগুলো রেন্ডার করার জন্য একটি সাব-ফাংশন বা লুপ
     for (const log of logs) {
       if (yPos < 100) {
-        // নতুন পেজ দরকার হলে অটো-ক্রিয়েট হবে (Scalability)
         const newPage = finalPdf.addPage([595, 842]);
-        yPos = 800; // রিসেট পজিশন
+        yPos = 800;
       }
       yPos = renderLogRow(page, log, yPos, boldFont, regularFont, width);
     }
 
-    // ৫. সিসি লিস্ট (CC List)
+    // ৫. সিসি লিস্ট
     if (doc.ccEmails?.length > 0) {
       yPos = renderCCList(page, doc.ccEmails, yPos, boldFont, regularFont);
     }
 
-    // ৬. ফাইনাল সেভ এবং স্ট্রিম আপলোড (Memory Efficient)
+    // ৬. ফাইনাল সেভ
     const finalPdfBytes = await finalPdf.save();
     const pdfBuffer = Buffer.from(finalPdfBytes);
 
-    // ক্লাউডিনারি আপলোড এবং ইমেইল পাঠানো (এগুলো নন-ব্লকিং রাখা ভালো)
+    // ৭. ক্লাউডিনারি আপলোড এবং ইমেইল (Background process)
     setImmediate(async () => {
       try {
         const uploadRes = await uploadToCloudinary(pdfBuffer, { 
           resource_type: 'raw', 
           folder: 'completed_docs',
-          public_id: `NeXsign_${doc._id}` 
+          public_id: `NeXsign_${doc._id}_${Date.now()}` // ক্যাশ এড়াতে টাইমস্ট্যাম্প
         });
 
         await Document.findByIdAndUpdate(docId, { 
@@ -8710,25 +8848,19 @@ const generateAndSendFinalDoc = async (docId) => {
           status: 'completed' 
         });
 
-        // ইমেইল ডেলিভারি
         await sendCompletionEmail(doc, pdfBuffer);
+        console.log(`Document ${docId} fully processed and emailed.`);
       } catch (err) {
         console.error('Post-processing error:', err);
       }
     });
 
-    console.log(`Document ${docId} scale-optimized and processing started.`);
   } catch (err) {
     console.error('Scalability Error:', err);
   }
 };
-
 // Helper function to keep main code clean
-function drawCertificateHeader(page, height, boldFont, regularFont) {
-  page.drawRectangle({ x: 50, y: height - 75, width: 35, height: 35, color: rgb(0.15, 0.67, 0.87) });
-  page.drawText('NeXsign', { x: 95, y: height - 62, size: 20, font: boldFont, color: rgb(0.1, 0.4, 0.6) });
-  page.drawText('by Fixensy', { x: 135, y: height - 72, size: 7, font: regularFont, color: rgb(0.15, 0.67, 0.87) });
-}
+
 
 
 // const generateAndSendFinalDoc = async (docId) => {
