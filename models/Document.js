@@ -368,11 +368,24 @@ default: false,
 index: true
 },
 
-
+// ✅ Backward compatible: existing docs may store ccEmails as string[]
 ccEmails: [{
 type: String,
 lowercase: true,
 trim: true
+}],
+
+// ✅ New: rich CC/HR recipients (email + designation for Audit Certificate + completion emails)
+ccRecipients: [{
+  type: {
+    type: String,
+    enum: ['cc', 'hr'],
+    default: 'cc',
+    index: true
+  },
+  name: { type: String, trim: true, default: '' },
+  email: { type: String, lowercase: true, trim: true, required: true },
+  designation: { type: String, trim: true, default: '' }
 }],
 senderMeta: {
 type: mongoose.Schema.Types.Mixed,
@@ -394,6 +407,20 @@ location: { type: String, default: 'Unknown' },
 postalCode: { type: String },
 timeZone: { type: String },
 
+ // ✅ Real-time monitoring per signer (email/open/link open/sign)
+ emailSentAt: { type: Date },
+ linkOpenedAt: { type: Date },        // first time they opened the signing link
+ lastLinkOpenedAt: { type: Date },    // last time they opened the signing link
+ linkOpenCount: { type: Number, default: 0 },
+ openedIpAddress: { type: String, default: 'N/A' },
+ openedUserAgent: { type: String, default: '' },
+ openedLocation: { type: String, default: 'Unknown' },
+ openedPostalCode: { type: String, default: '' },
+ signedIpAddress: { type: String, default: 'N/A' }, // keep signed metadata separate from "opened"
+ signedUserAgent: { type: String, default: '' },
+ signedLocation: { type: String, default: 'Unknown' },
+ signedPostalCode: { type: String, default: '' },
+
 }],
 fields: {
 // এখানে মিক্সড টাইপ রাখা হয়েছে যাতে JSON স্ট্রিং বা অবজেক্ট দুইটাই হ্যান্ডেল করা যায়
@@ -408,6 +435,49 @@ default: 'draft'
 },
 owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 currentPartyIndex: { type: Number, default: 0 },
+
+ // ✅ Advanced audit trail for SaaS-grade monitoring + Audit Certificate
+ // NOTE: keep this embedded for fast dashboard reads; the separate AuditLog collection can still exist for long-term retention.
+ auditTrail: {
+   version: { type: Number, default: 1 },
+   events: [{
+     eventType: {
+       type: String,
+       enum: [
+         'document_created',
+         'document_updated',
+         'draft_saved',
+         'email_sent',
+         'email_opened',
+         'link_opened',
+         'signed',
+         'completed',
+         'audit_certificate_appended',
+         'completion_email_sent',
+         'pdf_generated',
+         'downloaded'
+       ],
+       required: true,
+       index: true
+     },
+     // actor can be owner/signer/system. For signer events, attach partyEmail + partyIndex
+     actorRole: { type: String, enum: ['owner', 'signer', 'system', 'cc', 'hr'], default: 'system' },
+     actorName: { type: String, trim: true, default: '' },
+     actorEmail: { type: String, lowercase: true, trim: true, default: '' },
+     partyIndex: { type: Number }, // signer index in parties[] (when applicable)
+     ipAddress: { type: String, default: '' },
+     userAgent: { type: String, default: '' },
+     location: {
+       country: { type: String, default: '' },
+       region: { type: String, default: '' },      // Region/State/Division
+       city: { type: String, default: '' },
+       postalCode: { type: String, default: '' }
+     },
+     timeZone: { type: String, default: '' }, // e.g. "Asia/Dhaka"
+     occurredAt: { type: Date, default: Date.now, index: true },
+     meta: { type: mongoose.Schema.Types.Mixed, default: null }
+   }]
+ },
 }, {
 timestamps: true
 });
@@ -418,6 +488,11 @@ documentSchema.index({ "parties.token": 1 });
 documentSchema.index({ owner: 1, status: 1 });
 // টেমপ্লেট দ্রুত খোঁজার জন্য ইনডেক্স
 documentSchema.index({ owner: 1, isTemplate: 1 });
+// Template list + usage history
+documentSchema.index({ isTemplate: 1, updatedAt: -1 });
+// Fast monitoring queries
+documentSchema.index({ "parties.email": 1 });
+documentSchema.index({ status: 1, updatedAt: -1 });
 // আপনার module.exports এর ঠিক উপরে এটি যোগ করতে পারেন
 documentSchema.pre('save', function(next) {
 if (this.fields && Array.isArray(this.fields)) {
@@ -431,6 +506,14 @@ return field;
 }
 return field;
 });
+}
+
+// ✅ Keep ccEmails in sync with ccRecipients (so older code that uses ccEmails still works)
+if (Array.isArray(this.ccRecipients) && this.ccRecipients.length) {
+  const fromRecipients = this.ccRecipients
+    .map(r => (r && r.email ? String(r.email).toLowerCase().trim() : ''))
+    .filter(Boolean);
+  if (fromRecipients.length) this.ccEmails = Array.from(new Set([...(this.ccEmails || []), ...fromRecipients]));
 }
 next();
 });

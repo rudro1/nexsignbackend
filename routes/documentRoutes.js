@@ -8564,6 +8564,7 @@ const nodemailer = require('nodemailer');
 const Document   = require('../models/Document');
 const AuditLog   = require('../models/AuditLog');
 const auth       = require('../middleware/auth');
+const mongoose   = require('mongoose');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -8591,6 +8592,33 @@ const uploadToCloudinary = (buffer, options) =>
     );
     stream.end(buffer);
   });
+
+function getClientIp(req) {
+  const xf = req.headers['x-forwarded-for'];
+  if (typeof xf === 'string' && xf.length) return xf.split(',')[0].trim();
+  const xr = req.headers['x-real-ip'];
+  if (typeof xr === 'string' && xr.length) return xr.trim();
+  return (req.socket && req.socket.remoteAddress) ? String(req.socket.remoteAddress) : '';
+}
+
+function safeLowerEmail(v) {
+  return (v && typeof v === 'string') ? v.toLowerCase().trim() : '';
+}
+
+function normalizeLocationData(locationData) {
+  if (!locationData) return { locationText: 'Unknown', location: {}, timeZone: '' };
+  if (typeof locationData === 'string') return { locationText: locationData, location: {}, timeZone: '' };
+
+  const country = locationData.country || '';
+  const region = locationData.region || locationData.regionName || '';
+  const city = locationData.city || '';
+  const postalCode = locationData.postalCode || locationData.zip || locationData.postal_code || '';
+  const timeZone = locationData.timeZone || locationData.timezone || '';
+
+  const parts = [city, region, country].filter(Boolean);
+  const locationText = parts.length ? parts.join(', ') : 'Unknown';
+  return { locationText, location: { country, region, city, postalCode }, timeZone };
+}
 
 const sendSigningEmail = (party, docTitle, token) => {
   const signLink = `${process.env.FRONTEND_URL}/sign/${token}`;
@@ -8649,6 +8677,124 @@ const mergeSignatures = async (doc) => {
   }
   return pdfDoc.save();
 };
+
+function formatAuditTime(date, timeZone) {
+  if (!date) return 'N/A';
+  try {
+    const time = new Intl.DateTimeFormat('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: timeZone || undefined,
+    }).format(date);
+    const rest = new Intl.DateTimeFormat('en-US', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      timeZone: timeZone || undefined,
+    }).format(date);
+    return `${time}, ${rest}`;
+  } catch {
+    return new Date(date).toLocaleString('en-US');
+  }
+}
+
+function addAuditCertificatePages(finalPdf, doc) {
+  const addPage = () => finalPdf.addPage([595, 842]);
+  let page = addPage();
+  let { width, height } = page.getSize();
+
+  const header = () => {
+    ({ width, height } = page.getSize());
+    page.drawRectangle({ x: 50, y: height - 85, width: 30, height: 30, color: rgb(0.15, 0.67, 0.87) });
+    page.drawText('AUDIT CERTIFICATE', { x: 90, y: height - 70, size: 18, color: rgb(0.1, 0.4, 0.6) });
+    page.drawText('NeXsign Digital Signature Workflow', { x: 90, y: height - 85, size: 9, color: rgb(0.2, 0.2, 0.2) });
+  };
+
+  header();
+
+  let y = height - 130;
+  const hr = () => {
+    page.drawLine({ start: { x: 50, y }, end: { x: width - 50, y }, thickness: 0.4, color: rgb(0.9, 0.9, 0.9) });
+    y -= 14;
+  };
+
+  page.drawText(`Document Name: ${doc.title || 'Untitled'}`, { x: 50, y, size: 11 });
+  y -= 18;
+
+  const ccRecipients = Array.isArray(doc.ccRecipients) ? doc.ccRecipients : [];
+  const ccEmails = Array.isArray(doc.ccEmails) ? doc.ccEmails : [];
+  const hrList = ccRecipients.filter(r => r && r.type === 'hr');
+  const ccList = ccRecipients.filter(r => r && r.type !== 'hr');
+
+  const renderRecipientLine = (prefix, r) => {
+    const email = r.email || '';
+    const name = r.name ? `${r.name} ` : '';
+    const designation = r.designation ? ` — ${r.designation}` : '';
+    page.drawText(`${prefix}: ${name}<${email}>${designation}`.substring(0, 110), { x: 50, y, size: 9 });
+    y -= 14;
+  };
+
+  if (hrList.length || ccList.length || ccEmails.length) {
+    hr();
+    if (hrList.length) {
+      page.drawText('HR Recipients', { x: 50, y, size: 11, color: rgb(0.1, 0.4, 0.6) });
+      y -= 16;
+      for (const r of hrList) renderRecipientLine('HR', r);
+    }
+    if (ccList.length) {
+      page.drawText('CC Recipients', { x: 50, y, size: 11, color: rgb(0.1, 0.4, 0.6) });
+      y -= 16;
+      for (const r of ccList) renderRecipientLine('CC', r);
+    }
+    if (!ccRecipients.length && ccEmails.length) {
+      page.drawText('CC Emails', { x: 50, y, size: 11, color: rgb(0.1, 0.4, 0.6) });
+      y -= 16;
+      for (const email of ccEmails) {
+        page.drawText(`CC: <${email}>`, { x: 50, y, size: 9 });
+        y -= 14;
+      }
+    }
+  }
+
+  hr();
+  page.drawText('Signers', { x: 50, y, size: 12, color: rgb(0.1, 0.4, 0.6) });
+  y -= 18;
+  page.drawText('Name', { x: 50, y, size: 9, color: rgb(0.3, 0.3, 0.3) });
+  page.drawText('Email', { x: 170, y, size: 9, color: rgb(0.3, 0.3, 0.3) });
+  page.drawText('IP', { x: 335, y, size: 9, color: rgb(0.3, 0.3, 0.3) });
+  page.drawText('Region / Postal', { x: 405, y, size: 9, color: rgb(0.3, 0.3, 0.3) });
+  y -= 10;
+  hr();
+
+  const parties = Array.isArray(doc.parties) ? doc.parties : [];
+  for (const p of parties) {
+    if (y < 140) {
+      page = addPage();
+      header();
+      y = 800;
+    }
+    const name = (p.name || '').toString();
+    const email = (p.email || '').toString();
+    const ip = (p.signedIpAddress || p.ipAddress || 'N/A').toString();
+    const region = (p.signedLocation || p.location || '').toString();
+    const postal = (p.signedPostalCode || p.postalCode || '').toString();
+    const regionPostal = [region, postal].filter(Boolean).join(' / ') || 'Unknown';
+
+    page.drawText(name.substring(0, 18), { x: 50, y, size: 8 });
+    page.drawText(email.substring(0, 28), { x: 170, y, size: 8 });
+    page.drawText(ip.substring(0, 18), { x: 335, y, size: 8 });
+    page.drawText(regionPostal.substring(0, 22), { x: 405, y, size: 8 });
+    y -= 12;
+
+    const signedAt = formatAuditTime(p.signedAt, p.timeZone || '');
+    page.drawText(`Signed at: ${signedAt}`.substring(0, 110), { x: 50, y, size: 8, color: rgb(0.2, 0.2, 0.2) });
+    y -= 16;
+    page.drawLine({ start: { x: 50, y }, end: { x: width - 50, y }, thickness: 0.2, color: rgb(0.93, 0.93, 0.93) });
+    y -= 10;
+  }
+}
 
 // Fire-and-forget — does NOT block the response
 // const generateAndSendFinalDoc = async (docId) => {
@@ -8776,10 +8922,17 @@ function renderCCList(page, emails, yPos, boldFont, regularFont) {
 
 // ── Helper: Send Completion Email ─────────────────────────────────────────────
 async function sendCompletionEmail(doc, pdfBuffer) {
-  const allEmails = [...doc.parties.map(p => p.email), ...(doc.ccEmails || [])];
+  const ccRecipients = Array.isArray(doc.ccRecipients) ? doc.ccRecipients : [];
+  const ccRecipientEmails = ccRecipients.map(r => safeLowerEmail(r && r.email)).filter(Boolean);
+  const allEmails = [
+    ...(Array.isArray(doc.parties) ? doc.parties.map(p => safeLowerEmail(p && p.email)).filter(Boolean) : []),
+    ...(Array.isArray(doc.ccEmails) ? doc.ccEmails.map(e => safeLowerEmail(e)).filter(Boolean) : []),
+    ...ccRecipientEmails,
+  ];
+  const uniq = Array.from(new Set(allEmails)).filter(Boolean);
   await transporter.sendMail({
     from: `"NeXsign" <${process.env.EMAIL_USER}>`,
-    to: allEmails.join(','),
+    to: uniq.join(','),
     subject: `[Completed] ${doc.title}`,
     html: `
       <div style="font-family:sans-serif;max-width:600px;margin:auto;border:1px solid #eee;border-radius:12px;padding:20px;">
@@ -8799,36 +8952,11 @@ const generateAndSendFinalDoc = async (docId) => {
     if (!doc) return;
 
     // ২. প্যারালাল প্রসেসিং
-    const [mergedPdfBytes, logs] = await Promise.all([
-      mergeSignatures(doc),
-      AuditLog.find({ document_id: doc._id }).sort({ createdAt: 1 }).lean()
-    ]);
+    const mergedPdfBytes = await mergeSignatures(doc);
 
     const finalPdf = await PDFDocument.load(mergedPdfBytes);
-    const boldFont = await finalPdf.embedFont(StandardFonts.HelveticaBold);
-    const regularFont = await finalPdf.embedFont(StandardFonts.Helvetica);
-
-    // ৩. সার্টিফিকেট পেজ তৈরি
-    const page = finalPdf.addPage([595, 842]);
-    const { width, height } = page.getSize();
-
-    drawCertificateHeader(page, height, boldFont, regularFont);
-
-    // ৪. অডিট লগ রেন্ডারিং
-    let yPos = height - 170;
-    
-    for (const log of logs) {
-      if (yPos < 100) {
-        const newPage = finalPdf.addPage([595, 842]);
-        yPos = 800;
-      }
-      yPos = renderLogRow(page, log, yPos, boldFont, regularFont, width);
-    }
-
-    // ৫. সিসি লিস্ট
-    if (doc.ccEmails?.length > 0) {
-      yPos = renderCCList(page, doc.ccEmails, yPos, boldFont, regularFont);
-    }
+    // ✅ Append final page: Audit Certificate (required)
+    addAuditCertificatePages(finalPdf, doc);
 
     // ৬. ফাইনাল সেভ
     const finalPdfBytes = await finalPdf.save();
@@ -8843,12 +8971,29 @@ const generateAndSendFinalDoc = async (docId) => {
           public_id: `NeXsign_${doc._id}_${Date.now()}` // ক্যাশ এড়াতে টাইমস্ট্যাম্প
         });
 
-        await Document.findByIdAndUpdate(docId, { 
-          fileUrl: uploadRes.secure_url, 
-          status: 'completed' 
+        await Document.findByIdAndUpdate(docId, {
+          fileUrl: uploadRes.secure_url,
+          status: 'completed',
+          $push: {
+            'auditTrail.events': {
+              eventType: 'audit_certificate_appended',
+              actorRole: 'system',
+              occurredAt: new Date(),
+              meta: { fileUrl: uploadRes.secure_url }
+            }
+          }
         });
 
         await sendCompletionEmail(doc, pdfBuffer);
+        await Document.findByIdAndUpdate(docId, {
+          $push: {
+            'auditTrail.events': {
+              eventType: 'completion_email_sent',
+              actorRole: 'system',
+              occurredAt: new Date()
+            }
+          }
+        });
         console.log(`Document ${docId} fully processed and emailed.`);
       } catch (err) {
         console.error('Post-processing error:', err);
@@ -8935,10 +9080,11 @@ const generateAndSendFinalDoc = async (docId) => {
 // 1. Upload & Send — THE MISSING ROUTE
 router.post('/upload-and-send', auth, upload.single('file'), async (req, res) => {
   try {
-    const { title, parties, ccEmails, fields, totalPages } = req.body;
+    const { title, parties, ccEmails, ccRecipients, fields, totalPages } = req.body;
 
     const parsedParties  = JSON.parse(parties  || '[]');
     const parsedCcEmails = JSON.parse(ccEmails  || '[]');
+    const parsedCcRecipients = JSON.parse(ccRecipients || '[]');
     const parsedFields   = JSON.parse(fields    || '[]');
 
     if (!parsedParties.length)
@@ -8960,10 +9106,12 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
 
     // Assign token to first party
     const firstToken = crypto.randomBytes(32).toString('hex');
+    const now = new Date();
     const partiesWithTokens = parsedParties.map((p, i) => ({
       ...p,
       status: i === 0 ? 'sent' : 'pending',
       token:  i === 0 ? firstToken : undefined,
+      emailSentAt: i === 0 ? now : undefined,
     }));
 
     const doc = await Document.create({
@@ -8972,10 +9120,33 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
       fileId,
       parties:    partiesWithTokens,
       ccEmails:   parsedCcEmails,
+      ccRecipients: Array.isArray(parsedCcRecipients) ? parsedCcRecipients : [],
       fields:     parsedFields,
       totalPages: Number(totalPages) || 1,
       status:     'in_progress',
       owner:      req.user.id,
+      auditTrail: {
+        version: 1,
+        events: [
+          {
+            eventType: 'document_created',
+            actorRole: 'owner',
+            actorEmail: safeLowerEmail(req.user.email),
+            actorName: req.user.full_name || '',
+            occurredAt: now,
+          },
+          {
+            eventType: 'email_sent',
+            actorRole: 'owner',
+            actorEmail: safeLowerEmail(req.user.email),
+            actorName: req.user.full_name || '',
+            partyIndex: 0,
+            ipAddress: getClientIp(req),
+            occurredAt: now,
+            meta: { to: safeLowerEmail(partiesWithTokens[0].email) }
+          }
+        ]
+      }
     });
 
     await AuditLog.create({
@@ -8992,6 +9163,272 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
     res.json({ success: true, documentId: doc._id });
   } catch (err) {
     console.error('Upload-and-send error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── Templates ────────────────────────────────────────────────────────────────
+
+// List templates + usageCount
+router.get('/templates', auth, async (req, res) => {
+  try {
+    const ownerId = new mongoose.Types.ObjectId(req.user.id);
+    const templates = await Document.aggregate([
+      { $match: { owner: ownerId, isTemplate: true } },
+      { $sort: { updatedAt: -1 } },
+      { $project: { title: 1, createdAt: 1, updatedAt: 1, totalPages: 1 } },
+      {
+        $lookup: {
+          from: 'documents',
+          let: { tid: '$_id' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$senderMeta.templateSourceId', '$$tid'] } } },
+            { $count: 'count' }
+          ],
+          as: 'usage'
+        }
+      },
+      { $addFields: { usageCount: { $ifNull: [{ $arrayElemAt: ['$usage.count', 0] }, 0] } } },
+      { $project: { usage: 0 } }
+    ]);
+    res.json({ success: true, templates });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Publish a doc as template
+router.post('/templates/:id/publish', auth, async (req, res) => {
+  try {
+    const doc = await Document.findById(req.params.id);
+    if (!doc) return res.status(404).json({ success: false, error: 'Not found' });
+    if (doc.owner.toString() !== req.user.id) return res.status(403).json({ success: false, error: 'Unauthorized' });
+    doc.isTemplate = true;
+    doc.auditTrail = doc.auditTrail || { version: 1, events: [] };
+    doc.auditTrail.events = doc.auditTrail.events || [];
+    doc.auditTrail.events.push({
+      eventType: 'document_updated',
+      actorRole: 'owner',
+      actorEmail: safeLowerEmail(req.user.email),
+      actorName: req.user.full_name || '',
+      occurredAt: new Date(),
+      meta: { action: 'published_as_template' }
+    });
+    doc.markModified('auditTrail');
+    await doc.save();
+    res.json({ success: true, templateId: doc._id });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Use a template -> create a new document and send to first signer
+router.post('/templates/:id/use', auth, async (req, res) => {
+  try {
+    const template = await Document.findById(req.params.id).lean();
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found' });
+    if (!template.isTemplate) return res.status(400).json({ success: false, error: 'Not a template' });
+    if (String(template.owner) !== req.user.id) return res.status(403).json({ success: false, error: 'Unauthorized' });
+
+    const parsedParties = typeof req.body.parties === 'string'
+      ? JSON.parse(req.body.parties || '[]')
+      : (req.body.parties || []);
+    const parsedCcRecipients = typeof req.body.ccRecipients === 'string'
+      ? JSON.parse(req.body.ccRecipients || '[]')
+      : (req.body.ccRecipients || []);
+    const parsedCcEmails = typeof req.body.ccEmails === 'string'
+      ? JSON.parse(req.body.ccEmails || '[]')
+      : (req.body.ccEmails || []);
+
+    if (!Array.isArray(parsedParties) || !parsedParties.length) {
+      return res.status(400).json({ success: false, error: 'At least one party is required' });
+    }
+
+    const firstToken = crypto.randomBytes(32).toString('hex');
+    const now = new Date();
+    const partiesWithTokens = parsedParties.map((p, i) => ({
+      ...p,
+      status: i === 0 ? 'sent' : 'pending',
+      token: i === 0 ? firstToken : undefined,
+      emailSentAt: i === 0 ? now : undefined,
+    }));
+
+    const newDoc = await Document.create({
+      title: req.body.title || template.title || 'Untitled',
+      fileUrl: template.fileUrl,
+      fileId: template.fileId,
+      fields: template.fields || [],
+      totalPages: template.totalPages || 1,
+      owner: req.user.id,
+      status: 'in_progress',
+      currentPartyIndex: 0,
+      isTemplate: false,
+      parties: partiesWithTokens,
+      ccRecipients: Array.isArray(parsedCcRecipients) ? parsedCcRecipients : [],
+      ccEmails: Array.isArray(parsedCcEmails) ? parsedCcEmails : [],
+      senderMeta: {
+        ...(template.senderMeta || {}),
+        templateSourceId: template._id,
+        templateName: template.title || '',
+      },
+      auditTrail: {
+        version: 1,
+        events: [
+          {
+            eventType: 'document_created',
+            actorRole: 'owner',
+            actorEmail: safeLowerEmail(req.user.email),
+            actorName: req.user.full_name || '',
+            occurredAt: now,
+            meta: { createdFromTemplateId: template._id }
+          },
+          {
+            eventType: 'email_sent',
+            actorRole: 'owner',
+            actorEmail: safeLowerEmail(req.user.email),
+            actorName: req.user.full_name || '',
+            partyIndex: 0,
+            ipAddress: getClientIp(req),
+            occurredAt: now,
+            meta: { to: safeLowerEmail(partiesWithTokens[0].email), templateId: template._id }
+          }
+        ]
+      }
+    });
+
+    sendSigningEmail(partiesWithTokens[0], newDoc.title, firstToken).catch(console.error);
+    res.json({ success: true, documentId: newDoc._id });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Bulk one-to-many template usage (CSV/import wizard backend)
+router.post('/templates/:id/use-bulk', auth, async (req, res) => {
+  try {
+    const template = await Document.findById(req.params.id).lean();
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found' });
+    if (!template.isTemplate) return res.status(400).json({ success: false, error: 'Not a template' });
+    if (String(template.owner) !== req.user.id) return res.status(403).json({ success: false, error: 'Unauthorized' });
+
+    const rawEmployees = Array.isArray(req.body.employees) ? req.body.employees : [];
+    const ccEmails = Array.isArray(req.body.ccEmails) ? req.body.ccEmails : [];
+    const ccRecipients = Array.isArray(req.body.ccRecipients) ? req.body.ccRecipients : [];
+
+    const employees = rawEmployees
+      .map((e) => ({
+        name: (e?.name || '').toString().trim(),
+        email: safeLowerEmail(e?.email || ''),
+      }))
+      .filter((e) => e.name && e.email);
+
+    if (!employees.length) {
+      return res.status(400).json({ success: false, error: 'No valid employees found' });
+    }
+
+    const now = new Date();
+    const createdDocumentIds = [];
+    const failed = [];
+    const batchSize = 50; // memory-safe chunking
+
+    for (let i = 0; i < employees.length; i += batchSize) {
+      const batch = employees.slice(i, i + batchSize);
+      // per-batch parallel processing (safe for large volumes)
+      // eslint-disable-next-line no-await-in-loop
+      const batchResults = await Promise.all(batch.map(async (emp) => {
+        try {
+          const firstToken = crypto.randomBytes(32).toString('hex');
+          const newDoc = await Document.create({
+            title: req.body.title || template.title || 'Untitled',
+            fileUrl: template.fileUrl,
+            fileId: template.fileId,
+            fields: template.fields || [],
+            totalPages: template.totalPages || 1,
+            owner: req.user.id,
+            status: 'in_progress',
+            currentPartyIndex: 0,
+            isTemplate: false,
+            parties: [{
+              name: emp.name,
+              email: emp.email,
+              status: 'sent',
+              token: firstToken,
+              emailSentAt: now,
+            }],
+            ccRecipients,
+            ccEmails,
+            senderMeta: {
+              ...(template.senderMeta || {}),
+              templateSourceId: template._id,
+              templateName: template.title || '',
+              flowType: 'one_to_many',
+            },
+            auditTrail: {
+              version: 1,
+              events: [
+                {
+                  eventType: 'document_created',
+                  actorRole: 'owner',
+                  actorEmail: safeLowerEmail(req.user.email),
+                  actorName: req.user.full_name || '',
+                  occurredAt: now,
+                  meta: { createdFromTemplateId: template._id, bulk: true },
+                },
+                {
+                  eventType: 'email_sent',
+                  actorRole: 'owner',
+                  actorEmail: safeLowerEmail(req.user.email),
+                  actorName: req.user.full_name || '',
+                  partyIndex: 0,
+                  ipAddress: getClientIp(req),
+                  occurredAt: now,
+                  meta: { to: emp.email, templateId: template._id, bulk: true },
+                },
+              ],
+            },
+          });
+
+          sendSigningEmail({ name: emp.name, email: emp.email }, newDoc.title, firstToken).catch(console.error);
+          return { ok: true, id: newDoc._id };
+        } catch (err) {
+          return { ok: false, email: emp.email, reason: err.message };
+        }
+      }));
+
+      batchResults.forEach((r) => {
+        if (r.ok) createdDocumentIds.push(r.id);
+        else failed.push({ email: r.email, reason: r.reason });
+      });
+    }
+
+    res.json({
+      success: true,
+      total: employees.length,
+      created: createdDocumentIds.length,
+      failed: failed.length,
+      failedRows: failed.slice(0, 20),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Usage history for a template
+router.get('/templates/:id/usage', auth, async (req, res) => {
+  try {
+    const template = await Document.findById(req.params.id).lean();
+    if (!template) return res.status(404).json({ success: false, error: 'Template not found' });
+    if (String(template.owner) !== req.user.id) return res.status(403).json({ success: false, error: 'Unauthorized' });
+    const usage = await Document.find({
+      owner: req.user.id,
+      'senderMeta.templateSourceId': template._id,
+    })
+      .sort({ createdAt: -1 })
+      .select('title status createdAt updatedAt parties')
+      .limit(50)
+      .lean();
+    res.json({ success: true, usage });
+  } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -9096,6 +9533,46 @@ router.get('/sign/:token', async (req, res) => {
     if (party?.status === 'signed')
       return res.status(400).json({ error: 'Already signed' });
 
+    // ✅ Track link open for real-time monitoring + audit certificate metadata
+    const idx = doc.parties.findIndex(p => p.token === req.params.token);
+    const now = new Date();
+    const ip = getClientIp(req);
+    const ua = (req.headers['user-agent'] || '').toString();
+
+    if (idx >= 0) {
+      const signer = doc.parties[idx];
+      if (!signer.linkOpenedAt) signer.linkOpenedAt = now;
+      signer.lastLinkOpenedAt = now;
+      signer.linkOpenCount = (signer.linkOpenCount || 0) + 1;
+      signer.openedIpAddress = ip || signer.openedIpAddress;
+      signer.openedUserAgent = ua || signer.openedUserAgent;
+
+      doc.auditTrail = doc.auditTrail || { version: 1, events: [] };
+      doc.auditTrail.events = doc.auditTrail.events || [];
+      doc.auditTrail.events.push({
+        eventType: 'link_opened',
+        actorRole: 'signer',
+        actorName: signer.name || '',
+        actorEmail: safeLowerEmail(signer.email),
+        partyIndex: idx,
+        ipAddress: ip,
+        userAgent: ua,
+        occurredAt: now,
+      });
+      doc.markModified('parties');
+      doc.markModified('auditTrail');
+      await doc.save();
+
+      AuditLog.create({
+        document_id: doc._id,
+        action: 'opened',
+        performed_by: { name: signer.name, email: signer.email, role: 'signer' },
+        ip_address: ip,
+        user_agent: ua,
+        details: 'Signing link opened.'
+      }).catch(() => {});
+    }
+
     res.json({
       success:    true,
       title:      doc.title,
@@ -9121,20 +9598,53 @@ router.post('/sign/submit', async (req, res) => {
     const signer = doc.parties[idx];
     if (signer.status === 'signed') return res.status(400).json({ error: 'Already signed' });
 
+    const now = new Date();
+    const ip = getClientIp(req);
+    const ua = (req.headers['user-agent'] || '').toString();
+    const loc = normalizeLocationData(locationData);
+
     // ১. ডাটা আপডেট
     doc.fields = fields;
     doc.markModified('fields');
     signer.status = 'signed';
-    signer.signedAt = new Date();
+    signer.signedAt = now;
+    signer.signedIpAddress = ip || signer.signedIpAddress;
+    signer.signedUserAgent = ua || signer.signedUserAgent;
+    signer.signedLocation = loc.locationText || signer.signedLocation;
+    signer.signedPostalCode = loc.location?.postalCode || signer.signedPostalCode;
+    signer.timeZone = loc.timeZone || signer.timeZone;
+    signer.device = ua || signer.device;
+    signer.ipAddress = ip || signer.ipAddress;
+    signer.location = loc.locationText || signer.location;
+    signer.postalCode = loc.location?.postalCode || signer.postalCode;
 
     // ২. অডিট লগ তৈরি
     await AuditLog.create({
       document_id: doc._id,
       action: 'signed',
       performed_by: { name: signer.name, email: signer.email, role: 'signer' },
-      ip_address: req.headers['x-forwarded-for'] || req.socket.remoteAddress,
+      ip_address: ip,
+      user_agent: ua,
       location: typeof locationData === 'object' ? JSON.stringify(locationData) : (locationData || 'Unknown'),
     });
+
+    // ✅ Embedded auditTrail event
+    doc.auditTrail = doc.auditTrail || { version: 1, events: [] };
+    doc.auditTrail.events = doc.auditTrail.events || [];
+    doc.auditTrail.events.push({
+      eventType: 'signed',
+      actorRole: 'signer',
+      actorName: signer.name || '',
+      actorEmail: safeLowerEmail(signer.email),
+      partyIndex: idx,
+      ipAddress: ip,
+      userAgent: ua,
+      location: loc.location || {},
+      timeZone: loc.timeZone || '',
+      occurredAt: now,
+    });
+    doc.markModified('auditTrail');
+    doc.markModified('parties');
 
     // ৩. নেক্সট স্টেপ চেক
     if (idx + 1 < doc.parties.length) {
@@ -9142,6 +9652,17 @@ router.post('/sign/submit', async (req, res) => {
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
+      doc.parties[idx + 1].emailSentAt = new Date();
+
+      doc.auditTrail.events.push({
+        eventType: 'email_sent',
+        actorRole: 'system',
+        partyIndex: idx + 1,
+        ipAddress: getClientIp(req),
+        occurredAt: new Date(),
+        meta: { to: safeLowerEmail(doc.parties[idx + 1].email) }
+      });
+      doc.markModified('auditTrail');
       await doc.save();
       
       // পরের জনকে ইমেইল পাঠান (Non-blocking)
@@ -9151,6 +9672,12 @@ router.post('/sign/submit', async (req, res) => {
     } else {
       // সবাই সাইন করেছে
       doc.status = 'completed';
+      doc.auditTrail.events.push({
+        eventType: 'completed',
+        actorRole: 'system',
+        occurredAt: new Date()
+      });
+      doc.markModified('auditTrail');
       await doc.save();
       
       // ফাইনাল ডকুমেন্ট জেনারেট করা (Background process)
@@ -9179,6 +9706,38 @@ router.get('/', auth, async (req, res) => {
     res.json({ success: true, documents, total, hasMore: total > skip + documents.length });
   } catch (err) {
     res.status(500).json({ success: false, error: 'Dashboard fetch failed' });
+  }
+});
+
+// 6. Get single document
+router.get('/:id/audit', auth, async (req, res) => {
+  try {
+    const doc = await Document.findById(req.params.id).lean();
+    if (!doc) return res.status(404).json({ success: false, message: 'Document not found' });
+    const isOwner = String(doc.owner) === req.user.id;
+    const isParty = (doc.parties || []).some(p => p.email === req.user.email);
+    if (!isOwner && !isParty) {
+      return res.status(403).json({ success: false, message: 'Unauthorized' });
+    }
+
+    const events = (((doc.auditTrail || {}).events) || [])
+      .slice()
+      .sort((a, b) => new Date(b.occurredAt || 0) - new Date(a.occurredAt || 0));
+
+    res.json({
+      success: true,
+      audit: {
+        documentId: doc._id,
+        title: doc.title,
+        status: doc.status,
+        parties: doc.parties || [],
+        ccEmails: doc.ccEmails || [],
+        ccRecipients: doc.ccRecipients || [],
+        events,
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
