@@ -3013,6 +3013,27 @@ const upload = multer({
 // HELPERS
 // ════════════════════════════════════════════════════════════════════════════
 
+const logActivity = async (docId, action, req, details = "", party = {}) => {
+  try {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress || "Unknown";
+    
+    await AuditLog.create({
+      document_id: docId,
+      action: action, // 'opened', 'signed', 'sent', etc.
+      performed_by: {
+        name: party.name || "System",
+        email: party.email || "system@nexsign.com",
+        role: party.email ? 'signer' : 'owner'
+      },
+      ip_address: ip,
+      details: typeof details === 'object' ? JSON.stringify(details) : details,
+      user_agent: req.headers['user-agent'] || "Unknown"
+    });
+  } catch (err) { 
+    console.error("[NeXsign] Audit Logging Failed:", err.message); 
+  }
+};
+
 const uploadToCloudinary = (buffer, options) =>
   new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(options, (err, res) =>
@@ -3193,6 +3214,45 @@ router.get('/', auth, async (req, res) => {
 });
 
 // 3. Sign Submit
+
+router.get('/sign/:token', async (req, res) => {
+  try {
+    const doc = await Document.findOne({ "parties.token": req.params.token });
+    if (!doc) return res.status(404).json({ error: "Invalid link" });
+    
+    // টোকেন দিয়ে সঠিক সাইনার খুঁজে বের করা
+    const partyIndex = doc.parties.findIndex(p => p.token === req.params.token);
+    const party = doc.parties[partyIndex];
+    
+    await logActivity(doc._id, 'opened', req, "Signer opened the link", party);
+    
+    // ফ্রন্টএন্ডে পাঠানোর জন্য ডাটা তৈরি (এখানে index যোগ করা হয়েছে)
+    const partyWithIndex = {
+      ...party.toObject(),
+      index: partyIndex
+    };
+    
+    // ফিল্ডগুলোতে isMine ফ্ল্যাগ যোগ করা
+    const formattedFields = doc.fields.map(f => {
+      const fieldData = typeof f === 'string' ? JSON.parse(f) : f;
+      const fIndex = fieldData.signerIndex ?? fieldData.partyIndex ?? 0;
+      return { 
+        ...fieldData, 
+        partyIndex: Number(fIndex),
+        isMine: Number(fIndex) === partyIndex 
+      };
+    });
+    
+    res.json({ 
+      document: { ...doc.toObject(), fields: formattedFields }, 
+      party: partyWithIndex 
+    });
+  } catch (err) { 
+    console.error("Fetch Error:", err);
+    res.status(500).json({ error: "Fetch error" }); 
+  }
+});
+
 router.post('/sign/submit', async (req, res) => {
   try {
     const { token, fields, locationData, deviceInfo } = req.body;
