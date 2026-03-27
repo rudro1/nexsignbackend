@@ -3315,12 +3315,11 @@
 // });
 
 // module.exports = router;
-
 const express   = require('express');
 const router    = express.Router();
 const multer    = require('multer');
 const crypto    = require('crypto');
-const fetch     = require('node-fetch');
+// ✅ node-fetch REMOVE করা হয়েছে — Node.js 18+ এ built-in fetch আছে
 const { v2: cloudinary } = require('cloudinary');
 const Document  = require('../models/Document');
 const AuditLog  = require('../models/AuditLog');
@@ -3387,25 +3386,35 @@ const FRONT = () =>
     .replace(/\/$/, '');
 
 // ════════════════════════════════════════════════════════════════
-// ✅ FIX 1: PROXY — must be FIRST before any /:id routes
+// PROXY — must be FIRST before any /:id routes
 // ════════════════════════════════════════════════════════════════
 router.get('/proxy/:path(*)', async (req, res) => {
   try {
     const cloudPath = req.params.path
       .replace(/~~/g, '/')
-      .split('?')[0]; // strip cache buster
+      .split('?')[0];
 
     const url =
       `https://res.cloudinary.com/` +
       `${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${cloudPath}`;
 
-    const response = await fetch(url, { timeout: 30000 });
+    // ✅ Built-in fetch use করা হচ্ছে (Node.js 18+)
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(30000), // ✅ timeout এর নতুন way
+    });
+
     if (!response.ok) return res.status(404).send('Not found');
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    response.body.pipe(res);
+
+    // ✅ Built-in fetch এ .body একটা ReadableStream
+    // Node.js এ pipe করার জন্য এইভাবে করতে হবে
+    const { Readable } = require('stream');
+    const nodeStream = Readable.fromWeb(response.body);
+    nodeStream.pipe(res);
+
   } catch (err) {
     console.error('Proxy error:', err.message);
     res.status(500).send('Proxy error');
@@ -3461,7 +3470,6 @@ router.post('/upload-and-send',
           success: false, message: 'No PDF provided.',
         });
 
-      // Upload PDF
       let fileUrl, fileId;
       if (req.file) {
         const up = await uploadToCloudinary(req.file.buffer, {
@@ -3505,13 +3513,10 @@ router.post('/upload-and-send',
         workflowType: 'sequential',
       });
 
-      // ── Respond immediately (Optimistic) ────────────────────
       res.json({ success: true, documentId: doc._id });
 
-      // ── Background work ──────────────────────────────────────
       setImmediate(async () => {
         try {
-          // 1. Email to first party
           const first = doc.parties[0];
           if (first) {
             const link = `${FRONT()}/sign/${first.token}`;
@@ -3531,7 +3536,6 @@ router.post('/upload-and-send',
             await doc.save();
           }
 
-          // 2. CC emails
           for (const cc of doc.ccList) {
             await sendCCEmail({
               recipientEmail: cc.email,
@@ -3545,7 +3549,6 @@ router.post('/upload-and-send',
             );
           }
 
-          // 3. Auto-save as template
           const exists = await Document.findOne({
             owner:        doc.owner,
             isTemplate:   true,
@@ -3590,7 +3593,7 @@ router.post('/upload-and-send',
 );
 
 // ════════════════════════════════════════════════════════════════
-// ✅ FIX 2: SIGN SUBMIT — must be BEFORE /sign/:token
+// SIGN SUBMIT — must be BEFORE /sign/:token
 // ════════════════════════════════════════════════════════════════
 router.post('/sign/submit', async (req, res) => {
   try {
@@ -3618,7 +3621,6 @@ router.post('/sign/submit', async (req, res) => {
       req.socket?.remoteAddress ||
       'Unknown';
 
-    // ── Update signer metadata ──────────────────────────────
     signer.status     = 'signed';
     signer.signedAt   = new Date();
     signer.ip         = signerIp;
@@ -3629,9 +3631,8 @@ router.post('/sign/submit', async (req, res) => {
     signer.location   = locationData?.text  || '';
     signer.clientTime = clientTime || new Date().toISOString();
     signer.userAgent  = req.headers['user-agent'] || '';
-    signer.token      = undefined; // ✅ Invalidate token
+    signer.token      = undefined;
 
-    // ── Merge signed field values ───────────────────────────
     for (const sf of signedFields) {
       const fi = doc.fields.findIndex(f => {
         const fo = typeof f === 'string' ? JSON.parse(f) : f;
@@ -3647,17 +3648,14 @@ router.post('/sign/submit', async (req, res) => {
     doc.markModified('fields');
     doc.markModified('parties');
 
-    // ✅ FIX 3: Template Party 1 sign → mark isParty1Signed
     if (doc.isTemplate && idx === 0) {
       doc.isParty1Signed = true;
     }
 
     await doc.save();
 
-    // ── Respond immediately ─────────────────────────────────
     res.json({ success: true, message: 'Signature recorded.' });
 
-    // ── Background processing ───────────────────────────────
     setImmediate(async () => {
       try {
         await logEvent(
@@ -3676,11 +3674,8 @@ router.post('/sign/submit', async (req, res) => {
           }
         );
 
-        // Template Party 1 sign → just save, no PDF generation
         if (doc.isTemplate && idx === 0) {
-          console.log(
-            `Template ${doc._id}: Party 1 signed. Ready for use.`
-          );
+          console.log(`Template ${doc._id}: Party 1 signed.`);
           return;
         }
 
@@ -3689,7 +3684,6 @@ router.post('/sign/submit', async (req, res) => {
         );
 
         if (!allSigned && doc.workflowType === 'sequential') {
-          // Send to next unsigned party
           const nextParty = doc.parties.find(
             p => p.status !== 'signed'
           );
@@ -3699,11 +3693,10 @@ router.post('/sign/submit', async (req, res) => {
             nextParty.emailSentAt = new Date();
             await doc.save();
 
-            const nextIdx  = doc.parties.findIndex(
+            const nextIdx = doc.parties.findIndex(
               p => p.token === nextParty.token
             );
-            const signLink =
-              `${FRONT()}/sign/${nextParty.token}`;
+            const signLink = `${FRONT()}/sign/${nextParty.token}`;
 
             await sendSigningEmail({
               recipientEmail: nextParty.email,
@@ -3718,7 +3711,6 @@ router.post('/sign/submit', async (req, res) => {
             });
           }
         } else if (allSigned) {
-          // ── Generate final PDF ─────────────────────────────
           let finalBytes = await mergeSignaturesIntoPDF(
             doc.fileUrl, doc.fields
           );
@@ -3737,7 +3729,6 @@ router.post('/sign/submit', async (req, res) => {
           doc.signedFileUrl = uploaded.secure_url;
           doc.status        = 'completed';
 
-          // Clean base64 from DB
           doc.fields = doc.fields.map(f => {
             const field = typeof f === 'string'
               ? JSON.parse(f)
@@ -3753,7 +3744,6 @@ router.post('/sign/submit', async (req, res) => {
           doc.markModified('fields');
           await doc.save();
 
-          // Notify all parties + CC
           const recipients = [
             ...doc.parties,
             ...(doc.ccList || []),
@@ -3768,15 +3758,13 @@ router.post('/sign/submit', async (req, res) => {
               companyName:    doc.companyName,
               auditParties:   doc.parties,
             }).catch(e =>
-              console.error(
-                `Completion email ${r.email}:`, e.message
-              )
+              console.error(`Completion email ${r.email}:`, e.message)
             );
           }
 
           await logEvent(
             doc._id, 'completed',
-            { name:'System', email:'system@nexsign.app', role:'system' },
+            { name: 'System', email: 'system@nexsign.app', role: 'system' },
             { details: 'All signed. Final PDF generated.' }
           );
         }
@@ -3791,13 +3779,12 @@ router.post('/sign/submit', async (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════
-// ✅ FIX 4: GET SIGNING PAGE — AFTER /sign/submit
+// GET SIGNING PAGE — AFTER /sign/submit
 // ════════════════════════════════════════════════════════════════
 router.get('/sign/:token', async (req, res) => {
   try {
     const { token } = req.params;
 
-    // Guard: reject if token looks like "submit"
     if (token === 'submit')
       return res.status(400).json({ error: 'Invalid token.' });
 
@@ -3821,7 +3808,6 @@ router.get('/sign/:token', async (req, res) => {
         error: 'You have already signed this document.',
       });
 
-    // Track link open (fire and forget)
     Document.updateOne(
       { _id: doc._id, 'parties.token': token },
       {
@@ -3842,15 +3828,12 @@ router.get('/sign/:token', async (req, res) => {
         ?.split(',')[0] || '',
     });
 
-    // ✅ FIX 5: Template instance — Party 1 fields show as filled
     const formattedFields = doc.fields.map(f => {
       const field = typeof f === 'string' ? JSON.parse(f) : f;
       const fPartyIdx = Number(field.partyIndex ?? 0);
       return {
         ...field,
         partyIndex: fPartyIdx,
-        // Other party fields show their values (read-only)
-        // Current signer's fields show empty for input
         value: fPartyIdx === partyIndex
           ? ''
           : (field.value || ''),
@@ -3880,7 +3863,6 @@ router.get('/sign/:token', async (req, res) => {
 // ════════════════════════════════════════════════════════════════
 // TEMPLATE ROUTES
 // ════════════════════════════════════════════════════════════════
-
 router.post('/templates',
   auth,
   upload.single('file'),
@@ -3932,11 +3914,9 @@ router.post('/templates',
 
       res.json({ success: true, template: doc });
 
-      // Send Party 1 signing link
       if (party1 && doc.parties[0]) {
         setImmediate(async () => {
-          const link =
-            `${FRONT()}/sign/${doc.parties[0].token}`;
+          const link = `${FRONT()}/sign/${doc.parties[0].token}`;
           await sendSigningEmail({
             recipientEmail: doc.parties[0].email,
             recipientName:  doc.parties[0].name,
@@ -3947,8 +3927,7 @@ router.post('/templates',
             companyName:    doc.companyName,
             partyNumber:    1,
             totalParties:   1,
-            message:
-              'Please sign this template as the authorizing party.',
+            message: 'Please sign this template as the authorizing party.',
           }).catch(e =>
             console.error('Party1 template email:', e.message)
           );
@@ -3985,7 +3964,7 @@ router.get('/templates', auth, async (req, res) => {
   }
 });
 
-// Use template — send to signers
+// Use template
 router.post('/templates/:id/use', auth, async (req, res) => {
   try {
     const template = await Document.findOne({
@@ -4007,30 +3986,24 @@ router.post('/templates/:id/use', auth, async (req, res) => {
         message: 'At least one signer required.',
       });
 
-    // Respond immediately
     res.json({
       success: true,
       message: `Sending to ${signers.length} signer(s)...`,
     });
 
-    // Background
     setImmediate(async () => {
       const party1 = template.parties?.[0];
 
       for (const signer of signers) {
         try {
-          // Clone fields
           const instanceFields = template.fields.map(f => ({
             ...f,
-            // Party 1 field: keep value (pre-filled)
-            // Employee field: clear value
             value: Number(f.partyIndex) === 0
               ? (f.value || '')
               : '',
           }));
 
           const instanceParties = [
-            // Party 1 already signed
             ...(party1 ? [{
               name:     party1.name,
               email:    party1.email,
@@ -4038,7 +4011,6 @@ router.post('/templates/:id/use', auth, async (req, res) => {
               signedAt: template.parties[0]?.signedAt || new Date(),
               color:    '#0ea5e9',
             }] : []),
-            // New employee signer
             {
               name:   signer.name,
               email:  signer.email,
@@ -4057,9 +4029,7 @@ router.post('/templates/:id/use', auth, async (req, res) => {
             fileId:           template.fileId,
             fields:           instanceFields,
             parties:          instanceParties,
-            ccList:           ccList.length
-              ? ccList
-              : template.ccList,
+            ccList:           ccList.length ? ccList : template.ccList,
             isTemplate:       false,
             sourceTemplateId: template._id,
             status:           'in_progress',
@@ -4067,19 +4037,16 @@ router.post('/templates/:id/use', auth, async (req, res) => {
             totalPages:       template.totalPages,
           });
 
-          // Increment template usage
           await Document.updateOne(
             { _id: template._id },
             { $inc: { usageCount: 1 } }
           );
 
-          // Send email to signer
           const signerParty = instance.parties.find(
             p => p.email === signer.email
           );
           if (signerParty?.token) {
-            const link =
-              `${FRONT()}/sign/${signerParty.token}`;
+            const link = `${FRONT()}/sign/${signerParty.token}`;
             await sendSigningEmail({
               recipientEmail: signer.email,
               recipientName:  signer.name,
@@ -4097,7 +4064,6 @@ router.post('/templates/:id/use', auth, async (req, res) => {
             await instance.save();
           }
 
-          // CC notification
           for (const cc of (instance.ccList || [])) {
             await sendCCEmail({
               recipientEmail: cc.email,
@@ -4106,9 +4072,7 @@ router.post('/templates/:id/use', auth, async (req, res) => {
               senderName:     req.user.full_name,
               companyLogoUrl: instance.companyLogo,
               companyName:    instance.companyName,
-            }).catch(e =>
-              console.error('CC error:', e.message)
-            );
+            }).catch(e => console.error('CC error:', e.message));
           }
         } catch (signerErr) {
           console.error(
@@ -4188,9 +4152,7 @@ router.post('/templates/:id/use-bulk', auth, async (req, res) => {
             fileId:           template.fileId,
             fields:           instanceFields,
             parties:          instanceParties,
-            ccList:           ccList.length
-              ? ccList
-              : template.ccList,
+            ccList:           ccList.length ? ccList : template.ccList,
             isTemplate:       false,
             sourceTemplateId: template._id,
             status:           'in_progress',
@@ -4203,9 +4165,7 @@ router.post('/templates/:id/use-bulk', auth, async (req, res) => {
             { $inc: { usageCount: 1 } }
           );
 
-          const sp = instance.parties.find(
-            p => p.email === emp.email
-          );
+          const sp = instance.parties.find(p => p.email === emp.email);
           if (sp?.token) {
             const link = `${FRONT()}/sign/${sp.token}`;
             await sendSigningEmail({
@@ -4225,14 +4185,10 @@ router.post('/templates/:id/use-bulk', auth, async (req, res) => {
           }
           created++;
         } catch (empErr) {
-          console.error(
-            `Bulk error ${emp.email}:`, empErr.message
-          );
+          console.error(`Bulk error ${emp.email}:`, empErr.message);
         }
       }
-      console.log(
-        `Bulk complete: ${created}/${employees.length}`
-      );
+      console.log(`Bulk complete: ${created}/${employees.length}`);
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -4368,7 +4324,6 @@ router.delete('/:id', auth, async (req, res) => {
         success: false, message: 'Not found.',
       });
 
-    // Cleanup audit logs async
     AuditLog.deleteMany({ document_id: doc._id }).catch(() => {});
 
     res.json({ success: true, message: 'Deleted.' });
