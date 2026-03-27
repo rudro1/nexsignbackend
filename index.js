@@ -2557,37 +2557,39 @@ const corsOptions = {
   optionsSuccessStatus: 200,
 };
 
-// ✅ Step 1: Manual CORS headers (Vercel serverless safety net)
+// ✅ MOST IMPORTANT — সবার আগে এটা রাখো
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+
   if (
     origin &&
     (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))
   ) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header(
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader(
       'Access-Control-Allow-Methods',
       'GET, POST, PUT, DELETE, OPTIONS, PATCH'
     );
-    res.header(
+    res.setHeader(
       'Access-Control-Allow-Headers',
       'Content-Type, Authorization'
     );
   }
 
-  // ✅ Preflight request handle
+  // ✅ OPTIONS preflight — must return 200 immediately
   if (req.method === 'OPTIONS') {
-    return res.status(200).end();
+    return res.sendStatus(200);
   }
+
   next();
 });
 
-// ✅ Step 2: cors middleware
+// ✅ cors middleware
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
-// ✅ Step 3: helmet (cors এর পরে)
+// ✅ helmet — cors এর পরে
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy:     false,
@@ -2621,6 +2623,13 @@ app.use('/api/feedback',  require('./routes/feedbackRoutes'));
 
 // ✅ Global error handler
 app.use((err, req, res, next) => {
+  // CORS error handle
+  if (err.message === 'CORS blocked') {
+    return res.status(403).json({
+      success: false,
+      message: 'CORS blocked: Origin not allowed',
+    });
+  }
   res.status(err.status || 500).json({
     success: false,
     message: process.env.NODE_ENV === 'production'
@@ -2629,7 +2638,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ✅ Local development এ listen করবে
+// ✅ Local development
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
@@ -2637,7 +2646,7 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-// ✅ Vercel এর জন্য export — এটা অবশ্যই লাগবে
+// ✅ Vercel serverless export
 module.exports = app;
 
 
