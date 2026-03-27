@@ -2462,6 +2462,70 @@
 // });
 
 // module.exports = app;
+// require('dotenv').config();
+// const express  = require('express');
+// const cors     = require('cors');
+// const mongoose = require('mongoose');
+// const helmet   = require('helmet');
+
+// const app = express();
+// app.set('trust proxy', 1);
+
+// const allowedOrigins = [
+//   'http://localhost:5173',
+//   'https://nexsignfrontend.vercel.app',
+// ];
+
+// const corsOptions = {
+//   origin: (origin, callback) => {
+//     if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))
+//       return callback(null, true);
+//     return callback(new Error('CORS blocked'));
+//   },
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization'],
+//   optionsSuccessStatus: 200,
+// };
+
+// app.use(cors(corsOptions));
+// app.options('*', cors(corsOptions));
+// app.use(helmet({
+//   crossOriginResourcePolicy: { policy: 'cross-origin' },
+//   contentSecurityPolicy:     false,
+//   crossOriginEmbedderPolicy: false,
+// }));
+// app.use(express.json({ limit: '10mb' }));
+// app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+// // Serverless DB connection cache
+// let cachedDb = null;
+// const connectDB = async () => {
+//   if (cachedDb && mongoose.connection.readyState >= 1) return;
+//   cachedDb = await mongoose.connect(process.env.MONGO_URI);
+// };
+
+// app.use(async (req, res, next) => {
+//   try { await connectDB(); next(); }
+//   catch (err) { res.status(500).json({ error: 'Database connection failed' }); }
+// });
+
+// app.use('/api/auth',      require('./routes/authRoutes'));
+// app.use('/api/documents', require('./routes/documentRoutes'));
+// app.use('/api/admin',     require('./routes/adminRoutes'));
+// app.use('/api/feedback',  require('./routes/feedbackRoutes'));
+
+// app.use((err, req, res, next) => {
+//   res.status(err.status || 500).json({
+//     success: false,
+//     message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message,
+//   });
+// });
+
+// module.exports = app; workable
+
+
+
 require('dotenv').config();
 const express  = require('express');
 const cors     = require('cors');
@@ -2478,27 +2542,62 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))
+    if (
+      !origin ||
+      allowedOrigins.includes(origin) ||
+      origin.endsWith('.vercel.app')
+    ) {
       return callback(null, true);
+    }
     return callback(new Error('CORS blocked'));
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   optionsSuccessStatus: 200,
 };
 
+// ✅ Step 1: Manual CORS headers (Vercel serverless safety net)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (
+    origin &&
+    (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app'))
+  ) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header(
+      'Access-Control-Allow-Methods',
+      'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+    );
+    res.header(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization'
+    );
+  }
+
+  // ✅ Preflight request handle
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  next();
+});
+
+// ✅ Step 2: cors middleware
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+
+// ✅ Step 3: helmet (cors এর পরে)
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy:     false,
   crossOriginEmbedderPolicy: false,
 }));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// Serverless DB connection cache
+// ✅ Serverless DB connection cache
 let cachedDb = null;
 const connectDB = async () => {
   if (cachedDb && mongoose.connection.readyState >= 1) return;
@@ -2506,22 +2605,39 @@ const connectDB = async () => {
 };
 
 app.use(async (req, res, next) => {
-  try { await connectDB(); next(); }
-  catch (err) { res.status(500).json({ error: 'Database connection failed' }); }
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    res.status(500).json({ error: 'Database connection failed' });
+  }
 });
 
+// ✅ Routes
 app.use('/api/auth',      require('./routes/authRoutes'));
 app.use('/api/documents', require('./routes/documentRoutes'));
 app.use('/api/admin',     require('./routes/adminRoutes'));
 app.use('/api/feedback',  require('./routes/feedbackRoutes'));
 
+// ✅ Global error handler
 app.use((err, req, res, next) => {
   res.status(err.status || 500).json({
     success: false,
-    message: process.env.NODE_ENV === 'production' ? 'Internal Server Error' : err.message,
+    message: process.env.NODE_ENV === 'production'
+      ? 'Internal Server Error'
+      : err.message,
   });
 });
 
+// ✅ Local development এ listen করবে
+if (process.env.NODE_ENV !== 'production') {
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+  });
+}
+
+// ✅ Vercel এর জন্য export — এটা অবশ্যই লাগবে
 module.exports = app;
 
 
