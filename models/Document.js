@@ -376,17 +376,28 @@ trim: true
 }],
 
 // ✅ New: rich CC/HR recipients (email + designation for Audit Certificate + completion emails)
+// ccRecipients: [{
+//   type: {
+//     type: String,
+//     enum: ['cc', 'hr'],
+//     default: 'cc',
+//     index: true
+//   },
+//   name: { type: String, trim: true, default: '' },
+//   email: { type: String, lowercase: true, trim: true, required: true },
+//   designation: { type: String, trim: true, default: '' }
+// }],
 ccRecipients: [{
-  type: {
-    type: String,
-    enum: ['cc', 'hr'],
-    default: 'cc',
-    index: true
-  },
-  name: { type: String, trim: true, default: '' },
-  email: { type: String, lowercase: true, trim: true, required: true },
-  designation: { type: String, trim: true, default: '' }
-}],
+   type: {
+      type: String,
+      enum: ['cc','hr'],
+      default: 'cc',
+      index: true
+    },
+    name:        { type: String, trim: true, default: '' },
+    email:       { type: String, lowercase: true, trim: true, required: true },
+    designation: { type: String, trim: true, default: '' }
+  }],
 senderMeta: {
 type: mongoose.Schema.Types.Mixed,
 default: null
