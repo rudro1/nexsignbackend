@@ -10256,7 +10256,6 @@ const generateAndSendFinalDoc = async (docId) => {
 //     res.status(500).json({ success:false, error:err.message });
 //   }
 // });
-
 router.post('/upload-and-send', auth, upload.single('file'), async (req, res) => {
   try {
     const { title, parties, ccRecipients, fields, totalPages } = req.body;
@@ -10277,7 +10276,6 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
       resource_type: 'raw', folder: 'nexsign_docs', format: 'pdf'
     });
 
-    // ২. টোকেন ও ডাটা প্রিপারেশন
     const now = new Date();
     const firstToken = crypto.randomBytes(32).toString('hex');
     const partiesWithTokens = parsedParties.map((p, i) => ({
@@ -10287,13 +10285,13 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
       emailSentAt: i === 0 ? now : undefined
     }));
 
-    // ৩. ডকুমেন্ট অবজেক্ট তৈরি
+    // ২. ডকুমেন্ট অবজেক্ট তৈরি
     const doc = new Document({
       title: title.trim() || 'Untitled',
       fileUrl: up.secure_url,
       fileId: up.public_id,
       parties: partiesWithTokens,
-      ccRecipients: parsedCcRecipients, // ✅ Email + Designation সেভ হচ্ছে
+      ccRecipients: parsedCcRecipients,
       fields: parsedFields,
       totalPages: Number(totalPages) || 1,
       status: 'in_progress',
@@ -10313,16 +10311,16 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
 
     await doc.save();
 
-    // 🚀 ১ সেকেন্ড রেসপন্স (Optimized)
+    // 🚀 দ্রুত রেসপন্স পাঠানো
     res.json({ success: true, documentId: doc._id });
 
-    // 🛠️ ব্যাকগ্রাউন্ড ওয়ার্কার: ইমেইল ও অডিট লগ
+    // 🛠️ ব্যাকগ্রাউন্ড ওয়ার্কার (এখানে ফিক্স করা হয়েছে)
     setImmediate(async () => {
       try {
         await Promise.all([
           sendSigningEmail(partiesWithTokens[0], doc.title, firstToken),
           AuditLog.create({
-            document_id: doc._id,
+            document: doc._id, // আপনার মডেল অনুযায়ী 'document'
             action: 'sent',
             performed_by: { name: req.user.full_name, email: req.user.email, role: 'owner' },
             ip_address: getClientIp(req)
@@ -10336,7 +10334,6 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
 
   } catch (err) {
     console.error('upload-and-send error:', err);
-    // যদি অলরেডি রেসপন্স না পাঠানো হয়ে থাকে তবেই এরর পাঠান
     if (!res.headersSent) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -10372,5 +10369,36 @@ router.get('/:id/audit', auth, async (req, res) => {
   }
 });
 
+// ✅ GET: /api/documents (ড্যাশবোর্ডের সব ডাটা লিস্ট করার জন্য)
+router.get('/', auth, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 6;
+    const skip = (page - 1) * limit;
+    
+    // ফ্রন্টএন্ড থেকে পাঠানো নির্দিষ্ট ফিল্ডগুলো সিলেক্ট করা
+    const selectFields = req.query.select || 'title status createdAt isTemplate parties.status parties.name fileUrl';
+
+    // ইউজারের নিজস্ব ডকুমেন্টগুলো খুঁজে বের করা
+    const documents = await Document.find({ owner: req.user.id })
+      .select(selectFields)
+      .sort({ createdAt: -1 }) // নতুনগুলো আগে দেখাবে
+      .skip(skip)
+      .limit(limit)
+      .lean();
+
+    const totalCount = await Document.countDocuments({ owner: req.user.id });
+
+    res.json({
+      success: true,
+      documents, // ফ্রন্টএন্ড এই নামেই ডাটা খুঁজছে
+      hasMore: totalCount > (skip + documents.length),
+      totalCount
+    });
+  } catch (err) {
+    console.error('Dashboard Fetch Error:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 // Export router
 module.exports = router;
