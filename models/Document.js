@@ -672,5 +672,7 @@ documentSchema.index({ 'parties.token': 1 });
 documentSchema.index({ 'parties.email': 1 });
 documentSchema.index({ sourceTemplateId: 1, createdAt: -1 });
 documentSchema.index({ isTemplate: 1, updatedAt: -1 });
-
+// ── Existing indexes এর পরে এই line যোগ করুন ──
+documentSchema.index({ owner: 1, isTemplate: 1, updatedAt: -1 }); // ✅ Dashboard query fast
+documentSchema.index({ owner: 1, title: 'text' });                 // ✅ Search support
 module.exports = mongoose.model('Document', documentSchema);
