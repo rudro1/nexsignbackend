@@ -484,554 +484,373 @@
 // }
 
 // module.exports = { mergeSignaturesIntoPDF, appendAuditPage };
+// backend/utils/pdfService.js
+
 'use strict';
 
-const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
-
-// ════════════════════════════════════════════════════════════════
-// CONSTANTS
-// ════════════════════════════════════════════════════════════════
-const FETCH_TIMEOUT_MS  = 30_000;
-const DEFAULT_FONT_KEY  = 'Helvetica';
-const DEFAULT_SIZE      = 12;
-const LINE_HEIGHT_RATIO = 1.4;
-const TEXT_PADDING_X    = 6;
+const { PDFDocument, rgb, StandardFonts, degrees } = require('pdf-lib');
+const fs   = require('fs');
+const path = require('path');
 
 /**
- * FONT_MAP — fontFamily + fontWeight → StandardFont
- * ✅ Only fonts pdf-lib natively supports
- * ✅ Bold variants explicitly mapped
+ * Embed signatures + append audit-log page → return Buffer
+ *
+ * @param {string} originalPdfPath
+ * @param {Array}  fields          – field objects with .value already set
+ * @param {Array}  auditLogs       – AuditLog documents (plain objects)
+ * @param {Object} docMeta         – { title, documentId, completedAt }
+ * @returns {Promise<Buffer>}
  */
-const FONT_MAP = Object.freeze({
-  'Helvetica':              StandardFonts.Helvetica,
-  'Helvetica-Bold':         StandardFonts.HelveticaBold,
-  'TimesRoman':             StandardFonts.TimesRoman,
-  'TimesRoman-Bold':        StandardFonts.TimesRomanBold,
-  'Courier':                StandardFonts.Courier,
-  'Courier-Bold':           StandardFonts.CourierBold,
-  // Legacy aliases from old documents
-  'Times New Roman':        StandardFonts.TimesRoman,
-  'Times New Roman-Bold':   StandardFonts.TimesRomanBold,
-});
-
-// ════════════════════════════════════════════════════════════════
-// HELPERS
-// ════════════════════════════════════════════════════════════════
-
-/** Hex → pdf-lib rgb() */
-function hexToRgb(hex = '#000000') {
-  const h = hex.replace('#', '').padEnd(6, '0');
-  return rgb(
-    parseInt(h.slice(0, 2), 16) / 255,
-    parseInt(h.slice(2, 4), 16) / 255,
-    parseInt(h.slice(4, 6), 16) / 255,
-  );
-}
-
-/** Fetch PDF bytes — timeout + exponential back-off retry */
-async function fetchPdfBuffer(url, retries = 2) {
-  let lastErr;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    const ctrl  = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-    try {
-      const res = await fetch(url, { signal: ctrl.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status} — ${url}`);
-      return await res.arrayBuffer();
-    } catch (err) {
-      lastErr = err;
-      if (attempt < retries) {
-        await new Promise(r => setTimeout(r, 1_000 * 2 ** attempt));
-      }
-    } finally {
-      clearTimeout(timer);
-    }
+async function embedSignaturesAndAuditLog(
+  originalPdfPath,
+  fields = [],
+  auditLogs = [],
+  docMeta = {}
+) {
+  // ── Guard ──────────────────────────────────────────────────────────────────
+  if (!originalPdfPath || !fs.existsSync(originalPdfPath)) {
+    throw new Error(`[pdfService] Original PDF not found: ${originalPdfPath}`);
   }
-  throw lastErr;
-}
 
-/** base64 data-URL → Buffer */
-function dataUrlToBuffer(dataUrl) {
-  const comma = dataUrl.indexOf(',');
-  return Buffer.from(
-    comma !== -1 ? dataUrl.slice(comma + 1) : dataUrl,
-    'base64',
-  );
-}
+  const originalBytes = fs.readFileSync(originalPdfPath);
+  const pdfDoc = await PDFDocument.load(originalBytes, {
+    ignoreEncryption: true,
+    updateMetadata:   false,
+  });
 
-/**
- * Resolve correct embedded font by fontFamily + fontWeight
- * Falls back: bold-variant → regular-variant → Helvetica
- */
-function resolveFont(embeddedFonts, fontFamily = DEFAULT_FONT_KEY, fontWeight = 'normal') {
-  const boldKey = `${fontFamily}-Bold`;
-  const wantBold = fontWeight === 'bold';
+  const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold    = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const pages       = pdfDoc.getPages();
 
-  if (wantBold && embeddedFonts[boldKey])   return embeddedFonts[boldKey];
-  if (embeddedFonts[fontFamily])             return embeddedFonts[fontFamily];
-  return embeddedFonts[DEFAULT_FONT_KEY];
-}
-
-/**
- * Word-wrap: split text into lines ≤ maxWidth px at given fontSize
- */
-function wrapText(text, font, fontSize, maxWidth) {
-  const words = String(text).split(' ');
-  const lines = [];
-  let   line  = '';
-
-  for (const word of words) {
-    const candidate = line ? `${line} ${word}` : word;
-    let   fits      = true;
-    try {
-      fits = font.widthOfTextAtSize(candidate, fontSize) <= maxWidth;
-    } catch { /* ignore measurement errors */ }
-
-    if (fits) {
-      line = candidate;
-    } else {
-      if (line) lines.push(line);
-      line = word;
-    }
-  }
-  if (line) lines.push(line);
-  return lines.length ? lines : [''];
-}
-
-/**
- * Normalise a raw field object from DB / request body.
- *
- * Frontend stores x / y / width / height as PERCENTAGE of page size.
- * We keep them as pct here and convert later when we have page dimensions.
- */
-function normaliseField(raw) {
-  const f = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  return {
-    id:         String(f.id         ?? ''),
-    type:       String(f.type       ?? 'text'),
-    page:       Math.max(1, Number(f.page       ?? 1)),
-    xPct:       Number(f.x          ?? 0),   // % of page width
-    yPct:       Number(f.y          ?? 0),   // % of page height (from TOP)
-    wPct:       Number(f.width      ?? 20),  // % of page width
-    hPct:       Number(f.height     ?? 5),   // % of page height
-    partyIndex: Number(f.partyIndex ?? 0),
-    value:      String(f.value      ?? ''),
-    fontFamily: String(f.fontFamily ?? DEFAULT_FONT_KEY),
-    fontSize:   Number(f.fontSize   ?? DEFAULT_SIZE),
-    fontWeight: String(f.fontWeight ?? 'normal'),
-  };
-}
-
-// ════════════════════════════════════════════════════════════════
-// CORE — Merge signed fields into original PDF
-// ════════════════════════════════════════════════════════════════
-
-/**
- * COORDINATE SYSTEM NOTE
- * ──────────────────────
- * Browser (frontend):
- *   • Origin = TOP-LEFT corner of the page
- *   • Y increases DOWNWARD
- *   • field.y = distance from the TOP of the page to the TOP of the field
- *
- * pdf-lib:
- *   • Origin = BOTTOM-LEFT corner of the page
- *   • Y increases UPWARD
- *
- * Conversion:
- *   absY (from top)  = (yPct / 100) * PH
- *   absH             = (hPct / 100) * PH
- *   pdfBoxY          = PH - absY - absH   ← bottom-left Y in pdf-lib coords
- *
- * This places the drawn box exactly where the frontend field box is.
- */
-async function mergeSignaturesIntoPDF(fileUrl, rawFields) {
-  const buffer = await fetchPdfBuffer(fileUrl);
-  const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
-  const pages  = pdfDoc.getPages();
-
-  // ── Embed all fonts once ───────────────────────────────────────
-  const embeddedFonts = {};
-  await Promise.all(
-    Object.entries(FONT_MAP).map(async ([key, stdFont]) => {
-      try {
-        embeddedFonts[key] = await pdfDoc.embedFont(stdFont);
-      } catch { /* skip unsupported */ }
-    }),
-  );
-
-  const fields = (rawFields ?? []).map(normaliseField);
-
+  // ── STEP 1 : Embed field values ────────────────────────────────────────────
   for (const field of fields) {
-    // Skip empty / placeholder values
-    if (!field.value || field.value === '[SIGNED]') continue;
+    if (!field.value && field.value !== false) continue;
 
-    const page = pages[field.page - 1];
-    if (!page) continue;
+    const pageIndex = Math.max(0, (field.page || 1) - 1);
+    if (pageIndex >= pages.length) continue;
 
-    const { width: PW, height: PH } = page.getSize();
+    const page                    = pages[pageIndex];
+    const { width: pw, height: ph } = page.getSize();
 
-    // ── % → absolute pixels ───────────────────────────────────────
-    const absX = (field.xPct / 100) * PW;
-    const absY = (field.yPct / 100) * PH;   // distance from TOP
-    const absW = (field.wPct / 100) * PW;
-    const absH = (field.hPct / 100) * PH;
+    // Convert relative (0-1) coords → absolute PDF coords
+    // PDF origin is BOTTOM-LEFT; our frontend origin is TOP-LEFT
+    const absX = (field.x      || 0) * pw;
+    const absW = (field.width  || 0.2) * pw;
+    const absH = (field.height || 0.06) * ph;
+    // Flip Y: PDF y = pageHeight - fieldTop - fieldHeight
+    const absY = ph - ((field.y || 0) * ph) - absH;
 
-    // ── Flip Y axis ───────────────────────────────────────────────
-    // pdfBoxY = bottom-left Y of the field box in pdf-lib coordinates
-    const pdfBoxY = PH - absY - absH;
+    try {
+      switch (field.type) {
 
-    // ════════════════════════════════════════════════════════════
-    // SIGNATURE FIELD
-    // ════════════════════════════════════════════════════════════
-    if (field.type === 'signature' && field.value.startsWith('data:image')) {
-      try {
-        const imgBuf = dataUrlToBuffer(field.value);
-        const isPng  = field.value.startsWith('data:image/png');
+        // ── Signature / Initials ─────────────────────────────────────────────
+        case 'signature':
+        case 'initials': {
+          const raw = String(field.value || '');
+          if (!raw.startsWith('data:image/png;base64,')) break;
 
-        /**
-         * ✅ NO BlendMode.Multiply
-         *    BlendMode.Multiply darkens colours — causes brown/grey artefacts
-         *    on coloured PDFs and doesn't reliably remove white backgrounds.
-         *
-         * ✅ Use embedPng (preserves alpha channel natively in pdf-lib).
-         *    The signature canvas MUST be drawn with a transparent background
-         *    on the frontend (ctx.clearRect before drawing strokes).
-         *    If the canvas has a white fill, the white will appear — fix it
-         *    at the canvas level, not here.
-         *
-         * ✅ For JPEG (no alpha): drawImage with opacity:1 only.
-         */
-        const img = isPng
-          ? await pdfDoc.embedPng(imgBuf)
-          : await pdfDoc.embedJpg(imgBuf);
+          const b64      = raw.replace('data:image/png;base64,', '');
+          const imgBytes = Buffer.from(b64, 'base64');
+          const png      = await pdfDoc.embedPng(imgBytes);
+          const dims     = png.scaleToFit(absW - 4, absH - 4);
 
-        // Scale to fit field box — preserve aspect ratio
-        const { width: iW, height: iH } = img.size();
-        const scale  = Math.min(absW / iW, absH / iH);
-        const drawW  = iW * scale;
-        const drawH  = iH * scale;
-
-        // Centre image within field box
-        const drawX = absX    + (absW - drawW) / 2;
-        const drawY = pdfBoxY + (absH - drawH) / 2;
-
-        page.drawImage(img, {
-          x:       drawX,
-          y:       drawY,
-          width:   drawW,
-          height:  drawH,
-          opacity: 1,
-          // ✅ No blendMode — let pdf-lib handle PNG alpha natively
-        });
-      } catch (err) {
-        if (process.env.NODE_ENV !== 'production') {
-          console.error(`[pdfService] Signature embed error [${field.id}]:`, err.message);
-        }
-      }
-      continue; // done with this field
-    }
-
-    // ════════════════════════════════════════════════════════════
-    // TEXT FIELD
-    // ════════════════════════════════════════════════════════════
-    if (field.type === 'text' && field.value.trim()) {
-      try {
-        const font     = resolveFont(embeddedFonts, field.fontFamily, field.fontWeight);
-        const fontSize = Math.max(6, Math.min(field.fontSize, 72)); // clamp 6–72pt
-        const color    = hexToRgb('#1a202c');
-        const maxW     = Math.max(absW - TEXT_PADDING_X * 2, 10);
-
-        const lines  = wrapText(field.value.trim(), font, fontSize, maxW);
-        const lineH  = fontSize * LINE_HEIGHT_RATIO;
-        const blockH = lines.length * lineH;
-
-        /**
-         * Vertical centre baseline:
-         *   Centre of field box in pdf-lib Y = pdfBoxY + absH/2
-         *   We want the TEXT BLOCK centred, so:
-         *     top of block    = centre + blockH/2
-         *     first baseline  = top of block - (lineH * 0.75)
-         *                       (0.75 ≈ ascender ratio for standard fonts)
-         *
-         * ✅ NO background rectangle drawn before text
-         *    This ensures ZERO white/coloured box behind text
-         */
-        const firstBaselineY =
-          pdfBoxY + absH / 2 + blockH / 2 - lineH * 0.75;
-
-        lines.forEach((ln, i) => {
-          const lineY = firstBaselineY - i * lineH;
-
-          // Clamp: skip lines that fall outside field box
-          if (lineY < pdfBoxY - 2 || lineY > pdfBoxY + absH + 2) return;
-
-          // Left-align with padding — looks cleaner than centring in narrow fields
-          const lineX = absX + TEXT_PADDING_X;
-
-          page.drawText(ln, {
-            x:    lineX,
-            y:    lineY,
-            font,
-            size: fontSize,
-            color,
-            // ✅ No backgroundColor, no border — pure transparent text overlay
+          // Center image inside field box
+          page.drawImage(png, {
+            x:      absX + (absW - dims.width)  / 2,
+            y:      absY + (absH - dims.height) / 2,
+            width:  dims.width,
+            height: dims.height,
           });
-        });
-      } catch (err) {
-        if (process.env.NODE_ENV !== 'production') {
-          console.error(`[pdfService] Text embed error [${field.id}]:`, err.message);
+
+          // Underline
+          page.drawLine({
+            start:     { x: absX,        y: absY },
+            end:       { x: absX + absW, y: absY },
+            thickness: 0.8,
+            color:     rgb(0.6, 0.6, 0.6),
+          });
+          break;
         }
+
+        // ── Text ─────────────────────────────────────────────────────────────
+        case 'text': {
+          const fontSize = Math.min(13, Math.max(8, absH * 0.5));
+          let   text     = String(field.value);
+
+          // Truncate to fit width
+          while (
+            text.length > 1 &&
+            fontRegular.widthOfTextAtSize(text, fontSize) > absW - 4
+          ) text = text.slice(0, -1);
+
+          page.drawText(text, {
+            x:        absX + 2,
+            y:        absY + (absH - fontSize) / 2,
+            size:     fontSize,
+            font:     fontRegular,
+            color:    rgb(0.05, 0.05, 0.1),
+            maxWidth: absW - 4,
+          });
+          break;
+        }
+
+        // ── Date ─────────────────────────────────────────────────────────────
+        case 'date': {
+          const fontSize = Math.min(12, Math.max(8, absH * 0.45));
+          page.drawText(String(field.value), {
+            x:    absX + 2,
+            y:    absY + (absH - fontSize) / 2,
+            size: fontSize,
+            font: fontRegular,
+            color: rgb(0.1, 0.1, 0.2),
+          });
+          break;
+        }
+
+        // ── Checkbox ─────────────────────────────────────────────────────────
+        case 'checkbox': {
+          if (String(field.value) !== 'true') break;
+          const cx = absX + absW / 2;
+          const cy = absY + absH / 2;
+          const s  = Math.min(absW, absH) * 0.35;
+
+          // Draw ✓
+          page.drawLine({
+            start:     { x: cx - s,        y: cy },
+            end:       { x: cx - s * 0.2,  y: cy - s * 0.65 },
+            thickness: 2,
+            color:     rgb(0.05, 0.55, 0.2),
+          });
+          page.drawLine({
+            start:     { x: cx - s * 0.2,  y: cy - s * 0.65 },
+            end:       { x: cx + s,         y: cy + s * 0.55 },
+            thickness: 2,
+            color:     rgb(0.05, 0.55, 0.2),
+          });
+          break;
+        }
+
+        default: break;
       }
+    } catch (fieldErr) {
+      // Never let one bad field kill the whole PDF
+      console.error(`[pdfService] Field "${field.id}" embed failed:`, fieldErr.message);
     }
   }
 
-  return pdfDoc.save();
+  // ── STEP 2 : Watermark every page ─────────────────────────────────────────
+  for (const page of pages) {
+    const { width: pw, height: ph } = page.getSize();
+    page.drawText('EXECUTED', {
+      x:       pw * 0.08,
+      y:       ph * 0.48,
+      size:    72,
+      font:    fontBold,
+      color:   rgb(0.85, 0.93, 0.97),
+      opacity: 0.13,
+      rotate:  degrees(34),
+    });
+  }
+
+  // ── STEP 3 : Audit-log page ────────────────────────────────────────────────
+  _appendAuditPage(pdfDoc, fontRegular, fontBold, auditLogs, docMeta);
+
+  const finalBytes = await pdfDoc.save({ useObjectStreams: false });
+  return Buffer.from(finalBytes);
 }
 
-// ════════════════════════════════════════════════════════════════
-// AUDIT CERTIFICATE PAGE
-// ════════════════════════════════════════════════════════════════
-async function appendAuditPage(pdfBytes, doc) {
-  const pdfDoc   = await PDFDocument.load(pdfBytes);
-  const helv     = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const helvBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const mono     = await pdfDoc.embedFont(StandardFonts.Courier);
+// ─────────────────────────────────────────────────────────────────────────────
+// Internal: build audit-log page(s)
+// ─────────────────────────────────────────────────────────────────────────────
+function _appendAuditPage(pdfDoc, fontReg, fontBold, auditLogs, docMeta) {
+  const PAGE_W  = 612;
+  const PAGE_H  = 792;
+  const MARGIN  = 48;
+  const COL_W   = PAGE_W - MARGIN * 2;
 
-  const page             = pdfDoc.addPage([612, 792]); // US Letter
-  const { width: W, height: H } = page.getSize();
-  const M  = 48;
-  const M2 = M * 2;
-  let   Y  = H - M;
+  // Brand colour
+  const BRAND   = rgb(0.157, 0.671, 0.875);   // #28ABDF
+  const DARK    = rgb(0.07, 0.09, 0.14);
+  const GREY    = rgb(0.45, 0.48, 0.54);
+  const LGREY   = rgb(0.86, 0.89, 0.93);
+  const WHITE   = rgb(1, 1, 1);
+  const GREEN   = rgb(0.06, 0.55, 0.25);
+  const RED     = rgb(0.72, 0.13, 0.13);
+  const AMBER   = rgb(0.62, 0.40, 0.05);
 
-  // ── Colour palette ─────────────────────────────────────────────
-  const C = {
-    brand:   rgb(0.157, 0.671, 0.875),
-    brandDk: rgb(0.118, 0.498, 0.710),
-    dark:    rgb(0.102, 0.125, 0.173),
-    muted:   rgb(0.392, 0.455, 0.545),
-    light:   rgb(0.945, 0.961, 0.980),
-    altRow:  rgb(0.980, 0.988, 1.000),
-    green:   rgb(0.059, 0.600, 0.290),
-    amber:   rgb(0.820, 0.459, 0.043),
-    border:  rgb(0.867, 0.894, 0.929),
-    white:   rgb(1.000, 1.000, 1.000),
-    bgCC:    rgb(0.965, 0.980, 1.000),
-    bgDisc:  rgb(0.941, 0.961, 0.996),
-  };
+  const actionColor = (action) => ({
+    signed:    GREEN,
+    completed: GREEN,
+    sent:      BRAND,
+    opened:    rgb(0.28, 0.42, 0.72),
+    created:   GREY,
+    cancelled: RED,
+    expired:   AMBER,
+    draft_saved: GREY,
+  }[action] || GREY);
 
-  // ── Drawing utils ──────────────────────────────────────────────
-  const rect = (x, y, w, h, color) =>
-    page.drawRectangle({ x, y, width: w, height: h, color });
+  let page    = pdfDoc.addPage([PAGE_W, PAGE_H]);
+  let cursorY = PAGE_H;
 
-  const drawLine = (x1, y1, x2, y2, color = C.border, thickness = 0.5) =>
-    page.drawLine({ start: { x: x1, y: y1 }, end: { x: x2, y: y2 }, thickness, color });
-
-  const hLine = (y, color = C.border, thickness = 0.5) =>
-    drawLine(M, y, W - M, y, color, thickness);
-
-  const txt = (s, x, y, {
-    font = helv, size = 9, color = C.dark, maxWidth = undefined,
-  } = {}) => {
-    if (s == null || String(s).trim() === '') return;
-    const opts = { x, y, font, size, color };
-    if (maxWidth !== undefined) opts.maxWidth = maxWidth;
-    page.drawText(String(s), opts);
-  };
-
-  // ════════════════════════════════════════════════════════════════
-  // HEADER
-  // ════════════════════════════════════════════════════════════════
-  rect(0, H - 80, W, 80, C.brand);
-  rect(0, H - 80, W,  4, C.brandDk);
-
-  txt('ELECTRONIC SIGNATURE CERTIFICATE', M, H - 30, {
-    font: helvBold, size: 16, color: C.white,
+  // ── Header band ────────────────────────────────────────────────────────────
+  page.drawRectangle({ x: 0, y: PAGE_H - 80, width: PAGE_W, height: 80, color: BRAND });
+  page.drawText('Certificate of Completion', {
+    x: MARGIN, y: PAGE_H - 34,
+    size: 20, font: fontBold, color: WHITE,
   });
-  txt('Legal Audit Trail  ·  Powered by NeXsign', M, H - 48, {
-    size: 8.5, color: rgb(0.80, 0.93, 1.00),
-  });
-  txt(`Generated: ${new Date().toUTCString()}`, M, H - 63, {
-    font: mono, size: 7, color: rgb(0.75, 0.90, 1.00),
+  page.drawText('Electronic Signature Audit Trail  •  SignFlow', {
+    x: MARGIN, y: PAGE_H - 56,
+    size: 10, font: fontReg, color: rgb(0.88, 0.96, 1),
   });
 
-  // Check badge (top-right)
-  rect(W - 90, H - 66, 42, 42, rgb(0.118, 0.498, 0.710));
-  txt('✓', W - 76, H - 38, { font: helvBold, size: 22, color: C.white });
+  cursorY = PAGE_H - 100;
 
-  Y = H - 100;
+  // ── Document metadata box ──────────────────────────────────────────────────
+  const metaRows = [
+    ['Document',    docMeta.title       || 'N/A'],
+    ['Document ID', String(docMeta.documentId || '')],
+    ['Completed',   docMeta.completedAt
+      ? new Date(docMeta.completedAt).toUTCString()
+      : new Date().toUTCString()],
+    ['Signers',     String(auditLogs.filter(l => l.action === 'signed').length)],
+  ];
 
-  // ════════════════════════════════════════════════════════════════
-  // DOCUMENT INFO CARD
-  // ════════════════════════════════════════════════════════════════
-  const cardH = 76;
-  rect(M,     Y - cardH, W - M2, cardH, C.light);
-  rect(M,     Y - cardH, 4,      cardH, C.brand);
-  rect(M + 4, Y - cardH, W - M2 - 4, 0.5, C.border);
-
-  txt('DOCUMENT DETAILS', M + 14, Y - 14, {
-    font: helvBold, size: 7.5, color: C.muted,
-  });
-  txt(doc.title || 'Untitled Document', M + 14, Y - 30, {
-    font: helvBold, size: 13, color: C.dark, maxWidth: W - M2 - 110,
-  });
-
-  const metaParts = [
-    `ID: ${doc._id}`,
-    `Status: ${(doc.status || '').toUpperCase()}`,
-    doc.companyName ? `Company: ${doc.companyName}` : null,
-  ].filter(Boolean).join('   ·   ');
-
-  txt(metaParts, M + 14, Y - 46, {
-    size: 7.5, color: C.muted, maxWidth: W - M2 - 24,
-  });
-  txt(
-    `Created: ${doc.createdAt ? new Date(doc.createdAt).toUTCString() : 'N/A'}`,
-    M + 14, Y - 60,
-    { size: 7.5, color: C.muted },
-  );
-
-  rect(W - M - 98, Y - 36, 96, 22, C.green);
-  txt('✓  COMPLETED', W - M - 90, Y - 25, {
-    font: helvBold, size: 9, color: C.white,
+  const BOX_H = metaRows.length * 18 + 16;
+  page.drawRectangle({
+    x: MARGIN, y: cursorY - BOX_H,
+    width: COL_W, height: BOX_H,
+    color:       rgb(0.96, 0.98, 1),
+    borderColor: LGREY,
+    borderWidth: 0.8,
   });
 
-  Y -= cardH + 18;
-
-  // ════════════════════════════════════════════════════════════════
-  // SIGNING PARTIES
-  // ════════════════════════════════════════════════════════════════
-  txt('SIGNING PARTIES', M, Y, { font: helvBold, size: 8.5, color: C.muted });
-  hLine(Y - 8, C.brand, 1.5);
-  Y -= 22;
-
-  const parties = doc.parties || [];
-
-  for (let i = 0; i < parties.length; i++) {
-    const p      = parties[i];
-    const signed = p.status === 'signed' || !!p.signedAt;
-    const rowH   = signed ? 98 : 40;  // 5 detail rows × ~13px + header
-
-    if (Y - rowH < M + 90) break; // overflow guard
-
-    rect(M, Y - rowH, W - M2, rowH, i % 2 === 0 ? C.light : C.altRow);
-    rect(M, Y - rowH, 3,      rowH, signed ? C.green : C.amber);
-
-    // Index badge
-    rect(M + 8, Y - 24, 20, 20, signed ? C.green : C.amber);
-    txt(String(i + 1), M + (i + 1 < 10 ? 13 : 10), Y - 16, {
-      font: helvBold, size: 9, color: C.white,
+  let metaY = cursorY - 14;
+  for (const [label, value] of metaRows) {
+    const lw = fontBold.widthOfTextAtSize(`${label}: `, 9);
+    page.drawText(`${label}: `, { x: MARGIN + 10, y: metaY, size: 9, font: fontBold, color: GREY });
+    page.drawText(value, {
+      x: MARGIN + 10 + lw, y: metaY,
+      size: 9, font: fontReg, color: DARK,
+      maxWidth: COL_W - 20 - lw,
     });
-
-    // Name + email + designation
-    txt(p.name || 'Unknown', M + 36, Y - 12, {
-      font: helvBold, size: 11, color: C.dark,
-    });
-    const subLabel = [p.email, p.designation].filter(Boolean).join('  ·  ');
-    txt(subLabel, M + 36, Y - 26, { size: 7.5, color: C.muted });
-
-    // Status badge
-    rect(W - M - 82, Y - 22, 80, 18, signed ? C.green : C.amber);
-    txt(signed ? '✓  SIGNED' : '⏳  PENDING', W - M - 76, Y - 14, {
-      font: helvBold, size: 7.5, color: C.white,
-    });
-
-    // Detail rows (signed only)
-    if (signed) {
-      hLine(Y - 32, C.border, 0.4);
-
-      const details = [
-        { label: 'Signed At (UTC)', value: p.signedAt ? new Date(p.signedAt).toUTCString() : 'N/A' },
-        { label: 'Local Time',      value: p.clientTime || 'N/A' },
-        { label: 'IP Address',      value: p.ip          || 'N/A' },
-        {
-          label: 'Location',
-          value: [p.address || p.location, p.postalCode].filter(Boolean).join(', ') || 'N/A',
-        },
-        {
-          label: 'Device',
-          value: p.userAgent ? p.userAgent.substring(0, 78) : 'N/A',
-        },
-      ];
-
-      let dY = Y - 44;
-      for (const d of details) {
-        if (dY < Y - rowH + 4) break;
-        txt(`${d.label}:`, M + 14, dY, { font: helvBold, size: 6.5, color: C.muted });
-        txt(String(d.value), M + 112, dY, {
-          font: mono, size: 6.5, color: C.dark, maxWidth: W - M2 - 122,
-        });
-        dY -= 13;
-      }
-    }
-
-    Y -= rowH + 6;
+    metaY -= 18;
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // CC RECIPIENTS
-  // ════════════════════════════════════════════════════════════════
-  const cc = doc.ccList || [];
-  if (cc.length > 0 && Y > M + 110) {
-    Y -= 10;
-    txt('CC RECIPIENTS', M, Y, { font: helvBold, size: 8.5, color: C.muted });
-    hLine(Y - 8);
-    Y -= 20;
+  cursorY -= BOX_H + 20;
 
-    for (const r of cc) {
-      if (Y < M + 82) break;
-      rect(M, Y - 18, W - M2, 20, C.bgCC);
-      rect(M, Y - 18, 3,      20, C.brand);
+  // ── Section title ──────────────────────────────────────────────────────────
+  page.drawText('AUDIT TRAIL', {
+    x: MARGIN, y: cursorY,
+    size: 10, font: fontBold, color: BRAND,
+  });
+  cursorY -= 8;
+  page.drawLine({
+    start: { x: MARGIN, y: cursorY }, end: { x: MARGIN + COL_W, y: cursorY },
+    thickness: 1.5, color: BRAND,
+  });
+  cursorY -= 16;
 
-      const ccLabel = [
-        r.name        || '',
-        r.email       ? `<${r.email}>` : '',
-        r.designation ? `[${r.designation}]` : '',
-      ].filter(Boolean).join('   ');
+  // ── Log rows ───────────────────────────────────────────────────────────────
+  const ROW_MIN_H = 52; // minimum height per log row
 
-      txt(ccLabel, M + 12, Y - 7, { size: 8, color: C.dark });
-      Y -= 24;
+  for (const log of auditLogs) {
+    // Start new page if needed
+    if (cursorY < MARGIN + ROW_MIN_H + 30) {
+      // Footer on current page
+      _drawFooter(page, fontReg, PAGE_W, MARGIN);
+      page    = pdfDoc.addPage([PAGE_W, PAGE_H]);
+      cursorY = PAGE_H - MARGIN;
+      page.drawText('Audit Trail (continued)', {
+        x: MARGIN, y: cursorY,
+        size: 11, font: fontBold, color: BRAND,
+      });
+      cursorY -= 20;
     }
+
+    const color     = actionColor(log.action);
+    const action    = (log.action || '').toUpperCase();
+    const ts        = log.timestamp ? new Date(log.timestamp).toUTCString() : '';
+    const actor     = log.performed_by?.email || log.performed_by?.name || 'System';
+    const details   = log.details   || '';
+    const ip        = log.ip_address ? `IP: ${log.ip_address}` : '';
+    const loc       = log.location  ? `  •  ${log.location}` : '';
+
+    const BADGE_W = 66;
+    const BADGE_H = 14;
+    const ROW_TOP = cursorY;
+
+    // Action badge
+    page.drawRectangle({
+      x: MARGIN, y: ROW_TOP - BADGE_H - 2,
+      width: BADGE_W, height: BADGE_H,
+      color, borderRadius: 2,
+    });
+    page.drawText(action, {
+      x: MARGIN + 4, y: ROW_TOP - BADGE_H + 2,
+      size: 7, font: fontBold, color: WHITE,
+      maxWidth: BADGE_W - 6,
+    });
+
+    // Timestamp (right-aligned)
+    const tsW = fontReg.widthOfTextAtSize(ts, 8);
+    page.drawText(ts, {
+      x: MARGIN + COL_W - tsW, y: ROW_TOP,
+      size: 8, font: fontReg, color: GREY,
+    });
+
+    // Actor
+    page.drawText(actor, {
+      x: MARGIN + BADGE_W + 8, y: ROW_TOP,
+      size: 9, font: fontBold, color: DARK,
+      maxWidth: COL_W - BADGE_W - 8 - tsW - 4,
+    });
+
+    let lineY = ROW_TOP - 14;
+
+    // Details
+    if (details) {
+      page.drawText(details, {
+        x: MARGIN + BADGE_W + 8, y: lineY,
+        size: 8, font: fontReg, color: GREY,
+        maxWidth: COL_W - BADGE_W - 8,
+      });
+      lineY -= 12;
+    }
+
+    // IP + Location
+    if (ip || loc) {
+      page.drawText(`${ip}${loc}`, {
+        x: MARGIN + BADGE_W + 8, y: lineY,
+        size: 7.5, font: fontReg, color: rgb(0.6, 0.62, 0.67),
+        maxWidth: COL_W - BADGE_W - 8,
+      });
+      lineY -= 12;
+    }
+
+    cursorY = lineY - 4;
+
+    // Separator line
+    page.drawLine({
+      start: { x: MARGIN, y: cursorY },
+      end:   { x: MARGIN + COL_W, y: cursorY },
+      thickness: 0.25, color: LGREY,
+    });
+    cursorY -= 8;
   }
 
-  // ════════════════════════════════════════════════════════════════
-  // LEGAL DISCLAIMER — anchored above footer
-  // ════════════════════════════════════════════════════════════════
-  const discY = M + 52;
-  rect(M, discY - 10, W - M2, 52, C.bgDisc);
-  rect(M, discY - 10, 3,      52, C.brand);
-
-  txt('LEGAL VALIDITY', M + 14, discY + 30, {
-    font: helvBold, size: 8, color: C.brand,
-  });
-  txt(
-    'This certificate is an electronically generated legal record of all signature events.',
-    M + 14, discY + 16,
-    { size: 7.5, color: C.muted, maxWidth: W - M2 - 20 },
-  );
-  txt(
-    'All events are timestamped and legally binding under ESIGN, eIDAS, and applicable e-signature laws.',
-    M + 14, discY + 4,
-    { size: 7.5, color: C.muted, maxWidth: W - M2 - 20 },
-  );
-
-  // ════════════════════════════════════════════════════════════════
-  // FOOTER
-  // ════════════════════════════════════════════════════════════════
-  rect(0, 0,  W, 38, C.brand);
-  rect(0, 36, W,  2, C.brandDk);
-
-  txt('NeXsign  ·  Electronic Signature Platform  ·  nexsign.app', M, 23, {
-    size: 8, color: C.white,
-  });
-  txt(`Certificate ID: ${doc._id}`, M, 10, {
-    font: mono, size: 6.5, color: rgb(0.80, 0.93, 1.00),
-  });
-  txt('Confidential & Legally Binding', W - 206, 17, {
-    font: helvBold, size: 7.5, color: C.white,
-  });
-
-  return pdfDoc.save();
+  _drawFooter(page, fontReg, PAGE_W, MARGIN);
 }
 
-module.exports = { mergeSignaturesIntoPDF, appendAuditPage };
+function _drawFooter(page, fontReg, pageW, margin) {
+  const txt = `Generated by SignFlow  •  ${new Date().toUTCString()}  •  This certificate is tamper-evident.`;
+  const tw  = fontReg.widthOfTextAtSize(txt, 7);
+  page.drawText(txt, {
+    x:    (pageW - tw) / 2,
+    y:    margin - 24,
+    size: 7,
+    font: fontReg,
+    color: rgb(0.62, 0.65, 0.70),
+  });
+}
+
+module.exports = { embedSignaturesAndAuditLog };
