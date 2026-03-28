@@ -529,199 +529,132 @@
 // next();
 // });
 // module.exports = mongoose.model('Document', documentSchema);wrokable
+/**
+ * Document.js — NeXsign Enterprise
+ * Added: usageCount, 'processing' status (for in-flight PDF generation),
+ * full signer forensics, brandConfig, signingMode, ccRecipients
+ */
 const mongoose = require('mongoose');
 
-// ── Field sub-schema ─────────────────────────────────────────────
-const fieldSchema = new mongoose.Schema({
-  id:         { type: String, required: true },
-  type:       { type: String, enum: ['signature', 'text'], required: true },
-  page:       { type: Number, required: true },
-  x:          { type: Number, required: true },
-  y:          { type: Number, required: true },
-  width:      { type: Number, default: 200 },
-  height:     { type: Number, default: 60 },
-  partyIndex: { type: Number, default: 0 },
-  value:      { type: String, default: '' },
-
-  // ── Typography ──────────────────────────────────────────────────
-  // pdf-lib supported fonts only
-  fontFamily: {
-    type: String,
-    enum: [
-      'Helvetica',
-      'Helvetica-Bold',
-      'TimesRoman',
-      'TimesRoman-Bold',
-      'Courier',
-      'Courier-Bold',
-    ],
-    default: 'Helvetica',
-  },
-  fontSize:   { type: Number, default: 14, min: 8, max: 72 },
-  fontWeight: { type: String, enum: ['normal', 'bold'], default: 'normal' },
-
-  // ── Signature image (base64 PNG stored after signing) ──────────
-  signatureData: { type: String, default: '' },
-  signedAt:      { type: Date },
-  signedBy:      { type: String, default: '' }, // party email
-
-  isParty1Field: { type: Boolean, default: false },
-}, { _id: false });
-
-// ── Party sub-schema ─────────────────────────────────────────────
 const partySchema = new mongoose.Schema({
   name:        { type: String, required: true, trim: true },
   email:       { type: String, required: true, lowercase: true, trim: true },
-  designation: { type: String, default: '' }, // ✅ Added
-  color:       { type: String, default: '#0ea5e9' },
-  status:      {
-    type: String,
-    enum: ['pending', 'sent', 'viewed', 'signed', 'declined'],
-    default: 'pending',
-  },
-  token:    { type: String, sparse: true },
-  signedAt: { type: Date },
-
-  // ── Audit metadata ──────────────────────────────────────────────
-  ip:           { type: String, default: '' },
-  postalCode:   { type: String, default: '' },
-  address:      { type: String, default: '' },
-  clientTime:   { type: String, default: '' },
-  userAgent:    { type: String, default: '' },
-  location:     { type: String, default: '' },
-
-  // ── Monitoring ──────────────────────────────────────────────────
-  emailSentAt:   { type: Date },
-  linkOpenedAt:  { type: Date },
-  linkOpenCount: { type: Number, default: 0 },
+  status:      { type: String, enum: ['pending','sent','signed','completed'], default: 'pending' },
+  token:       { type: String, sparse: true },
+  signedAt:    { type: Date },
+  // Forensic data
+  ipAddress:       { type: String, default: '' },
+  location:        { type: String, default: '' },
+  postalCode:      { type: String, default: '' },
+  timeZone:        { type: String, default: '' },
+  device:          { type: String, default: '' },
+  // Link open tracking
+  emailSentAt:     { type: Date },
+  linkOpenedAt:    { type: Date },
+  lastLinkOpenedAt:{ type: Date },
+  linkOpenCount:   { type: Number, default: 0 },
+  openedIpAddress: { type: String, default: '' },
+  openedUserAgent: { type: String, default: '' },
+  openedLocation:  { type: String, default: '' },
+  // Signed-specific fields (separate from opened)
+  signedIpAddress:  { type: String, default: '' },
+  signedLocation:   { type: String, default: '' },
+  signedPostalCode: { type: String, default: '' },
 }, { _id: false });
 
-// ── CC sub-schema ────────────────────────────────────────────────
-const ccSchema = new mongoose.Schema({
-  name:        { type: String, default: '', trim: true },
-  email:       { type: String, required: true, lowercase: true, trim: true },
-  designation: { type: String, default: '' },
-}, { _id: false });
-
-// ── Audit Log sub-schema ✅ New ──────────────────────────────────
-const auditLogSchema = new mongoose.Schema({
-  event:      { type: String, required: true },
-  // e.g. 'document_created', 'invite_sent', 'document_viewed',
-  //      'document_signed', 'document_completed', 'document_declined'
-  actorName:  { type: String, default: '' },
-  actorEmail: { type: String, default: '' },
-  timestamp:  { type: Date, default: Date.now },
-  ip:         { type: String, default: '' },
-  userAgent:  { type: String, default: '' },
-  details:    { type: String, default: '' }, // extra context
-}, { _id: false });
-
-// ── Main Document Schema ─────────────────────────────────────────
 const documentSchema = new mongoose.Schema({
-  owner: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
-    index: true,
-  },
+  title:      { type: String, required: true, trim: true, maxlength: 200 },
+  fileUrl:    { type: String, required: true },
+  fileId:     { type: String, required: true },
+  isTemplate: { type: Boolean, default: false },
+  usageCount: { type: Number, default: 0 },
 
-  // ── Branding ─────────────────────────────────────────────────
-  title:       { type: String, required: true, trim: true },
-  companyLogo: { type: String, default: '' },
-  companyName: { type: String, default: '' },
-  message:     { type: String, default: '' }, // ✅ optional sender message
-
-  // ── Storage ──────────────────────────────────────────────────
-  fileUrl:       { type: String, required: true },   // original PDF
-  fileId:        { type: String, default: '' },       // Cloudinary public_id
-  signedFileUrl: { type: String, default: '' },       // final signed PDF with audit
-
-  // ── Workflow ─────────────────────────────────────────────────
-  status: {
-    type: String,
-    enum: ['draft', 'in_progress', 'completed', 'cancelled', 'declined'],
-    default: 'draft',
-    index: true,
-  },
-  workflowType: {
-    type: String,
-    enum: ['sequential', 'template_instance'],
+  signingMode: {
+    type:    String,
+    enum:    ['sequential', 'parallel'],
     default: 'sequential',
   },
 
-  parties:  { type: [partySchema],     default: [] },
-  ccList:   { type: [ccSchema],        default: [] },
-  fields:   { type: [fieldSchema],     default: [] },
-  auditLog: { type: [auditLogSchema],  default: [] }, // ✅ Added
-
-  totalPages:    { type: Number, default: 1 },
-  signedParties: { type: Number, default: 0 },
-  totalParties:  { type: Number, default: 0 },
-  completedAt:   { type: Date },                      // ✅ Added
-
-  // ── Template system ──────────────────────────────────────────
-  isTemplate:          { type: Boolean, default: false, index: true },
-  templateName:        { type: String, default: '' },
-  isParty1Signed:      { type: Boolean, default: false },
-  party1SignedPdfUrl:  { type: String, default: '' },
-
-  // ── Template instance tracking ───────────────────────────────
-  sourceTemplateId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Document',
-    default: null,
-    index: true,
+  brandConfig: {
+    name:         { type: String, default: '' },
+    color:        { type: String, default: '#28ABDF' },
+    senderName:   { type: String },
+    emailSubject: { type: String },
+    logoUrl:      { type: String },   // Cloudinary URL for emails
+    logoData:     { type: String },   // base64 for PDF stamping
+    logoPosition: {
+      x:       { type: Number, default: 2 },
+      y:       { type: Number, default: 2 },
+      width:   { type: Number, default: 15 },
+      height:  { type: Number, default: 8 },
+      opacity: { type: Number, default: 0.85 },
+    },
   },
-  usageCount: { type: Number, default: 0 },
 
-}, {
-  timestamps: true,
-  toJSON:   { virtuals: true },
-  toObject: { virtuals: true },
-});
+  ccEmails:     [{ type: String, lowercase: true, trim: true }],
+  ccRecipients: [{
+    type:        { type: String, enum: ['cc','hr'], default: 'cc' },
+    name:        { type: String, trim: true, default: '' },
+    email:       { type: String, lowercase: true, trim: true, required: true },
+    designation: { type: String, trim: true, default: '' },
+  }],
 
-// ── Virtuals ─────────────────────────────────────────────────────
-documentSchema.virtual('isFullySigned').get(function () {
-  return (
-    this.parties.length > 0 &&
-    this.parties.every((p) => p.status === 'signed')
-  );
-});
+  parties:           { type: [partySchema], default: [] },
+  fields:            { type: [mongoose.Schema.Types.Mixed], default: [] },
+  totalPages:        { type: Number, default: 1 },
+  currentPartyIndex: { type: Number, default: 0 },
 
-// ── Pre-save ──────────────────────────────────────────────────────
-documentSchema.pre('save', function (next) {
-  // Parse any stringified fields
+  status: {
+    type:    String,
+    // 'processing' = PDF is being built (Vercel-safe intermediate state)
+    enum:    ['draft', 'in_progress', 'processing', 'completed', 'cancelled'],
+    default: 'draft',
+  },
+
+  owner:      { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  senderMeta: { type: mongoose.Schema.Types.Mixed, default: null },
+
+  auditTrail: {
+    events: [{
+      eventType:  { type: String },
+      actorRole:  { type: String, enum: ['owner','signer','system','cc'], default: 'system' },
+      actorName:  { type: String, default: '' },
+      actorEmail: { type: String, default: '' },
+      partyIndex: { type: Number },
+      ipAddress:  { type: String, default: '' },
+      timeZone:   { type: String, default: '' },
+      occurredAt: { type: Date, default: Date.now },
+      meta:       { type: mongoose.Schema.Types.Mixed, default: null },
+    }],
+  },
+}, { timestamps: true });
+
+// ── Indexes ────────────────────────────────────────────────────────────────
+documentSchema.index({ owner: 1, createdAt: -1 });
+documentSchema.index({ 'parties.email': 1, createdAt: -1 });
+documentSchema.index({ 'parties.token': 1 }, { sparse: true });
+documentSchema.index({ owner: 1, isTemplate: 1 });
+documentSchema.index({ status: 1, createdAt: -1 });
+documentSchema.index({ isTemplate: 1, updatedAt: -1 });
+
+// ── Normalize fields + sync ccEmails on save ───────────────────────────────
+documentSchema.pre('save', function(next) {
   if (Array.isArray(this.fields)) {
-    this.fields = this.fields.map((f) =>
-      typeof f === 'string' ? JSON.parse(f) : f
-    );
+    this.fields = this.fields.map(f => {
+      if (typeof f !== 'string') return f;
+      try { return JSON.parse(f); } catch { return f; }
+    });
   }
-
-  // Sync counters
-  this.totalParties  = this.parties.length;
-  this.signedParties = this.parties.filter((p) => p.status === 'signed').length;
-
-  // Auto-complete when all parties signed
-  if (
-    this.parties.length > 0 &&
-    this.parties.every((p) => p.status === 'signed') &&
-    this.status === 'in_progress'
-  ) {
-    this.status      = 'completed';
-    this.completedAt = new Date(); // ✅ track completion time
+  // Sync ccRecipients → ccEmails for backward compat
+  if (Array.isArray(this.ccRecipients) && this.ccRecipients.length) {
+    const fromRecipients = this.ccRecipients
+      .map(r => (r?.email ? String(r.email).toLowerCase().trim() : ''))
+      .filter(Boolean);
+    if (fromRecipients.length) {
+      this.ccEmails = [...new Set([...(this.ccEmails || []), ...fromRecipients])];
+    }
   }
-
   next();
 });
-
-// ── Indexes ───────────────────────────────────────────────────────
-documentSchema.index({ owner: 1, isTemplate: 1 });
-documentSchema.index({ owner: 1, status: 1 });
-documentSchema.index({ 'parties.token': 1 });
-documentSchema.index({ 'parties.email': 1 });
-documentSchema.index({ sourceTemplateId: 1, createdAt: -1 });
-documentSchema.index({ isTemplate: 1, updatedAt: -1 });
-documentSchema.index({ owner: 1, isTemplate: 1, updatedAt: -1 });
-documentSchema.index({ owner: 1, title: 'text' });
 
 module.exports = mongoose.model('Document', documentSchema);
