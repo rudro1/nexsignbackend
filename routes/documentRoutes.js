@@ -3315,15 +3315,1080 @@
 // });
 
 // module.exports = router;
-const express   = require('express');
-const router    = express.Router();
-const multer    = require('multer');
-const crypto    = require('crypto');
-// ✅ node-fetch REMOVE করা হয়েছে — Node.js 18+ এ built-in fetch আছে
+// const express   = require('express');
+// const router    = express.Router();
+// const multer    = require('multer');
+// const crypto    = require('crypto');
+// // ✅ node-fetch REMOVE করা হয়েছে — Node.js 18+ এ built-in fetch আছে
+// const { v2: cloudinary } = require('cloudinary');
+// const Document  = require('../models/Document');
+// const AuditLog  = require('../models/AuditLog');
+// const auth      = require('../middleware/auth');
+// const {
+//   mergeSignaturesIntoPDF,
+//   appendAuditPage,
+// } = require('../utils/pdfService');
+// const {
+//   sendSigningEmail,
+//   sendCompletionEmail,
+//   sendCCEmail,
+// } = require('../utils/emailService');
+
+// // ── Config ───────────────────────────────────────────────────────
+// cloudinary.config({
+//   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+//   api_key:    process.env.CLOUDINARY_API_KEY,
+//   api_secret: process.env.CLOUDINARY_API_SECRET,
+// });
+
+// const upload = multer({
+//   storage:    multer.memoryStorage(),
+//   limits:     { fileSize: 20 * 1024 * 1024 },
+//   fileFilter: (_, file, cb) =>
+//     cb(null, file.mimetype === 'application/pdf'),
+// });
+
+// const logoUpload = multer({
+//   storage:    multer.memoryStorage(),
+//   limits:     { fileSize: 5 * 1024 * 1024 },
+//   fileFilter: (_, file, cb) =>
+//     cb(null, file.mimetype.startsWith('image/')),
+// });
+
+// // ── Helpers ──────────────────────────────────────────────────────
+// const genToken = () => crypto.randomBytes(32).toString('hex');
+
+// const uploadToCloudinary = (buffer, options) =>
+//   new Promise((resolve, reject) => {
+//     const stream = cloudinary.uploader.upload_stream(
+//       options,
+//       (err, res) => err ? reject(err) : resolve(res)
+//     );
+//     stream.end(buffer);
+//   });
+
+// const logEvent = async (docId, action, performer, extras = {}) => {
+//   try {
+//     await AuditLog.create({
+//       document_id:  docId,
+//       action,
+//       performed_by: performer,
+//       timestamp:    new Date(),
+//       ...extras,
+//     });
+//   } catch (e) {
+//     console.error('AuditLog error:', e.message);
+//   }
+// };
+
+// const FRONT = () =>
+//   (process.env.FRONTEND_URL || 'https://nexsignfrontend.vercel.app')
+//     .replace(/\/$/, '');
+
+// // ════════════════════════════════════════════════════════════════
+// // PROXY — must be FIRST before any /:id routes
+// // ════════════════════════════════════════════════════════════════
+// router.get('/proxy/:path(*)', async (req, res) => {
+//   try {
+//     const cloudPath = req.params.path
+//       .replace(/~~/g, '/')
+//       .split('?')[0];
+
+//     const url =
+//       `https://res.cloudinary.com/` +
+//       `${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${cloudPath}`;
+
+//     // ✅ Built-in fetch use করা হচ্ছে (Node.js 18+)
+//     const response = await fetch(url, {
+//       signal: AbortSignal.timeout(30000), // ✅ timeout এর নতুন way
+//     });
+
+//     if (!response.ok) return res.status(404).send('Not found');
+
+//     res.setHeader('Content-Type', 'application/pdf');
+//     res.setHeader('Cache-Control', 'public, max-age=3600');
+//     res.setHeader('Access-Control-Allow-Origin', '*');
+
+//     // ✅ Built-in fetch এ .body একটা ReadableStream
+//     // Node.js এ pipe করার জন্য এইভাবে করতে হবে
+//     const { Readable } = require('stream');
+//     const nodeStream = Readable.fromWeb(response.body);
+//     nodeStream.pipe(res);
+
+//   } catch (err) {
+//     console.error('Proxy error:', err.message);
+//     res.status(500).send('Proxy error');
+//   }
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // LOGO UPLOAD
+// // ════════════════════════════════════════════════════════════════
+// router.post('/upload-logo',
+//   auth,
+//   logoUpload.single('logo'),
+//   async (req, res) => {
+//     try {
+//       if (!req.file)
+//         return res.status(400).json({
+//           success: false, message: 'No image provided.',
+//         });
+
+//       const result = await uploadToCloudinary(req.file.buffer, {
+//         folder:        'nexsign_logos',
+//         resource_type: 'image',
+//         transformation: [{
+//           width: 400, height: 200,
+//           crop: 'limit', quality: 'auto',
+//         }],
+//       });
+
+//       res.json({ success: true, logoUrl: result.secure_url });
+//     } catch (err) {
+//       res.status(500).json({ success: false, message: err.message });
+//     }
+//   }
+// );
+
+// // ════════════════════════════════════════════════════════════════
+// // UPLOAD & SEND (Normal Sequential)
+// // ════════════════════════════════════════════════════════════════
+// router.post('/upload-and-send',
+//   auth,
+//   upload.single('file'),
+//   async (req, res) => {
+//     try {
+//       const {
+//         title, parties: partiesRaw,
+//         ccRecipients: ccRaw,
+//         fields: fieldsRaw, totalPages,
+//         companyLogo, companyName,
+//       } = req.body;
+
+//       if (!req.file && !req.body.fileUrl)
+//         return res.status(400).json({
+//           success: false, message: 'No PDF provided.',
+//         });
+
+//       let fileUrl, fileId;
+//       if (req.file) {
+//         const up = await uploadToCloudinary(req.file.buffer, {
+//           resource_type: 'raw',
+//           folder:        'nexsign_docs',
+//         });
+//         fileUrl = up.secure_url;
+//         fileId  = up.public_id;
+//       } else {
+//         fileUrl = req.body.fileUrl;
+//         fileId  = '';
+//       }
+
+//       const parties = JSON.parse(partiesRaw || '[]');
+//       const ccList  = JSON.parse(ccRaw      || '[]');
+//       const fields  = JSON.parse(fieldsRaw  || '[]');
+
+//       const COLORS = [
+//         '#0ea5e9','#8b5cf6','#f59e0b','#10b981',
+//       ];
+
+//       const partiesWithTokens = parties.map((p, i) => ({
+//         ...p,
+//         status: 'pending',
+//         token:  genToken(),
+//         color:  p.color || COLORS[i % COLORS.length],
+//       }));
+
+//       const doc = await Document.create({
+//         owner:        req.user.id,
+//         title:        title || 'Untitled',
+//         companyLogo:  companyLogo || '',
+//         companyName:  companyName || '',
+//         fileUrl,
+//         fileId:       fileId || '',
+//         parties:      partiesWithTokens,
+//         ccList,
+//         fields,
+//         totalPages:   Number(totalPages) || 1,
+//         status:       'in_progress',
+//         workflowType: 'sequential',
+//       });
+
+//       res.json({ success: true, documentId: doc._id });
+
+//       setImmediate(async () => {
+//         try {
+//           const first = doc.parties[0];
+//           if (first) {
+//             const link = `${FRONT()}/sign/${first.token}`;
+//             await sendSigningEmail({
+//               recipientEmail: first.email,
+//               recipientName:  first.name,
+//               senderName:     req.user.full_name,
+//               documentTitle:  doc.title,
+//               signingLink:    link,
+//               companyLogoUrl: doc.companyLogo,
+//               companyName:    doc.companyName,
+//               partyNumber:    1,
+//               totalParties:   doc.parties.length,
+//             });
+//             doc.parties[0].status      = 'sent';
+//             doc.parties[0].emailSentAt = new Date();
+//             await doc.save();
+//           }
+
+//           for (const cc of doc.ccList) {
+//             await sendCCEmail({
+//               recipientEmail: cc.email,
+//               recipientName:  cc.name || '',
+//               documentTitle:  doc.title,
+//               senderName:     req.user.full_name,
+//               companyLogoUrl: doc.companyLogo,
+//               companyName:    doc.companyName,
+//             }).catch(e =>
+//               console.error('CC email error:', e.message)
+//             );
+//           }
+
+//           const exists = await Document.findOne({
+//             owner:        doc.owner,
+//             isTemplate:   true,
+//             templateName: doc.title,
+//           });
+//           if (!exists) {
+//             await Document.create({
+//               owner:        doc.owner,
+//               title:        doc.title,
+//               templateName: doc.title,
+//               companyLogo:  doc.companyLogo,
+//               companyName:  doc.companyName,
+//               fileUrl:      doc.fileUrl,
+//               fileId:       doc.fileId,
+//               fields:       doc.fields,
+//               parties:      doc.parties.map(p => ({
+//                 name:  p.name,
+//                 email: p.email,
+//                 color: p.color,
+//               })),
+//               ccList:       doc.ccList,
+//               isTemplate:   true,
+//               status:       'draft',
+//               workflowType: 'sequential',
+//             });
+//           }
+
+//           await logEvent(doc._id, 'sent', {
+//             name:  req.user.full_name,
+//             email: req.user.email,
+//             role:  'owner',
+//           });
+//         } catch (bgErr) {
+//           console.error('Background send error:', bgErr.message);
+//         }
+//       });
+//     } catch (err) {
+//       console.error('upload-and-send error:', err);
+//       res.status(500).json({ success: false, message: err.message });
+//     }
+//   }
+// );
+
+// // ════════════════════════════════════════════════════════════════
+// // SIGN SUBMIT — must be BEFORE /sign/:token
+// // ════════════════════════════════════════════════════════════════
+// router.post('/sign/submit', async (req, res) => {
+//   try {
+//     const {
+//       token,
+//       fields: signedFields = [],
+//       locationData,
+//       clientTime,
+//     } = req.body;
+
+//     if (!token)
+//       return res.status(400).json({ error: 'Token required.' });
+
+//     const doc = await Document.findOne({ 'parties.token': token });
+//     if (!doc)
+//       return res.status(404).json({ error: 'Invalid token.' });
+
+//     const idx    = doc.parties.findIndex(p => p.token === token);
+//     const signer = doc.parties[idx];
+//     if (!signer)
+//       return res.status(404).json({ error: 'Signer not found.' });
+
+//     const signerIp =
+//       req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+//       req.socket?.remoteAddress ||
+//       'Unknown';
+
+//     signer.status     = 'signed';
+//     signer.signedAt   = new Date();
+//     signer.ip         = signerIp;
+//     signer.postalCode = locationData?.postalCode ||
+//                         locationData?.postal || '';
+//     signer.address    = locationData?.text ||
+//                         locationData?.city  || '';
+//     signer.location   = locationData?.text  || '';
+//     signer.clientTime = clientTime || new Date().toISOString();
+//     signer.userAgent  = req.headers['user-agent'] || '';
+//     signer.token      = undefined;
+
+//     for (const sf of signedFields) {
+//       const fi = doc.fields.findIndex(f => {
+//         const fo = typeof f === 'string' ? JSON.parse(f) : f;
+//         return fo.id === sf.id;
+//       });
+//       if (fi !== -1) {
+//         const existing = typeof doc.fields[fi] === 'string'
+//           ? JSON.parse(doc.fields[fi])
+//           : { ...doc.fields[fi] };
+//         doc.fields[fi] = { ...existing, value: sf.value };
+//       }
+//     }
+//     doc.markModified('fields');
+//     doc.markModified('parties');
+
+//     if (doc.isTemplate && idx === 0) {
+//       doc.isParty1Signed = true;
+//     }
+
+//     await doc.save();
+
+//     res.json({ success: true, message: 'Signature recorded.' });
+
+//     setImmediate(async () => {
+//       try {
+//         await logEvent(
+//           doc._id, 'signed',
+//           {
+//             name:  signer.name,
+//             email: signer.email,
+//             role:  'signer',
+//           },
+//           {
+//             ip_address:  signerIp,
+//             postal_code: signer.postalCode,
+//             location:    signer.location,
+//             client_time: signer.clientTime,
+//             details:     `Party ${idx + 1} signed`,
+//           }
+//         );
+
+//         if (doc.isTemplate && idx === 0) {
+//           console.log(`Template ${doc._id}: Party 1 signed.`);
+//           return;
+//         }
+
+//         const allSigned = doc.parties.every(
+//           p => p.status === 'signed'
+//         );
+
+//         if (!allSigned && doc.workflowType === 'sequential') {
+//           const nextParty = doc.parties.find(
+//             p => p.status !== 'signed'
+//           );
+//           if (nextParty) {
+//             nextParty.token       = genToken();
+//             nextParty.status      = 'sent';
+//             nextParty.emailSentAt = new Date();
+//             await doc.save();
+
+//             const nextIdx = doc.parties.findIndex(
+//               p => p.token === nextParty.token
+//             );
+//             const signLink = `${FRONT()}/sign/${nextParty.token}`;
+
+//             await sendSigningEmail({
+//               recipientEmail: nextParty.email,
+//               recipientName:  nextParty.name,
+//               senderName:     'NeXsign',
+//               documentTitle:  doc.title,
+//               signingLink:    signLink,
+//               companyLogoUrl: doc.companyLogo,
+//               companyName:    doc.companyName,
+//               partyNumber:    nextIdx + 1,
+//               totalParties:   doc.parties.length,
+//             });
+//           }
+//         } else if (allSigned) {
+//           let finalBytes = await mergeSignaturesIntoPDF(
+//             doc.fileUrl, doc.fields
+//           );
+//           finalBytes = await appendAuditPage(finalBytes, doc);
+
+//           const uploaded = await uploadToCloudinary(
+//             Buffer.from(finalBytes),
+//             {
+//               resource_type: 'raw',
+//               folder:        'nexsign_signed',
+//               public_id:     `signed_${doc._id}_${Date.now()}`,
+//               overwrite:     true,
+//             }
+//           );
+
+//           doc.signedFileUrl = uploaded.secure_url;
+//           doc.status        = 'completed';
+
+//           doc.fields = doc.fields.map(f => {
+//             const field = typeof f === 'string'
+//               ? JSON.parse(f)
+//               : { ...f };
+//             if (
+//               field.type === 'signature' &&
+//               field.value?.startsWith('data:')
+//             ) {
+//               field.value = '[SIGNED]';
+//             }
+//             return field;
+//           });
+//           doc.markModified('fields');
+//           await doc.save();
+
+//           const recipients = [
+//             ...doc.parties,
+//             ...(doc.ccList || []),
+//           ];
+//           for (const r of recipients) {
+//             await sendCompletionEmail({
+//               recipientEmail: r.email,
+//               recipientName:  r.name,
+//               documentTitle:  doc.title,
+//               signedPdfUrl:   doc.signedFileUrl,
+//               companyLogoUrl: doc.companyLogo,
+//               companyName:    doc.companyName,
+//               auditParties:   doc.parties,
+//             }).catch(e =>
+//               console.error(`Completion email ${r.email}:`, e.message)
+//             );
+//           }
+
+//           await logEvent(
+//             doc._id, 'completed',
+//             { name: 'System', email: 'system@nexsign.app', role: 'system' },
+//             { details: 'All signed. Final PDF generated.' }
+//           );
+//         }
+//       } catch (bgErr) {
+//         console.error('Submit background error:', bgErr.message);
+//       }
+//     });
+//   } catch (err) {
+//     console.error('sign/submit error:', err);
+//     res.status(500).json({ error: err.message });
+//   }
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // GET SIGNING PAGE — AFTER /sign/submit
+// // ════════════════════════════════════════════════════════════════
+// router.get('/sign/:token', async (req, res) => {
+//   try {
+//     const { token } = req.params;
+
+//     if (token === 'submit')
+//       return res.status(400).json({ error: 'Invalid token.' });
+
+//     const doc = await Document.findOne({
+//       'parties.token': token,
+//     }).lean();
+
+//     if (!doc)
+//       return res.status(404).json({ error: 'Invalid link.' });
+
+//     const partyIndex = doc.parties.findIndex(
+//       p => p.token === token
+//     );
+//     const party = doc.parties[partyIndex];
+
+//     if (!party)
+//       return res.status(404).json({ error: 'Party not found.' });
+
+//     if (party.status === 'signed')
+//       return res.status(410).json({
+//         error: 'You have already signed this document.',
+//       });
+
+//     Document.updateOne(
+//       { _id: doc._id, 'parties.token': token },
+//       {
+//         $inc: { 'parties.$.linkOpenCount': 1 },
+//         $set: {
+//           'parties.$.linkOpenedAt':     new Date(),
+//           'parties.$.lastLinkOpenedAt': new Date(),
+//         },
+//       }
+//     ).catch(() => {});
+
+//     logEvent(doc._id, 'opened', {
+//       name:  party.name,
+//       email: party.email,
+//       role:  'signer',
+//     }, {
+//       ip_address: req.headers['x-forwarded-for']
+//         ?.split(',')[0] || '',
+//     });
+
+//     const formattedFields = doc.fields.map(f => {
+//       const field = typeof f === 'string' ? JSON.parse(f) : f;
+//       const fPartyIdx = Number(field.partyIndex ?? 0);
+//       return {
+//         ...field,
+//         partyIndex: fPartyIdx,
+//         value: fPartyIdx === partyIndex
+//           ? ''
+//           : (field.value || ''),
+//       };
+//     });
+
+//     res.json({
+//       success:      true,
+//       fileUrl:      doc.fileUrl,
+//       title:        doc.title,
+//       companyLogo:  doc.companyLogo,
+//       companyName:  doc.companyName,
+//       fields:       formattedFields,
+//       partyIndex,
+//       party: {
+//         name:  party.name,
+//         email: party.email,
+//       },
+//       workflowType: doc.workflowType,
+//       totalParties: doc.parties.length,
+//     });
+//   } catch (err) {
+//     res.status(500).json({ error: err.message });
+//   }
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // TEMPLATE ROUTES
+// // ════════════════════════════════════════════════════════════════
+// router.post('/templates',
+//   auth,
+//   upload.single('file'),
+//   async (req, res) => {
+//     try {
+//       const {
+//         title, fields: fieldsRaw,
+//         companyLogo, companyName,
+//         party1: party1Raw,
+//         ccList: ccRaw,
+//       } = req.body;
+
+//       if (!req.file)
+//         return res.status(400).json({
+//           success: false, message: 'PDF required.',
+//         });
+
+//       const up = await uploadToCloudinary(req.file.buffer, {
+//         resource_type: 'raw',
+//         folder:        'nexsign_templates',
+//       });
+
+//       const fields = JSON.parse(fieldsRaw || '[]');
+//       const party1 = party1Raw ? JSON.parse(party1Raw) : null;
+//       const ccList = JSON.parse(ccRaw || '[]');
+
+//       const doc = await Document.create({
+//         owner:        req.user.id,
+//         title:        title || 'Untitled Template',
+//         templateName: title || 'Untitled Template',
+//         companyLogo:  companyLogo || '',
+//         companyName:  companyName || '',
+//         fileUrl:      up.secure_url,
+//         fileId:       up.public_id,
+//         fields,
+//         parties: party1 ? [{
+//           name:   party1.name  || req.user.full_name,
+//           email:  party1.email || req.user.email,
+//           status: 'pending',
+//           token:  genToken(),
+//           color:  '#0ea5e9',
+//         }] : [],
+//         ccList,
+//         isTemplate:      true,
+//         isParty1Signed:  false,
+//         status:          'draft',
+//         workflowType:    'sequential',
+//       });
+
+//       res.json({ success: true, template: doc });
+
+//       if (party1 && doc.parties[0]) {
+//         setImmediate(async () => {
+//           const link = `${FRONT()}/sign/${doc.parties[0].token}`;
+//           await sendSigningEmail({
+//             recipientEmail: doc.parties[0].email,
+//             recipientName:  doc.parties[0].name,
+//             senderName:     req.user.full_name,
+//             documentTitle:  doc.title,
+//             signingLink:    link,
+//             companyLogoUrl: doc.companyLogo,
+//             companyName:    doc.companyName,
+//             partyNumber:    1,
+//             totalParties:   1,
+//             message: 'Please sign this template as the authorizing party.',
+//           }).catch(e =>
+//             console.error('Party1 template email:', e.message)
+//           );
+
+//           doc.parties[0].status      = 'sent';
+//           doc.parties[0].emailSentAt = new Date();
+//           await doc.save();
+//         });
+//       }
+//     } catch (err) {
+//       res.status(500).json({ success: false, message: err.message });
+//     }
+//   }
+// );
+
+// // Get templates list
+// router.get('/templates', auth, async (req, res) => {
+//   try {
+//     const templates = await Document.find({
+//       owner:      req.user.id,
+//       isTemplate: true,
+//     })
+//       .select(
+//         'title templateName companyLogo companyName ' +
+//         'fields parties ccList isParty1Signed ' +
+//         'usageCount createdAt updatedAt'
+//       )
+//       .sort({ updatedAt: -1 })
+//       .lean();
+
+//     res.json({ success: true, templates });
+//   } catch (err) {
+//     res.status(500).json({ success: false, message: err.message });
+//   }
+// });
+
+// // Use template
+// router.post('/templates/:id/use', auth, async (req, res) => {
+//   try {
+//     const template = await Document.findOne({
+//       _id:        req.params.id,
+//       owner:      req.user.id,
+//       isTemplate: true,
+//     }).lean();
+
+//     if (!template)
+//       return res.status(404).json({
+//         success: false, message: 'Template not found.',
+//       });
+
+//     const { signers = [], ccList = [] } = req.body;
+
+//     if (!signers.length)
+//       return res.status(400).json({
+//         success: false,
+//         message: 'At least one signer required.',
+//       });
+
+//     res.json({
+//       success: true,
+//       message: `Sending to ${signers.length} signer(s)...`,
+//     });
+
+//     setImmediate(async () => {
+//       const party1 = template.parties?.[0];
+
+//       for (const signer of signers) {
+//         try {
+//           const instanceFields = template.fields.map(f => ({
+//             ...f,
+//             value: Number(f.partyIndex) === 0
+//               ? (f.value || '')
+//               : '',
+//           }));
+
+//           const instanceParties = [
+//             ...(party1 ? [{
+//               name:     party1.name,
+//               email:    party1.email,
+//               status:   'signed',
+//               signedAt: template.parties[0]?.signedAt || new Date(),
+//               color:    '#0ea5e9',
+//             }] : []),
+//             {
+//               name:   signer.name,
+//               email:  signer.email,
+//               status: 'pending',
+//               token:  genToken(),
+//               color:  '#8b5cf6',
+//             },
+//           ];
+
+//           const instance = await Document.create({
+//             owner:            template.owner,
+//             title:            template.title,
+//             companyLogo:      template.companyLogo,
+//             companyName:      template.companyName,
+//             fileUrl:          template.fileUrl,
+//             fileId:           template.fileId,
+//             fields:           instanceFields,
+//             parties:          instanceParties,
+//             ccList:           ccList.length ? ccList : template.ccList,
+//             isTemplate:       false,
+//             sourceTemplateId: template._id,
+//             status:           'in_progress',
+//             workflowType:     'template_instance',
+//             totalPages:       template.totalPages,
+//           });
+
+//           await Document.updateOne(
+//             { _id: template._id },
+//             { $inc: { usageCount: 1 } }
+//           );
+
+//           const signerParty = instance.parties.find(
+//             p => p.email === signer.email
+//           );
+//           if (signerParty?.token) {
+//             const link = `${FRONT()}/sign/${signerParty.token}`;
+//             await sendSigningEmail({
+//               recipientEmail: signer.email,
+//               recipientName:  signer.name,
+//               senderName:     req.user.full_name,
+//               documentTitle:  instance.title,
+//               signingLink:    link,
+//               companyLogoUrl: instance.companyLogo,
+//               companyName:    instance.companyName,
+//               partyNumber:    2,
+//               totalParties:   2,
+//             });
+
+//             signerParty.status      = 'sent';
+//             signerParty.emailSentAt = new Date();
+//             await instance.save();
+//           }
+
+//           for (const cc of (instance.ccList || [])) {
+//             await sendCCEmail({
+//               recipientEmail: cc.email,
+//               recipientName:  cc.name || '',
+//               documentTitle:  instance.title,
+//               senderName:     req.user.full_name,
+//               companyLogoUrl: instance.companyLogo,
+//               companyName:    instance.companyName,
+//             }).catch(e => console.error('CC error:', e.message));
+//           }
+//         } catch (signerErr) {
+//           console.error(
+//             `Error for signer ${signer.email}:`,
+//             signerErr.message
+//           );
+//         }
+//       }
+//     });
+//   } catch (err) {
+//     res.status(500).json({ success: false, message: err.message });
+//   }
+// });
+
+// // Bulk send
+// router.post('/templates/:id/use-bulk', auth, async (req, res) => {
+//   try {
+//     const template = await Document.findOne({
+//       _id:        req.params.id,
+//       owner:      req.user.id,
+//       isTemplate: true,
+//     }).lean();
+
+//     if (!template)
+//       return res.status(404).json({
+//         success: false, message: 'Template not found.',
+//       });
+
+//     const { employees = [], ccList = [] } = req.body;
+//     if (!employees.length)
+//       return res.status(400).json({
+//         success: false, message: 'No employees provided.',
+//       });
+
+//     res.json({
+//       success: true,
+//       total:   employees.length,
+//       message: 'Bulk send started.',
+//     });
+
+//     setImmediate(async () => {
+//       const party1 = template.parties?.[0];
+//       let created  = 0;
+
+//       for (const emp of employees) {
+//         try {
+//           const instanceFields = template.fields.map(f => ({
+//             ...f,
+//             value: Number(f.partyIndex) === 0
+//               ? (f.value || '')
+//               : '',
+//           }));
+
+//           const instanceParties = [
+//             ...(party1 ? [{
+//               name:     party1.name,
+//               email:    party1.email,
+//               status:   'signed',
+//               signedAt: new Date(),
+//               color:    '#0ea5e9',
+//             }] : []),
+//             {
+//               name:   emp.name,
+//               email:  emp.email,
+//               status: 'pending',
+//               token:  genToken(),
+//               color:  '#8b5cf6',
+//             },
+//           ];
+
+//           const instance = await Document.create({
+//             owner:            template.owner,
+//             title:            template.title,
+//             companyLogo:      template.companyLogo,
+//             companyName:      template.companyName,
+//             fileUrl:          template.fileUrl,
+//             fileId:           template.fileId,
+//             fields:           instanceFields,
+//             parties:          instanceParties,
+//             ccList:           ccList.length ? ccList : template.ccList,
+//             isTemplate:       false,
+//             sourceTemplateId: template._id,
+//             status:           'in_progress',
+//             workflowType:     'template_instance',
+//             totalPages:       template.totalPages,
+//           });
+
+//           await Document.updateOne(
+//             { _id: template._id },
+//             { $inc: { usageCount: 1 } }
+//           );
+
+//           const sp = instance.parties.find(p => p.email === emp.email);
+//           if (sp?.token) {
+//             const link = `${FRONT()}/sign/${sp.token}`;
+//             await sendSigningEmail({
+//               recipientEmail: emp.email,
+//               recipientName:  emp.name,
+//               senderName:     'NeXsign',
+//               documentTitle:  instance.title,
+//               signingLink:    link,
+//               companyLogoUrl: instance.companyLogo,
+//               companyName:    instance.companyName,
+//               partyNumber:    2,
+//               totalParties:   2,
+//             });
+//             sp.status      = 'sent';
+//             sp.emailSentAt = new Date();
+//             await instance.save();
+//           }
+//           created++;
+//         } catch (empErr) {
+//           console.error(`Bulk error ${emp.email}:`, empErr.message);
+//         }
+//       }
+//       console.log(`Bulk complete: ${created}/${employees.length}`);
+//     });
+//   } catch (err) {
+//     res.status(500).json({ success: false, message: err.message });
+//   }
+// });
+
+// // Template usage history
+// router.get('/templates/:id/usage', auth, async (req, res) => {
+//   try {
+//     const instances = await Document.find({
+//       sourceTemplateId: req.params.id,
+//       owner:            req.user.id,
+//     })
+//       .select(
+//         'title status parties.name parties.email ' +
+//         'parties.status parties.signedAt ' +
+//         'createdAt signedFileUrl'
+//       )
+//       .sort({ createdAt: -1 })
+//       .limit(100)
+//       .lean();
+
+//     res.json({ success: true, usage: instances });
+//   } catch (err) {
+//     res.status(500).json({ success: false, message: err.message });
+//   }
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // DASHBOARD LIST
+// // ════════════════════════════════════════════════════════════════
+// router.get('/', auth, async (req, res) => {
+//   try {
+//     const page  = parseInt(req.query.page)  || 1;
+//     const limit = parseInt(req.query.limit) || 6;
+//     const skip  = (page - 1) * limit;
+
+//     const query = {
+//       owner:      req.user.id,
+//       isTemplate: false,
+//     };
+
+//     if (req.query.status && req.query.status !== 'all')
+//       query.status = req.query.status;
+
+//     const [documents, total] = await Promise.all([
+//       Document.find(query)
+//         .select('-fields')
+//         .sort({ updatedAt: -1 })
+//         .skip(skip)
+//         .limit(limit)
+//         .lean(),
+//       Document.countDocuments(query),
+//     ]);
+
+//     res.json({
+//       success: true,
+//       documents,
+//       total,
+//       hasMore: total > skip + documents.length,
+//     });
+//   } catch (err) {
+//     res.status(500).json({ success: false, message: err.message });
+//   }
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // GET SINGLE DOCUMENT
+// // ════════════════════════════════════════════════════════════════
+// router.get('/:id', auth, async (req, res) => {
+//   try {
+//     const doc = await Document.findOne({
+//       _id:   req.params.id,
+//       owner: req.user.id,
+//     })
+//       .populate('owner', 'full_name email')
+//       .lean();
+
+//     if (!doc)
+//       return res.status(404).json({
+//         success: false, message: 'Not found.',
+//       });
+
+//     res.json({ success: true, document: doc });
+//   } catch (err) {
+//     res.status(500).json({ success: false, message: err.message });
+//   }
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // UPDATE DOCUMENT
+// // ════════════════════════════════════════════════════════════════
+// router.put('/:id', auth, async (req, res) => {
+//   try {
+//     const allowed = [
+//       'title','fields','parties','ccList',
+//       'companyLogo','companyName','status',
+//     ];
+//     const updates = {};
+//     allowed.forEach(k => {
+//       if (req.body[k] !== undefined) updates[k] = req.body[k];
+//     });
+
+//     const doc = await Document.findOneAndUpdate(
+//       { _id: req.params.id, owner: req.user.id },
+//       { $set: updates },
+//       { new: true, runValidators: true }
+//     );
+
+//     if (!doc)
+//       return res.status(404).json({
+//         success: false, message: 'Not found.',
+//       });
+
+//     res.json({ success: true, document: doc });
+//   } catch (err) {
+//     res.status(500).json({ success: false, message: err.message });
+//   }
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // DELETE DOCUMENT
+// // ════════════════════════════════════════════════════════════════
+// router.delete('/:id', auth, async (req, res) => {
+//   try {
+//     const doc = await Document.findOneAndDelete({
+//       _id:   req.params.id,
+//       owner: req.user.id,
+//     });
+
+//     if (!doc)
+//       return res.status(404).json({
+//         success: false, message: 'Not found.',
+//       });
+
+//     AuditLog.deleteMany({ document_id: doc._id }).catch(() => {});
+
+//     res.json({ success: true, message: 'Deleted.' });
+//   } catch (err) {
+//     res.status(500).json({ success: false, message: err.message });
+//   }
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // AUDIT LOG
+// // ════════════════════════════════════════════════════════════════
+// router.get('/:id/audit', auth, async (req, res) => {
+//   try {
+//     const doc = await Document.findOne({
+//       _id:   req.params.id,
+//       owner: req.user.id,
+//     }).lean();
+
+//     if (!doc)
+//       return res.status(404).json({
+//         success: false, message: 'Not found.',
+//       });
+
+//     const logs = await AuditLog.find({
+//       document_id: req.params.id,
+//     })
+//       .sort({ timestamp: 1 })
+//       .lean();
+
+//     res.json({
+//       success: true,
+//       audit: {
+//         _id:     doc._id,
+//         title:   doc.title,
+//         status:  doc.status,
+//         parties: doc.parties,
+//         ccList:  doc.ccList || [],
+//         events:  logs.map(l => ({
+//           eventType:  l.action,
+//           actorName:  l.performed_by?.name,
+//           actorEmail: l.performed_by?.email,
+//           ipAddress:  l.ip_address,
+//           location:   l.location,
+//           postalCode: l.postal_code,
+//           clientTime: l.client_time,
+//           occurredAt: l.timestamp,
+//         })),
+//       },
+//     });
+//   } catch (err) {
+//     res.status(500).json({ success: false, message: err.message });
+//   }
+// });
+
+// module.exports = router;
+
+const express      = require('express');
+const router       = express.Router();
+const multer       = require('multer');
+const crypto       = require('crypto');
+const { Readable } = require('stream'); // ✅ Top-level import
 const { v2: cloudinary } = require('cloudinary');
-const Document  = require('../models/Document');
-const AuditLog  = require('../models/AuditLog');
-const auth      = require('../middleware/auth');
+const Document     = require('../models/Document');
+const AuditLog     = require('../models/AuditLog');
+const auth         = require('../middleware/auth');
 const {
   mergeSignaturesIntoPDF,
   appendAuditPage,
@@ -3334,35 +4399,43 @@ const {
   sendCCEmail,
 } = require('../utils/emailService');
 
-// ── Config ───────────────────────────────────────────────────────
+// ── Cloudinary Config ────────────────────────────────────────────
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key:    process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// ✅ Fix 1: fileFilter সরানো হয়েছে — এটি valid PDF কেও
+// reject করতো কারণ কিছু browser 'application/octet-stream'
+// পাঠায় PDF এর জন্য। Manual check নিচে করা হয়েছে।
 const upload = multer({
-  storage:    multer.memoryStorage(),
-  limits:     { fileSize: 20 * 1024 * 1024 },
-  fileFilter: (_, file, cb) =>
-    cb(null, file.mimetype === 'application/pdf'),
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: 20 * 1024 * 1024 },
 });
 
 const logoUpload = multer({
-  storage:    multer.memoryStorage(),
-  limits:     { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_, file, cb) =>
-    cb(null, file.mimetype.startsWith('image/')),
+  storage: multer.memoryStorage(),
+  limits:  { fileSize: 5 * 1024 * 1024 },
 });
 
 // ── Helpers ──────────────────────────────────────────────────────
 const genToken = () => crypto.randomBytes(32).toString('hex');
 
+// ✅ Fix 2: safeParse — JSON.parse crash prevent করে
+const safeParse = (data, fallback) => {
+  try {
+    return data ? JSON.parse(data) : fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const uploadToCloudinary = (buffer, options) =>
   new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       options,
-      (err, res) => err ? reject(err) : resolve(res)
+      (err, res) => (err ? reject(err) : resolve(res))
     );
     stream.end(buffer);
   });
@@ -3386,7 +4459,7 @@ const FRONT = () =>
     .replace(/\/$/, '');
 
 // ════════════════════════════════════════════════════════════════
-// PROXY — must be FIRST before any /:id routes
+// PROXY — সবার আগে থাকতে হবে /:id routes এর আগে
 // ════════════════════════════════════════════════════════════════
 router.get('/proxy/:path(*)', async (req, res) => {
   try {
@@ -3398,9 +4471,8 @@ router.get('/proxy/:path(*)', async (req, res) => {
       `https://res.cloudinary.com/` +
       `${process.env.CLOUDINARY_CLOUD_NAME}/raw/upload/${cloudPath}`;
 
-    // ✅ Built-in fetch use করা হচ্ছে (Node.js 18+)
     const response = await fetch(url, {
-      signal: AbortSignal.timeout(30000), // ✅ timeout এর নতুন way
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!response.ok) return res.status(404).send('Not found');
@@ -3409,12 +4481,8 @@ router.get('/proxy/:path(*)', async (req, res) => {
     res.setHeader('Cache-Control', 'public, max-age=3600');
     res.setHeader('Access-Control-Allow-Origin', '*');
 
-    // ✅ Built-in fetch এ .body একটা ReadableStream
-    // Node.js এ pipe করার জন্য এইভাবে করতে হবে
-    const { Readable } = require('stream');
-    const nodeStream = Readable.fromWeb(response.body);
-    nodeStream.pipe(res);
-
+    // ✅ Fix 3: Readable এখন top-level এ import করা
+    Readable.fromWeb(response.body).pipe(res);
   } catch (err) {
     console.error('Proxy error:', err.message);
     res.status(500).send('Proxy error');
@@ -3424,23 +4492,29 @@ router.get('/proxy/:path(*)', async (req, res) => {
 // ════════════════════════════════════════════════════════════════
 // LOGO UPLOAD
 // ════════════════════════════════════════════════════════════════
-router.post('/upload-logo',
+router.post(
+  '/upload-logo',
   auth,
   logoUpload.single('logo'),
   async (req, res) => {
     try {
       if (!req.file)
-        return res.status(400).json({
-          success: false, message: 'No image provided.',
-        });
+        return res
+          .status(400)
+          .json({ success: false, message: 'No image provided.' });
+
+      // ✅ Fix 5: Manual mimetype check
+      if (!req.file.mimetype.startsWith('image/'))
+        return res
+          .status(400)
+          .json({ success: false, message: 'Only image files allowed.' });
 
       const result = await uploadToCloudinary(req.file.buffer, {
-        folder:        'nexsign_logos',
-        resource_type: 'image',
-        transformation: [{
-          width: 400, height: 200,
-          crop: 'limit', quality: 'auto',
-        }],
+        folder:         'nexsign_logos',
+        resource_type:  'image',
+        transformation: [
+          { width: 400, height: 200, crop: 'limit', quality: 'auto' },
+        ],
       });
 
       res.json({ success: true, logoUrl: result.secure_url });
@@ -3451,24 +4525,34 @@ router.post('/upload-logo',
 );
 
 // ════════════════════════════════════════════════════════════════
-// UPLOAD & SEND (Normal Sequential)
+// UPLOAD & SEND
 // ════════════════════════════════════════════════════════════════
-router.post('/upload-and-send',
+router.post(
+  '/upload-and-send',
   auth,
   upload.single('file'),
   async (req, res) => {
     try {
       const {
-        title, parties: partiesRaw,
+        title,
+        parties:      partiesRaw,
         ccRecipients: ccRaw,
-        fields: fieldsRaw, totalPages,
-        companyLogo, companyName,
+        fields:       fieldsRaw,
+        totalPages,
+        companyLogo,
+        companyName,
       } = req.body;
 
       if (!req.file && !req.body.fileUrl)
-        return res.status(400).json({
-          success: false, message: 'No PDF provided.',
-        });
+        return res
+          .status(400)
+          .json({ success: false, message: 'No PDF provided.' });
+
+      // ✅ Manual PDF check
+      if (req.file && req.file.mimetype !== 'application/pdf')
+        return res
+          .status(400)
+          .json({ success: false, message: 'Only PDF files allowed.' });
 
       let fileUrl, fileId;
       if (req.file) {
@@ -3483,13 +4567,19 @@ router.post('/upload-and-send',
         fileId  = '';
       }
 
-      const parties = JSON.parse(partiesRaw || '[]');
-      const ccList  = JSON.parse(ccRaw      || '[]');
-      const fields  = JSON.parse(fieldsRaw  || '[]');
+      // ✅ Fix 2: safeParse ব্যবহার
+      const parties = safeParse(partiesRaw, []);
+      const ccList  = safeParse(ccRaw, []);
+      const fields  = safeParse(fieldsRaw, []);
 
-      const COLORS = [
-        '#0ea5e9','#8b5cf6','#f59e0b','#10b981',
-      ];
+      // ✅ Fix 4: Validation আগে
+      if (!parties.length)
+        return res.status(400).json({
+          success: false,
+          message: 'At least one party required.',
+        });
+
+      const COLORS = ['#0ea5e9', '#8b5cf6', '#f59e0b', '#10b981'];
 
       const partiesWithTokens = parties.map((p, i) => ({
         ...p,
@@ -3513,6 +4603,7 @@ router.post('/upload-and-send',
         workflowType: 'sequential',
       });
 
+      // ✅ Optimistic response — email এর জন্য অপেক্ষা নেই
       res.json({ success: true, documentId: doc._id });
 
       setImmediate(async () => {
@@ -3544,9 +4635,7 @@ router.post('/upload-and-send',
               senderName:     req.user.full_name,
               companyLogoUrl: doc.companyLogo,
               companyName:    doc.companyName,
-            }).catch(e =>
-              console.error('CC email error:', e.message)
-            );
+            }).catch(e => console.error('CC email error:', e.message));
           }
 
           const exists = await Document.findOne({
@@ -3593,7 +4682,7 @@ router.post('/upload-and-send',
 );
 
 // ════════════════════════════════════════════════════════════════
-// SIGN SUBMIT — must be BEFORE /sign/:token
+// SIGN SUBMIT — /sign/:token এর আগে থাকতে হবে
 // ════════════════════════════════════════════════════════════════
 router.post('/sign/submit', async (req, res) => {
   try {
@@ -3624,11 +4713,9 @@ router.post('/sign/submit', async (req, res) => {
     signer.status     = 'signed';
     signer.signedAt   = new Date();
     signer.ip         = signerIp;
-    signer.postalCode = locationData?.postalCode ||
-                        locationData?.postal || '';
-    signer.address    = locationData?.text ||
-                        locationData?.city  || '';
-    signer.location   = locationData?.text  || '';
+    signer.postalCode = locationData?.postalCode || locationData?.postal || '';
+    signer.address    = locationData?.text || locationData?.city || '';
+    signer.location   = locationData?.text || '';
     signer.clientTime = clientTime || new Date().toISOString();
     signer.userAgent  = req.headers['user-agent'] || '';
     signer.token      = undefined;
@@ -3639,12 +4726,14 @@ router.post('/sign/submit', async (req, res) => {
         return fo.id === sf.id;
       });
       if (fi !== -1) {
-        const existing = typeof doc.fields[fi] === 'string'
-          ? JSON.parse(doc.fields[fi])
-          : { ...doc.fields[fi] };
+        const existing =
+          typeof doc.fields[fi] === 'string'
+            ? JSON.parse(doc.fields[fi])
+            : { ...doc.fields[fi] };
         doc.fields[fi] = { ...existing, value: sf.value };
       }
     }
+
     doc.markModified('fields');
     doc.markModified('parties');
 
@@ -3653,18 +4742,14 @@ router.post('/sign/submit', async (req, res) => {
     }
 
     await doc.save();
-
     res.json({ success: true, message: 'Signature recorded.' });
 
     setImmediate(async () => {
       try {
         await logEvent(
-          doc._id, 'signed',
-          {
-            name:  signer.name,
-            email: signer.email,
-            role:  'signer',
-          },
+          doc._id,
+          'signed',
+          { name: signer.name, email: signer.email, role: 'signer' },
           {
             ip_address:  signerIp,
             postal_code: signer.postalCode,
@@ -3679,21 +4764,17 @@ router.post('/sign/submit', async (req, res) => {
           return;
         }
 
-        const allSigned = doc.parties.every(
-          p => p.status === 'signed'
-        );
+        const allSigned = doc.parties.every(p => p.status === 'signed');
 
         if (!allSigned && doc.workflowType === 'sequential') {
-          const nextParty = doc.parties.find(
-            p => p.status !== 'signed'
-          );
+          const nextParty = doc.parties.find(p => p.status !== 'signed');
           if (nextParty) {
             nextParty.token       = genToken();
             nextParty.status      = 'sent';
             nextParty.emailSentAt = new Date();
             await doc.save();
 
-            const nextIdx = doc.parties.findIndex(
+            const nextIdx  = doc.parties.findIndex(
               p => p.token === nextParty.token
             );
             const signLink = `${FRONT()}/sign/${nextParty.token}`;
@@ -3712,7 +4793,8 @@ router.post('/sign/submit', async (req, res) => {
           }
         } else if (allSigned) {
           let finalBytes = await mergeSignaturesIntoPDF(
-            doc.fileUrl, doc.fields
+            doc.fileUrl,
+            doc.fields
           );
           finalBytes = await appendAuditPage(finalBytes, doc);
 
@@ -3728,11 +4810,9 @@ router.post('/sign/submit', async (req, res) => {
 
           doc.signedFileUrl = uploaded.secure_url;
           doc.status        = 'completed';
-
-          doc.fields = doc.fields.map(f => {
-            const field = typeof f === 'string'
-              ? JSON.parse(f)
-              : { ...f };
+          doc.fields        = doc.fields.map(f => {
+            const field =
+              typeof f === 'string' ? JSON.parse(f) : { ...f };
             if (
               field.type === 'signature' &&
               field.value?.startsWith('data:')
@@ -3763,8 +4843,13 @@ router.post('/sign/submit', async (req, res) => {
           }
 
           await logEvent(
-            doc._id, 'completed',
-            { name: 'System', email: 'system@nexsign.app', role: 'system' },
+            doc._id,
+            'completed',
+            {
+              name:  'System',
+              email: 'system@nexsign.app',
+              role:  'system',
+            },
             { details: 'All signed. Final PDF generated.' }
           );
         }
@@ -3779,7 +4864,7 @@ router.post('/sign/submit', async (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════
-// GET SIGNING PAGE — AFTER /sign/submit
+// GET SIGNING PAGE — /sign/submit এর পরে
 // ════════════════════════════════════════════════════════════════
 router.get('/sign/:token', async (req, res) => {
   try {
@@ -3795,10 +4880,8 @@ router.get('/sign/:token', async (req, res) => {
     if (!doc)
       return res.status(404).json({ error: 'Invalid link.' });
 
-    const partyIndex = doc.parties.findIndex(
-      p => p.token === token
-    );
-    const party = doc.parties[partyIndex];
+    const partyIndex = doc.parties.findIndex(p => p.token === token);
+    const party      = doc.parties[partyIndex];
 
     if (!party)
       return res.status(404).json({ error: 'Party not found.' });
@@ -3819,24 +4902,23 @@ router.get('/sign/:token', async (req, res) => {
       }
     ).catch(() => {});
 
-    logEvent(doc._id, 'opened', {
-      name:  party.name,
-      email: party.email,
-      role:  'signer',
-    }, {
-      ip_address: req.headers['x-forwarded-for']
-        ?.split(',')[0] || '',
-    });
+    logEvent(
+      doc._id,
+      'opened',
+      { name: party.name, email: party.email, role: 'signer' },
+      {
+        ip_address:
+          req.headers['x-forwarded-for']?.split(',')[0] || '',
+      }
+    );
 
     const formattedFields = doc.fields.map(f => {
-      const field = typeof f === 'string' ? JSON.parse(f) : f;
+      const field     = typeof f === 'string' ? JSON.parse(f) : f;
       const fPartyIdx = Number(field.partyIndex ?? 0);
       return {
         ...field,
         partyIndex: fPartyIdx,
-        value: fPartyIdx === partyIndex
-          ? ''
-          : (field.value || ''),
+        value:      fPartyIdx === partyIndex ? '' : field.value || '',
       };
     });
 
@@ -3848,10 +4930,7 @@ router.get('/sign/:token', async (req, res) => {
       companyName:  doc.companyName,
       fields:       formattedFields,
       partyIndex,
-      party: {
-        name:  party.name,
-        email: party.email,
-      },
+      party:        { name: party.name, email: party.email },
       workflowType: doc.workflowType,
       totalParties: doc.parties.length,
     });
@@ -3861,60 +4940,77 @@ router.get('/sign/:token', async (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════
-// TEMPLATE ROUTES
+// TEMPLATES — CREATE
 // ════════════════════════════════════════════════════════════════
-router.post('/templates',
+router.post(
+  '/templates',
   auth,
   upload.single('file'),
   async (req, res) => {
     try {
+      // ✅ File check সবার আগে
+      if (!req.file)
+        return res
+          .status(400)
+          .json({ success: false, message: 'PDF file required.' });
+
+      // ✅ Manual PDF mimetype check
+      if (req.file.mimetype !== 'application/pdf')
+        return res
+          .status(400)
+          .json({ success: false, message: 'Only PDF files allowed.' });
+
       const {
-        title, fields: fieldsRaw,
-        companyLogo, companyName,
-        party1: party1Raw,
-        ccList: ccRaw,
+        title,
+        fields:      fieldsRaw,
+        companyLogo,
+        companyName,
+        party1:      party1Raw,
+        ccList:      ccRaw,
       } = req.body;
 
-      if (!req.file)
-        return res.status(400).json({
-          success: false, message: 'PDF required.',
-        });
+      // ✅ Fix 2: safeParse দিয়ে safe parsing
+      const fields       = safeParse(fieldsRaw, []);
+      const parsedParty1 = safeParse(party1Raw, null);
+      const ccList       = safeParse(ccRaw, []);
 
       const up = await uploadToCloudinary(req.file.buffer, {
         resource_type: 'raw',
         folder:        'nexsign_templates',
       });
 
-      const fields = JSON.parse(fieldsRaw || '[]');
-      const party1 = party1Raw ? JSON.parse(party1Raw) : null;
-      const ccList = JSON.parse(ccRaw || '[]');
-
       const doc = await Document.create({
-        owner:        req.user.id,
-        title:        title || 'Untitled Template',
-        templateName: title || 'Untitled Template',
-        companyLogo:  companyLogo || '',
-        companyName:  companyName || '',
-        fileUrl:      up.secure_url,
-        fileId:       up.public_id,
+        owner:          req.user.id,
+        title:          title || 'Untitled Template',
+        templateName:   title || 'Untitled Template',
+        companyLogo:    companyLogo || '',
+        companyName:    companyName || '',
+        fileUrl:        up.secure_url,
+        fileId:         up.public_id,
         fields,
-        parties: party1 ? [{
-          name:   party1.name  || req.user.full_name,
-          email:  party1.email || req.user.email,
-          status: 'pending',
-          token:  genToken(),
-          color:  '#0ea5e9',
-        }] : [],
+        // ✅ Fix token + color সহ party তৈরি
+        parties: parsedParty1
+          ? [
+              {
+                name:   parsedParty1.name  || req.user.full_name,
+                email:  parsedParty1.email || req.user.email,
+                status: 'pending',
+                token:  genToken(),
+                color:  '#0ea5e9',
+              },
+            ]
+          : [],
         ccList,
-        isTemplate:      true,
-        isParty1Signed:  false,
-        status:          'draft',
-        workflowType:    'sequential',
+        isTemplate:     true,
+        isParty1Signed: false,
+        status:         'draft',
+        workflowType:   'sequential',
       });
 
+      // ✅ Optimistic response
       res.json({ success: true, template: doc });
 
-      if (party1 && doc.parties[0]) {
+      if (parsedParty1 && doc.parties[0]) {
         setImmediate(async () => {
           const link = `${FRONT()}/sign/${doc.parties[0].token}`;
           await sendSigningEmail({
@@ -3927,7 +5023,8 @@ router.post('/templates',
             companyName:    doc.companyName,
             partyNumber:    1,
             totalParties:   1,
-            message: 'Please sign this template as the authorizing party.',
+            message:
+              'Please sign this template as the authorizing party.',
           }).catch(e =>
             console.error('Party1 template email:', e.message)
           );
@@ -3938,12 +5035,15 @@ router.post('/templates',
         });
       }
     } catch (err) {
+      console.error('Template create error:', err);
       res.status(500).json({ success: false, message: err.message });
     }
   }
 );
 
-// Get templates list
+// ════════════════════════════════════════════════════════════════
+// TEMPLATES — LIST
+// ════════════════════════════════════════════════════════════════
 router.get('/templates', auth, async (req, res) => {
   try {
     const templates = await Document.find({
@@ -3952,8 +5052,8 @@ router.get('/templates', auth, async (req, res) => {
     })
       .select(
         'title templateName companyLogo companyName ' +
-        'fields parties ccList isParty1Signed ' +
-        'usageCount createdAt updatedAt'
+          'fields parties ccList isParty1Signed ' +
+          'usageCount createdAt updatedAt'
       )
       .sort({ updatedAt: -1 })
       .lean();
@@ -3964,7 +5064,9 @@ router.get('/templates', auth, async (req, res) => {
   }
 });
 
-// Use template
+// ════════════════════════════════════════════════════════════════
+// TEMPLATES — USE (Single Signer)
+// ════════════════════════════════════════════════════════════════
 router.post('/templates/:id/use', auth, async (req, res) => {
   try {
     const template = await Document.findOne({
@@ -3974,9 +5076,9 @@ router.post('/templates/:id/use', auth, async (req, res) => {
     }).lean();
 
     if (!template)
-      return res.status(404).json({
-        success: false, message: 'Template not found.',
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: 'Template not found.' });
 
     const { signers = [], ccList = [] } = req.body;
 
@@ -3986,6 +5088,7 @@ router.post('/templates/:id/use', auth, async (req, res) => {
         message: 'At least one signer required.',
       });
 
+    // ✅ Optimistic response
     res.json({
       success: true,
       message: `Sending to ${signers.length} signer(s)...`,
@@ -3998,19 +5101,22 @@ router.post('/templates/:id/use', auth, async (req, res) => {
         try {
           const instanceFields = template.fields.map(f => ({
             ...f,
-            value: Number(f.partyIndex) === 0
-              ? (f.value || '')
-              : '',
+            value: Number(f.partyIndex) === 0 ? f.value || '' : '',
           }));
 
           const instanceParties = [
-            ...(party1 ? [{
-              name:     party1.name,
-              email:    party1.email,
-              status:   'signed',
-              signedAt: template.parties[0]?.signedAt || new Date(),
-              color:    '#0ea5e9',
-            }] : []),
+            ...(party1
+              ? [
+                  {
+                    name:     party1.name,
+                    email:    party1.email,
+                    status:   'signed',
+                    signedAt:
+                      template.parties[0]?.signedAt || new Date(),
+                    color: '#0ea5e9',
+                  },
+                ]
+              : []),
             {
               name:   signer.name,
               email:  signer.email,
@@ -4058,13 +5164,12 @@ router.post('/templates/:id/use', auth, async (req, res) => {
               partyNumber:    2,
               totalParties:   2,
             });
-
             signerParty.status      = 'sent';
             signerParty.emailSentAt = new Date();
             await instance.save();
           }
 
-          for (const cc of (instance.ccList || [])) {
+          for (const cc of instance.ccList || []) {
             await sendCCEmail({
               recipientEmail: cc.email,
               recipientName:  cc.name || '',
@@ -4087,7 +5192,9 @@ router.post('/templates/:id/use', auth, async (req, res) => {
   }
 });
 
-// Bulk send
+// ════════════════════════════════════════════════════════════════
+// TEMPLATES — BULK SEND
+// ════════════════════════════════════════════════════════════════
 router.post('/templates/:id/use-bulk', auth, async (req, res) => {
   try {
     const template = await Document.findOne({
@@ -4097,16 +5204,18 @@ router.post('/templates/:id/use-bulk', auth, async (req, res) => {
     }).lean();
 
     if (!template)
-      return res.status(404).json({
-        success: false, message: 'Template not found.',
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: 'Template not found.' });
 
     const { employees = [], ccList = [] } = req.body;
-    if (!employees.length)
-      return res.status(400).json({
-        success: false, message: 'No employees provided.',
-      });
 
+    if (!employees.length)
+      return res
+        .status(400)
+        .json({ success: false, message: 'No employees provided.' });
+
+    // ✅ Optimistic response
     res.json({
       success: true,
       total:   employees.length,
@@ -4114,26 +5223,28 @@ router.post('/templates/:id/use-bulk', auth, async (req, res) => {
     });
 
     setImmediate(async () => {
-      const party1 = template.parties?.[0];
-      let created  = 0;
+      const party1  = template.parties?.[0];
+      let   created = 0;
 
       for (const emp of employees) {
         try {
           const instanceFields = template.fields.map(f => ({
             ...f,
-            value: Number(f.partyIndex) === 0
-              ? (f.value || '')
-              : '',
+            value: Number(f.partyIndex) === 0 ? f.value || '' : '',
           }));
 
           const instanceParties = [
-            ...(party1 ? [{
-              name:     party1.name,
-              email:    party1.email,
-              status:   'signed',
-              signedAt: new Date(),
-              color:    '#0ea5e9',
-            }] : []),
+            ...(party1
+              ? [
+                  {
+                    name:     party1.name,
+                    email:    party1.email,
+                    status:   'signed',
+                    signedAt: new Date(),
+                    color:    '#0ea5e9',
+                  },
+                ]
+              : []),
             {
               name:   emp.name,
               email:  emp.email,
@@ -4195,7 +5306,9 @@ router.post('/templates/:id/use-bulk', auth, async (req, res) => {
   }
 });
 
-// Template usage history
+// ════════════════════════════════════════════════════════════════
+// TEMPLATES — USAGE HISTORY
+// ════════════════════════════════════════════════════════════════
 router.get('/templates/:id/usage', auth, async (req, res) => {
   try {
     const instances = await Document.find({
@@ -4204,8 +5317,8 @@ router.get('/templates/:id/usage', auth, async (req, res) => {
     })
       .select(
         'title status parties.name parties.email ' +
-        'parties.status parties.signedAt ' +
-        'createdAt signedFileUrl'
+          'parties.status parties.signedAt ' +
+          'createdAt signedFileUrl'
       )
       .sort({ createdAt: -1 })
       .limit(100)
@@ -4226,10 +5339,7 @@ router.get('/', auth, async (req, res) => {
     const limit = parseInt(req.query.limit) || 6;
     const skip  = (page - 1) * limit;
 
-    const query = {
-      owner:      req.user.id,
-      isTemplate: false,
-    };
+    const query = { owner: req.user.id, isTemplate: false };
 
     if (req.query.status && req.query.status !== 'all')
       query.status = req.query.status;
@@ -4268,9 +5378,9 @@ router.get('/:id', auth, async (req, res) => {
       .lean();
 
     if (!doc)
-      return res.status(404).json({
-        success: false, message: 'Not found.',
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: 'Not found.' });
 
     res.json({ success: true, document: doc });
   } catch (err) {
@@ -4284,8 +5394,8 @@ router.get('/:id', auth, async (req, res) => {
 router.put('/:id', auth, async (req, res) => {
   try {
     const allowed = [
-      'title','fields','parties','ccList',
-      'companyLogo','companyName','status',
+      'title', 'fields', 'parties',
+      'ccList', 'companyLogo', 'companyName', 'status',
     ];
     const updates = {};
     allowed.forEach(k => {
@@ -4299,9 +5409,9 @@ router.put('/:id', auth, async (req, res) => {
     );
 
     if (!doc)
-      return res.status(404).json({
-        success: false, message: 'Not found.',
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: 'Not found.' });
 
     res.json({ success: true, document: doc });
   } catch (err) {
@@ -4320,12 +5430,11 @@ router.delete('/:id', auth, async (req, res) => {
     });
 
     if (!doc)
-      return res.status(404).json({
-        success: false, message: 'Not found.',
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: 'Not found.' });
 
     AuditLog.deleteMany({ document_id: doc._id }).catch(() => {});
-
     res.json({ success: true, message: 'Deleted.' });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -4343,9 +5452,9 @@ router.get('/:id/audit', auth, async (req, res) => {
     }).lean();
 
     if (!doc)
-      return res.status(404).json({
-        success: false, message: 'Not found.',
-      });
+      return res
+        .status(404)
+        .json({ success: false, message: 'Not found.' });
 
     const logs = await AuditLog.find({
       document_id: req.params.id,
