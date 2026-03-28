@@ -4516,18 +4516,50 @@ const logEvent = async (docId, action, performer, extras = {}) => {
  *       - every CC recipient
  *  6. Write 'completed' audit event
  */
+// ✅ Only this function needs fixing — replace the existing one
+
 async function generateAndSendFinalPDF(docId) {
+  console.log(`[finalPDF] Starting for doc: ${docId}`);
+
   const doc = await Document.findById(docId);
-  if (!doc) return;
+  if (!doc) {
+    console.error(`[finalPDF] Document ${docId} not found`);
+    return;
+  }
+
+  // Guard: don't process twice
+  if (doc.signedFileUrl) {
+    console.log(`[finalPDF] Already processed: ${docId}`);
+    return;
+  }
 
   try {
-    // ── 1. Merge fields ───────────────────────────────────────
-    let finalBytes = await mergeSignaturesIntoPDF(doc.fileUrl, doc.fields);
+    // 1. Get fields with actual values (filter empty)
+    const fieldsWithValues = doc.fields.filter(f => {
+      const field = typeof f === 'string' ? JSON.parse(f) : f;
+      return field.value &&
+             field.value !== '[SIGNED]' &&
+             field.value.trim() !== '';
+    });
 
-    // ── 2. Append audit page ──────────────────────────────────
+    console.log(
+      `[finalPDF] Fields total: ${doc.fields.length}, ` +
+      `with values: ${fieldsWithValues.length}`
+    );
+
+    // 2. Merge signatures + text into PDF
+    console.log(`[finalPDF] Merging fields into PDF...`);
+    let finalBytes = await mergeSignaturesIntoPDF(
+      doc.fileUrl,
+      doc.fields,  // pass ALL fields, pdfService will skip empty ones
+    );
+
+    // 3. Append audit page
+    console.log(`[finalPDF] Appending audit page...`);
     finalBytes = await appendAuditPage(finalBytes, doc);
 
-    // ── 3. Upload to Cloudinary ───────────────────────────────
+    // 4. Upload to Cloudinary
+    console.log(`[finalPDF] Uploading to Cloudinary...`);
     const pdfBuffer = Buffer.from(finalBytes);
 
     const uploaded = await uploadToCloudinary(pdfBuffer, {
@@ -4535,67 +4567,82 @@ async function generateAndSendFinalPDF(docId) {
       folder:        'nexsign_signed',
       public_id:     `signed_${docId}_${Date.now()}`,
       overwrite:     true,
+      format:        'pdf',
     });
 
-    // ── 4. Persist + clean base64 blobs ──────────────────────
+    console.log(`[finalPDF] ✅ Uploaded: ${uploaded.secure_url}`);
+
+    // 5. Clean base64 from DB + save signedFileUrl
     const cleanFields = doc.fields.map(f => {
       const field = normalizeField(f);
-      // Remove heavy base64 data — already embedded in PDF
-      if (field.type === 'signature' && field.value?.startsWith('data:')) {
+      if (field.type === 'signature' &&
+          field.value?.startsWith('data:')) {
         field.value = '[SIGNED]';
       }
       return field;
     });
 
-    await Document.updateOne(
-      { _id: docId },
-      {
-        $set: {
-          signedFileUrl: uploaded.secure_url,
-          status:        'completed',
-          fields:        cleanFields,
-        },
+    await Document.findByIdAndUpdate(docId, {
+      $set: {
+        signedFileUrl: uploaded.secure_url,
+        status:        'completed',
+        fields:        cleanFields,
       },
-    );
+    });
 
-    // ── 5. Email all parties + CC with PDF attached ───────────
+    console.log(`[finalPDF] ✅ DB updated`);
+
+    // 6. Send completion emails with PDF attached
     const allRecipients = [
-      ...(doc.parties || []).map(p => ({ ...p, isCC: false })),
-      ...(doc.ccList  || []).map(c => ({ ...c, isCC: true  })),
+      ...(doc.parties || []).map(p => ({ ...p._doc || p, isCC: false })),
+      ...(doc.ccList  || []).map(c => ({ ...c._doc || c, isCC: true  })),
     ];
 
-    await Promise.allSettled(
+    console.log(
+      `[finalPDF] Sending emails to ${allRecipients.length} recipients`
+    );
+
+    const emailResults = await Promise.allSettled(
       allRecipients.map(r =>
         sendCompletionEmail({
           recipientEmail:       r.email,
-          recipientName:        r.name  || '',
+          recipientName:        r.name        || '',
           recipientDesignation: r.designation || '',
           documentTitle:        doc.title,
-          pdfBuffer,                         // ✅ attach signed PDF
+          pdfBuffer,                            // ✅ PDF attached
           signedPdfUrl:         uploaded.secure_url,
           companyLogoUrl:       doc.companyLogo,
           companyName:          doc.companyName,
           auditParties:         doc.parties,
           isCC:                 r.isCC,
-        }).catch(e => {
-          if (process.env.NODE_ENV !== 'production') {
-            console.error(`[email] completion → ${r.email}:`, e.message);
-          }
-        }),
+        })
       ),
     );
 
-    // ── 6. Audit event ────────────────────────────────────────
+    emailResults.forEach((result, i) => {
+      if (result.status === 'rejected') {
+        console.error(
+          `[finalPDF] Email failed → ${allRecipients[i]?.email}:`,
+          result.reason?.message,
+        );
+      } else {
+        console.log(
+          `[finalPDF] ✅ Email sent → ${allRecipients[i]?.email}`
+        );
+      }
+    });
+
     await logEvent(
-      docId,
-      'completed',
+      docId, 'completed',
       { name: 'System', email: 'system@nexsign.app', role: 'system' },
-      { details: 'All parties signed. Final PDF generated & emailed.' },
+      { details: `All signed. PDF: ${uploaded.secure_url}` },
     );
 
+    console.log(`[finalPDF] 🎉 Done: ${docId}`);
+
   } catch (err) {
-    console.error('[generateAndSendFinalPDF] error:', err.message);
-    throw err;
+    console.error(`[finalPDF] ❌ Error for ${docId}:`, err);
+    // Don't throw — signing already recorded
   }
 }
 
