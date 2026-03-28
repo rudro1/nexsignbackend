@@ -486,28 +486,39 @@
 // module.exports = { mergeSignaturesIntoPDF, appendAuditPage };
 'use strict';
 
-const { PDFDocument, rgb, StandardFonts, BlendMode } = require('pdf-lib');
+const { PDFDocument, rgb, StandardFonts } = require('pdf-lib');
 
 // ════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ════════════════════════════════════════════════════════════════
 const FETCH_TIMEOUT_MS  = 30_000;
-const DEFAULT_FONT      = 'Helvetica';
+const DEFAULT_FONT_KEY  = 'Helvetica';
 const DEFAULT_SIZE      = 12;
-const LINE_HEIGHT_RATIO = 1.2;
-const TEXT_PADDING      = 4;
+const LINE_HEIGHT_RATIO = 1.4;
+const TEXT_PADDING_X    = 6;
 
+/**
+ * FONT_MAP — fontFamily + fontWeight → StandardFont
+ * ✅ Only fonts pdf-lib natively supports
+ * ✅ Bold variants explicitly mapped
+ */
 const FONT_MAP = Object.freeze({
-  'Helvetica':       StandardFonts.Helvetica,
-  'Times New Roman': StandardFonts.TimesRoman,
-  'Courier':         StandardFonts.Courier,
+  'Helvetica':              StandardFonts.Helvetica,
+  'Helvetica-Bold':         StandardFonts.HelveticaBold,
+  'TimesRoman':             StandardFonts.TimesRoman,
+  'TimesRoman-Bold':        StandardFonts.TimesRomanBold,
+  'Courier':                StandardFonts.Courier,
+  'Courier-Bold':           StandardFonts.CourierBold,
+  // Legacy aliases from old documents
+  'Times New Roman':        StandardFonts.TimesRoman,
+  'Times New Roman-Bold':   StandardFonts.TimesRomanBold,
 });
 
 // ════════════════════════════════════════════════════════════════
 // HELPERS
 // ════════════════════════════════════════════════════════════════
 
-/** Hex string → pdf-lib rgb() */
+/** Hex → pdf-lib rgb() */
 function hexToRgb(hex = '#000000') {
   const h = hex.replace('#', '').padEnd(6, '0');
   return rgb(
@@ -517,31 +528,53 @@ function hexToRgb(hex = '#000000') {
   );
 }
 
-/** Fetch PDF bytes with timeout + exponential retry */
+/** Fetch PDF bytes — timeout + exponential back-off retry */
 async function fetchPdfBuffer(url, retries = 2) {
+  let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     const ctrl  = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
     try {
       const res = await fetch(url, { signal: ctrl.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status} — ${url}`);
       return await res.arrayBuffer();
     } catch (err) {
-      clearTimeout(timer);
-      if (attempt === retries) throw err;
-      const delay = 1000 * Math.pow(2, attempt); // 1s, 2s
-      console.warn(
-        `PDF fetch retry ${attempt + 1}/${retries} in ${delay}ms:`,
-        err.message,
-      );
-      await new Promise(r => setTimeout(r, delay));
+      lastErr = err;
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 1_000 * 2 ** attempt));
+      }
     } finally {
       clearTimeout(timer);
     }
   }
+  throw lastErr;
 }
 
-/** Word-wrap text to fit maxWidth */
+/** base64 data-URL → Buffer */
+function dataUrlToBuffer(dataUrl) {
+  const comma = dataUrl.indexOf(',');
+  return Buffer.from(
+    comma !== -1 ? dataUrl.slice(comma + 1) : dataUrl,
+    'base64',
+  );
+}
+
+/**
+ * Resolve correct embedded font by fontFamily + fontWeight
+ * Falls back: bold-variant → regular-variant → Helvetica
+ */
+function resolveFont(embeddedFonts, fontFamily = DEFAULT_FONT_KEY, fontWeight = 'normal') {
+  const boldKey = `${fontFamily}-Bold`;
+  const wantBold = fontWeight === 'bold';
+
+  if (wantBold && embeddedFonts[boldKey])   return embeddedFonts[boldKey];
+  if (embeddedFonts[fontFamily])             return embeddedFonts[fontFamily];
+  return embeddedFonts[DEFAULT_FONT_KEY];
+}
+
+/**
+ * Word-wrap: split text into lines ≤ maxWidth px at given fontSize
+ */
 function wrapText(text, font, fontSize, maxWidth) {
   const words = String(text).split(' ');
   const lines = [];
@@ -552,7 +585,7 @@ function wrapText(text, font, fontSize, maxWidth) {
     let   fits      = true;
     try {
       fits = font.widthOfTextAtSize(candidate, fontSize) <= maxWidth;
-    } catch { /* allow */ }
+    } catch { /* ignore measurement errors */ }
 
     if (fits) {
       line = candidate;
@@ -562,154 +595,193 @@ function wrapText(text, font, fontSize, maxWidth) {
     }
   }
   if (line) lines.push(line);
-  return lines;
+  return lines.length ? lines : [''];
 }
 
-/** base64 data-URL → Buffer */
-function dataUrlToBuffer(dataUrl) {
-  const i   = dataUrl.indexOf(',');
-  const b64 = i !== -1 ? dataUrl.slice(i + 1) : dataUrl;
-  return Buffer.from(b64, 'base64');
-}
-
-/** Normalise a raw field object */
+/**
+ * Normalise a raw field object from DB / request body.
+ *
+ * Frontend stores x / y / width / height as PERCENTAGE of page size.
+ * We keep them as pct here and convert later when we have page dimensions.
+ */
 function normaliseField(raw) {
   const f = typeof raw === 'string' ? JSON.parse(raw) : raw;
   return {
     id:         String(f.id         ?? ''),
     type:       String(f.type       ?? 'text'),
     page:       Math.max(1, Number(f.page       ?? 1)),
-    x:          Number(f.x          ?? 0),
-    y:          Number(f.y          ?? 0),
-    width:      Number(f.width      ?? 20),  // % unit
-    height:     Number(f.height     ?? 5),   // % unit
+    xPct:       Number(f.x          ?? 0),   // % of page width
+    yPct:       Number(f.y          ?? 0),   // % of page height (from TOP)
+    wPct:       Number(f.width      ?? 20),  // % of page width
+    hPct:       Number(f.height     ?? 5),   // % of page height
     partyIndex: Number(f.partyIndex ?? 0),
     value:      String(f.value      ?? ''),
-    fontFamily: String(f.fontFamily ?? DEFAULT_FONT),
+    fontFamily: String(f.fontFamily ?? DEFAULT_FONT_KEY),
     fontSize:   Number(f.fontSize   ?? DEFAULT_SIZE),
+    fontWeight: String(f.fontWeight ?? 'normal'),
   };
 }
 
 // ════════════════════════════════════════════════════════════════
-// CORE: Merge signed fields into PDF
+// CORE — Merge signed fields into original PDF
 // ════════════════════════════════════════════════════════════════
+
+/**
+ * COORDINATE SYSTEM NOTE
+ * ──────────────────────
+ * Browser (frontend):
+ *   • Origin = TOP-LEFT corner of the page
+ *   • Y increases DOWNWARD
+ *   • field.y = distance from the TOP of the page to the TOP of the field
+ *
+ * pdf-lib:
+ *   • Origin = BOTTOM-LEFT corner of the page
+ *   • Y increases UPWARD
+ *
+ * Conversion:
+ *   absY (from top)  = (yPct / 100) * PH
+ *   absH             = (hPct / 100) * PH
+ *   pdfBoxY          = PH - absY - absH   ← bottom-left Y in pdf-lib coords
+ *
+ * This places the drawn box exactly where the frontend field box is.
+ */
 async function mergeSignaturesIntoPDF(fileUrl, rawFields) {
   const buffer = await fetchPdfBuffer(fileUrl);
-  const pdfDoc = await PDFDocument.load(buffer, {
-    ignoreEncryption: true,
-  });
-  const pages = pdfDoc.getPages();
+  const pdfDoc = await PDFDocument.load(buffer, { ignoreEncryption: true });
+  const pages  = pdfDoc.getPages();
 
-  // Pre-embed all fonts once — avoids repeated embed calls
-  const fonts = {};
+  // ── Embed all fonts once ───────────────────────────────────────
+  const embeddedFonts = {};
   await Promise.all(
-    Object.entries(FONT_MAP).map(async ([name, std]) => {
-      fonts[name] = await pdfDoc.embedFont(std);
+    Object.entries(FONT_MAP).map(async ([key, stdFont]) => {
+      try {
+        embeddedFonts[key] = await pdfDoc.embedFont(stdFont);
+      } catch { /* skip unsupported */ }
     }),
   );
 
-  const fields = (rawFields || []).map(normaliseField);
+  const fields = (rawFields ?? []).map(normaliseField);
 
   for (const field of fields) {
+    // Skip empty / placeholder values
     if (!field.value || field.value === '[SIGNED]') continue;
 
     const page = pages[field.page - 1];
-    if (!page) {
-      console.warn(`Field "${field.id}" page ${field.page} not found`);
-      continue;
-    }
+    if (!page) continue;
 
-    const { width: pW, height: pH } = page.getSize();
+    const { width: PW, height: PH } = page.getSize();
 
-    // ── % → absolute coordinates ──────────────────────────────
-    // field.x / field.y / field.width / field.height are all %
-    const fX = (field.x      / 100) * pW;
-    const fY = (field.y      / 100) * pH;
-    const fW = (field.width  / 100) * pW;
-    const fH = (field.height / 100) * pH;
+    // ── % → absolute pixels ───────────────────────────────────────
+    const absX = (field.xPct / 100) * PW;
+    const absY = (field.yPct / 100) * PH;   // distance from TOP
+    const absW = (field.wPct / 100) * PW;
+    const absH = (field.hPct / 100) * PH;
 
-    // ── Coordinate flip: browser top-left → PDF bottom-left ───
-    // In browser: y=0 is top, increases downward
-    // In PDF-lib: y=0 is bottom, increases upward
-    // field.y is distance from TOP → convert to distance from BOTTOM
-    const pdfY = pH - fY - fH;
+    // ── Flip Y axis ───────────────────────────────────────────────
+    // pdfBoxY = bottom-left Y of the field box in pdf-lib coordinates
+    const pdfBoxY = PH - absY - absH;
 
-    // ════════════════════════════════════════════════════════
-    // SIGNATURE
-    // ════════════════════════════════════════════════════════
-    if (
-      field.type === 'signature' &&
-      field.value.startsWith('data:image')
-    ) {
+    // ════════════════════════════════════════════════════════════
+    // SIGNATURE FIELD
+    // ════════════════════════════════════════════════════════════
+    if (field.type === 'signature' && field.value.startsWith('data:image')) {
       try {
-        const buf   = dataUrlToBuffer(field.value);
-        const isPng = field.value.startsWith('data:image/png');
-        const img   = isPng
-          ? await pdfDoc.embedPng(buf)
-          : await pdfDoc.embedJpg(buf);
+        const imgBuf = dataUrlToBuffer(field.value);
+        const isPng  = field.value.startsWith('data:image/png');
 
-        // Scale to fit while preserving aspect ratio
-        const dims = img.scaleToFit(fW, fH);
+        /**
+         * ✅ NO BlendMode.Multiply
+         *    BlendMode.Multiply darkens colours — causes brown/grey artefacts
+         *    on coloured PDFs and doesn't reliably remove white backgrounds.
+         *
+         * ✅ Use embedPng (preserves alpha channel natively in pdf-lib).
+         *    The signature canvas MUST be drawn with a transparent background
+         *    on the frontend (ctx.clearRect before drawing strokes).
+         *    If the canvas has a white fill, the white will appear — fix it
+         *    at the canvas level, not here.
+         *
+         * ✅ For JPEG (no alpha): drawImage with opacity:1 only.
+         */
+        const img = isPng
+          ? await pdfDoc.embedPng(imgBuf)
+          : await pdfDoc.embedJpg(imgBuf);
 
-        // Centre within the field box
-        const imgX = fX   + (fW - dims.width)  / 2;
-        const imgY = pdfY + (fH - dims.height) / 2;
+        // Scale to fit field box — preserve aspect ratio
+        const { width: iW, height: iH } = img.size();
+        const scale  = Math.min(absW / iW, absH / iH);
+        const drawW  = iW * scale;
+        const drawH  = iH * scale;
+
+        // Centre image within field box
+        const drawX = absX    + (absW - drawW) / 2;
+        const drawY = pdfBoxY + (absH - drawH) / 2;
 
         page.drawImage(img, {
-          x:         imgX,
-          y:         imgY,
-          width:     dims.width,
-          height:    dims.height,
-          opacity:   1,
-          blendMode: BlendMode.Multiply, // white bg → transparent
+          x:       drawX,
+          y:       drawY,
+          width:   drawW,
+          height:  drawH,
+          opacity: 1,
+          // ✅ No blendMode — let pdf-lib handle PNG alpha natively
         });
       } catch (err) {
-        console.error(`Signature embed [${field.id}]:`, err.message);
+        if (process.env.NODE_ENV !== 'production') {
+          console.error(`[pdfService] Signature embed error [${field.id}]:`, err.message);
+        }
       }
-      continue;
+      continue; // done with this field
     }
 
-    // ════════════════════════════════════════════════════════
-    // TEXT
-    // ════════════════════════════════════════════════════════
-    if (field.type === 'text' && field.value) {
+    // ════════════════════════════════════════════════════════════
+    // TEXT FIELD
+    // ════════════════════════════════════════════════════════════
+    if (field.type === 'text' && field.value.trim()) {
       try {
-        const font     = fonts[field.fontFamily] ?? fonts[DEFAULT_FONT];
-        const fontSize = field.fontSize || DEFAULT_SIZE;
+        const font     = resolveFont(embeddedFonts, field.fontFamily, field.fontWeight);
+        const fontSize = Math.max(6, Math.min(field.fontSize, 72)); // clamp 6–72pt
         const color    = hexToRgb('#1a202c');
-        const maxW     = Math.max(fW - TEXT_PADDING, 1);
+        const maxW     = Math.max(absW - TEXT_PADDING_X * 2, 10);
 
-        const lines      = wrapText(field.value, font, fontSize, maxW);
-        const lineH      = fontSize * LINE_HEIGHT_RATIO;
-        const totalTextH = lines.length * lineH;
+        const lines  = wrapText(field.value.trim(), font, fontSize, maxW);
+        const lineH  = fontSize * LINE_HEIGHT_RATIO;
+        const blockH = lines.length * lineH;
 
-        // Centre text block vertically inside field
-        // startY = top of text block in PDF coordinates
-        const startY = pdfY + fH / 2 + totalTextH / 2 - lineH * 0.8;
+        /**
+         * Vertical centre baseline:
+         *   Centre of field box in pdf-lib Y = pdfBoxY + absH/2
+         *   We want the TEXT BLOCK centred, so:
+         *     top of block    = centre + blockH/2
+         *     first baseline  = top of block - (lineH * 0.75)
+         *                       (0.75 ≈ ascender ratio for standard fonts)
+         *
+         * ✅ NO background rectangle drawn before text
+         *    This ensures ZERO white/coloured box behind text
+         */
+        const firstBaselineY =
+          pdfBoxY + absH / 2 + blockH / 2 - lineH * 0.75;
 
         lines.forEach((ln, i) => {
-          const lineY = startY - i * lineH;
+          const lineY = firstBaselineY - i * lineH;
 
-          // Skip if outside field bounds
-          if (lineY < pdfY - lineH || lineY > pdfY + fH + lineH) return;
+          // Clamp: skip lines that fall outside field box
+          if (lineY < pdfBoxY - 2 || lineY > pdfBoxY + absH + 2) return;
 
-          // Centre text horizontally
-          let textX = fX + TEXT_PADDING / 2;
-          try {
-            const textW = font.widthOfTextAtSize(ln, fontSize);
-            if (textW < fW) textX = fX + (fW - textW) / 2;
-          } catch (_) {}
+          // Left-align with padding — looks cleaner than centring in narrow fields
+          const lineX = absX + TEXT_PADDING_X;
 
           page.drawText(ln, {
-            x:    textX,
+            x:    lineX,
             y:    lineY,
             font,
             size: fontSize,
             color,
+            // ✅ No backgroundColor, no border — pure transparent text overlay
           });
         });
       } catch (err) {
-        console.error(`Text embed [${field.id}]:`, err.message);
+        if (process.env.NODE_ENV !== 'production') {
+          console.error(`[pdfService] Text embed error [${field.id}]:`, err.message);
+        }
       }
     }
   }
@@ -718,7 +790,7 @@ async function mergeSignaturesIntoPDF(fileUrl, rawFields) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// AUDIT CERTIFICATE PAGE — Professional Design
+// AUDIT CERTIFICATE PAGE
 // ════════════════════════════════════════════════════════════════
 async function appendAuditPage(pdfBytes, doc) {
   const pdfDoc   = await PDFDocument.load(pdfBytes);
@@ -726,132 +798,110 @@ async function appendAuditPage(pdfBytes, doc) {
   const helvBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const mono     = await pdfDoc.embedFont(StandardFonts.Courier);
 
-  const page = pdfDoc.addPage([612, 792]); // US Letter
+  const page             = pdfDoc.addPage([612, 792]); // US Letter
   const { width: W, height: H } = page.getSize();
-  const M  = 48;  // left/right margin
+  const M  = 48;
   const M2 = M * 2;
   let   Y  = H - M;
 
-  // ── Colour palette ────────────────────────────────────────
+  // ── Colour palette ─────────────────────────────────────────────
   const C = {
-    brand:   rgb(0.157, 0.671, 0.875),  // #28ABDF
-    brandDk: rgb(0.118, 0.498, 0.710),  // darker brand
-    dark:    rgb(0.102, 0.125, 0.173),  // #1a2030
-    muted:   rgb(0.392, 0.455, 0.545),  // #647080
-    light:   rgb(0.945, 0.961, 0.980),  // #f1f5fa
+    brand:   rgb(0.157, 0.671, 0.875),
+    brandDk: rgb(0.118, 0.498, 0.710),
+    dark:    rgb(0.102, 0.125, 0.173),
+    muted:   rgb(0.392, 0.455, 0.545),
+    light:   rgb(0.945, 0.961, 0.980),
     altRow:  rgb(0.980, 0.988, 1.000),
-    green:   rgb(0.059, 0.600, 0.290),  // #0f9949
-    amber:   rgb(0.820, 0.459, 0.043),  // #d1750b
+    green:   rgb(0.059, 0.600, 0.290),
+    amber:   rgb(0.820, 0.459, 0.043),
     border:  rgb(0.867, 0.894, 0.929),
     white:   rgb(1.000, 1.000, 1.000),
     bgCC:    rgb(0.965, 0.980, 1.000),
     bgDisc:  rgb(0.941, 0.961, 0.996),
-    shadow:  rgb(0.870, 0.890, 0.920),
   };
 
-  // ── Drawing shortcuts ─────────────────────────────────────
+  // ── Drawing utils ──────────────────────────────────────────────
   const rect = (x, y, w, h, color) =>
     page.drawRectangle({ x, y, width: w, height: h, color });
 
-  const line = (x1, y1, x2, y2, color = C.border, thickness = 0.5) =>
-    page.drawLine({
-      start: { x: x1, y: y1 },
-      end:   { x: x2, y: y2 },
-      thickness, color,
-    });
+  const drawLine = (x1, y1, x2, y2, color = C.border, thickness = 0.5) =>
+    page.drawLine({ start: { x: x1, y: y1 }, end: { x: x2, y: y2 }, thickness, color });
 
   const hLine = (y, color = C.border, thickness = 0.5) =>
-    line(M, y, W - M, y, color, thickness);
+    drawLine(M, y, W - M, y, color, thickness);
 
   const txt = (s, x, y, {
-    font     = helv,
-    size     = 9,
-    color    = C.dark,
-    maxWidth = undefined,
+    font = helv, size = 9, color = C.dark, maxWidth = undefined,
   } = {}) => {
-    if (s == null || s === '') return;
+    if (s == null || String(s).trim() === '') return;
     const opts = { x, y, font, size, color };
     if (maxWidth !== undefined) opts.maxWidth = maxWidth;
     page.drawText(String(s), opts);
   };
 
-  // ════════════════════════════════════════════════════════
-  // HEADER — gradient-style using two rects
-  // ════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════
+  // HEADER
+  // ════════════════════════════════════════════════════════════════
   rect(0, H - 80, W, 80, C.brand);
-  rect(0, H - 80, W,  4, C.brandDk); // top accent line
+  rect(0, H - 80, W,  4, C.brandDk);
 
-  // Title
-  txt(
-    'ELECTRONIC SIGNATURE CERTIFICATE',
-    M, H - 30,
-    { font: helvBold, size: 16, color: C.white },
-  );
-  txt(
-    'Legal Audit Trail  ·  Powered by NeXsign',
-    M, H - 48,
-    { size: 8.5, color: rgb(0.80, 0.93, 1.00) },
-  );
-  txt(
-    `Generated: ${new Date().toUTCString()}`,
-    M, H - 63,
-    { font: mono, size: 7, color: rgb(0.75, 0.90, 1.00) },
-  );
+  txt('ELECTRONIC SIGNATURE CERTIFICATE', M, H - 30, {
+    font: helvBold, size: 16, color: C.white,
+  });
+  txt('Legal Audit Trail  ·  Powered by NeXsign', M, H - 48, {
+    size: 8.5, color: rgb(0.80, 0.93, 1.00),
+  });
+  txt(`Generated: ${new Date().toUTCString()}`, M, H - 63, {
+    font: mono, size: 7, color: rgb(0.75, 0.90, 1.00),
+  });
 
-  // ✅ FIX: pdf-lib drawCircle এ alpha নেই
-  // White circle badge — solid white with opacity trick via rect
-  rect(W - 94, H - 68, 46, 46, rgb(0.118, 0.498, 0.710)); // bg circle sim
-  txt('✓', W - 80, H - 40, { font: helvBold, size: 24, color: C.white });
+  // Check badge (top-right)
+  rect(W - 90, H - 66, 42, 42, rgb(0.118, 0.498, 0.710));
+  txt('✓', W - 76, H - 38, { font: helvBold, size: 22, color: C.white });
 
   Y = H - 100;
 
-  // ════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════
   // DOCUMENT INFO CARD
-  // ════════════════════════════════════════════════════════
-  const cardH = 72;
+  // ════════════════════════════════════════════════════════════════
+  const cardH = 76;
   rect(M,     Y - cardH, W - M2, cardH, C.light);
-  rect(M,     Y - cardH, 4,      cardH, C.brand);  // left accent
-  rect(M + 4, Y - cardH, W - M2 - 4, 1, C.border); // top border
+  rect(M,     Y - cardH, 4,      cardH, C.brand);
+  rect(M + 4, Y - cardH, W - M2 - 4, 0.5, C.border);
 
-  txt('DOCUMENT DETAILS', M + 14, Y - 14,
-    { font: helvBold, size: 7.5, color: C.muted });
-
+  txt('DOCUMENT DETAILS', M + 14, Y - 14, {
+    font: helvBold, size: 7.5, color: C.muted,
+  });
   txt(doc.title || 'Untitled Document', M + 14, Y - 30, {
-    font:     helvBold,
-    size:     13,
-    color:    C.dark,
-    maxWidth: W - M2 - 110,
+    font: helvBold, size: 13, color: C.dark, maxWidth: W - M2 - 110,
   });
 
-  const meta = [
+  const metaParts = [
     `ID: ${doc._id}`,
     `Status: ${(doc.status || '').toUpperCase()}`,
     doc.companyName ? `Company: ${doc.companyName}` : null,
   ].filter(Boolean).join('   ·   ');
 
-  txt(meta, M + 14, Y - 46,
-    { size: 7.5, color: C.muted, maxWidth: W - M2 - 24 });
-
+  txt(metaParts, M + 14, Y - 46, {
+    size: 7.5, color: C.muted, maxWidth: W - M2 - 24,
+  });
   txt(
-    `Created: ${doc.createdAt
-      ? new Date(doc.createdAt).toUTCString()
-      : 'N/A'}`,
-    M + 14, Y - 59,
+    `Created: ${doc.createdAt ? new Date(doc.createdAt).toUTCString() : 'N/A'}`,
+    M + 14, Y - 60,
     { size: 7.5, color: C.muted },
   );
 
-  // COMPLETED badge
-  rect(W - M - 96, Y - 34, 94, 20, C.green);
-  txt('✓  COMPLETED', W - M - 89, Y - 25,
-    { font: helvBold, size: 8.5, color: C.white });
+  rect(W - M - 98, Y - 36, 96, 22, C.green);
+  txt('✓  COMPLETED', W - M - 90, Y - 25, {
+    font: helvBold, size: 9, color: C.white,
+  });
 
-  Y -= cardH + 16;
+  Y -= cardH + 18;
 
-  // ════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════
   // SIGNING PARTIES
-  // ════════════════════════════════════════════════════════
-  txt('SIGNING PARTIES', M, Y,
-    { font: helvBold, size: 8.5, color: C.muted });
+  // ════════════════════════════════════════════════════════════════
+  txt('SIGNING PARTIES', M, Y, { font: helvBold, size: 8.5, color: C.muted });
   hLine(Y - 8, C.brand, 1.5);
   Y -= 22;
 
@@ -860,154 +910,126 @@ async function appendAuditPage(pdfBytes, doc) {
   for (let i = 0; i < parties.length; i++) {
     const p      = parties[i];
     const signed = p.status === 'signed' || !!p.signedAt;
+    const rowH   = signed ? 98 : 40;  // 5 detail rows × ~13px + header
 
-    // Rows: signed parties get more detail rows
-    const DETAIL_ROWS = 5;
-    const rowH = signed ? 38 + DETAIL_ROWS * 12 : 46;
+    if (Y - rowH < M + 90) break; // overflow guard
 
-    // ✅ Page overflow guard — stop if no room
-    if (Y - rowH < M + 80) break;
+    rect(M, Y - rowH, W - M2, rowH, i % 2 === 0 ? C.light : C.altRow);
+    rect(M, Y - rowH, 3,      rowH, signed ? C.green : C.amber);
 
-    // Alternating row backgrounds
-    rect(M, Y - rowH, W - M2, rowH,
-      i % 2 === 0 ? C.light : C.altRow);
+    // Index badge
+    rect(M + 8, Y - 24, 20, 20, signed ? C.green : C.amber);
+    txt(String(i + 1), M + (i + 1 < 10 ? 13 : 10), Y - 16, {
+      font: helvBold, size: 9, color: C.white,
+    });
 
-    // Left status bar
-    rect(M, Y - rowH, 3, rowH, signed ? C.green : C.amber);
-
-    // Number badge
-    rect(M + 8, Y - 22, 20, 20,
-      signed ? C.green : C.amber);
-    txt(String(i + 1), M + (i < 9 ? 13 : 10), Y - 16,
-      { font: helvBold, size: 9, color: C.white });
-
-    // Name + email
-    txt(p.name  || 'Unknown', M + 36, Y - 12,
-      { font: helvBold, size: 11, color: C.dark });
-    txt(p.email || '',         M + 36, Y - 25,
-      { size: 8, color: C.muted });
+    // Name + email + designation
+    txt(p.name || 'Unknown', M + 36, Y - 12, {
+      font: helvBold, size: 11, color: C.dark,
+    });
+    const subLabel = [p.email, p.designation].filter(Boolean).join('  ·  ');
+    txt(subLabel, M + 36, Y - 26, { size: 7.5, color: C.muted });
 
     // Status badge
-    rect(W - M - 80, Y - 20, 78, 17,
-      signed ? C.green : C.amber);
-    txt(
-      signed ? '✓  SIGNED' : '⏳  PENDING',
-      W - M - 74, Y - 13,
-      { font: helvBold, size: 7.5, color: C.white },
-    );
+    rect(W - M - 82, Y - 22, 80, 18, signed ? C.green : C.amber);
+    txt(signed ? '✓  SIGNED' : '⏳  PENDING', W - M - 76, Y - 14, {
+      font: helvBold, size: 7.5, color: C.white,
+    });
 
-    // ── Signed details ────────────────────────────────────
+    // Detail rows (signed only)
     if (signed) {
-      line(M + 8, Y - 32, W - M - 8, Y - 32, C.border, 0.4);
+      hLine(Y - 32, C.border, 0.4);
 
       const details = [
-        {
-          label: 'Signed At (UTC)',
-          value: p.signedAt
-            ? new Date(p.signedAt).toUTCString()
-            : 'N/A',
-        },
-        { label: 'Local Time',  value: p.clientTime || 'N/A' },
-        { label: 'IP Address',  value: p.ip         || 'N/A' },
+        { label: 'Signed At (UTC)', value: p.signedAt ? new Date(p.signedAt).toUTCString() : 'N/A' },
+        { label: 'Local Time',      value: p.clientTime || 'N/A' },
+        { label: 'IP Address',      value: p.ip          || 'N/A' },
         {
           label: 'Location',
-          value: [p.address || p.location, p.postalCode]
-                   .filter(Boolean).join(', ') || 'N/A',
+          value: [p.address || p.location, p.postalCode].filter(Boolean).join(', ') || 'N/A',
         },
         {
           label: 'Device',
-          value: p.userAgent
-            ? p.userAgent.substring(0, 76)
-            : 'N/A',
+          value: p.userAgent ? p.userAgent.substring(0, 78) : 'N/A',
         },
       ];
 
-      let detY = Y - 42;
+      let dY = Y - 44;
       for (const d of details) {
-        if (detY < Y - rowH + 4) break;
-        txt(`${d.label}:`, M + 14, detY,
-          { font: helvBold, size: 6.5, color: C.muted });
-        txt(String(d.value || 'N/A'), M + 106, detY, {
-          font:     mono,
-          size:     6.5,
-          color:    C.dark,
-          maxWidth: W - M2 - 116,
+        if (dY < Y - rowH + 4) break;
+        txt(`${d.label}:`, M + 14, dY, { font: helvBold, size: 6.5, color: C.muted });
+        txt(String(d.value), M + 112, dY, {
+          font: mono, size: 6.5, color: C.dark, maxWidth: W - M2 - 122,
         });
-        detY -= 12;
+        dY -= 13;
       }
     }
 
     Y -= rowH + 6;
   }
 
-  // ════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════
   // CC RECIPIENTS
-  // ════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════
   const cc = doc.ccList || [];
-  if (cc.length > 0 && Y > M + 100) {
-    Y -= 8;
-    txt('CC RECIPIENTS', M, Y,
-      { font: helvBold, size: 8.5, color: C.muted });
+  if (cc.length > 0 && Y > M + 110) {
+    Y -= 10;
+    txt('CC RECIPIENTS', M, Y, { font: helvBold, size: 8.5, color: C.muted });
     hLine(Y - 8);
     Y -= 20;
 
     for (const r of cc) {
-      if (Y < M + 72) break;
-      rect(M, Y - 16, W - M2, 18, C.bgCC);
-      rect(M, Y - 16, 3, 18, C.brand);
-      txt(
-        `${r.name || ''}   <${r.email || ''}>` +
-        (r.designation ? `   [${r.designation}]` : ''),
-        M + 12, Y - 7,
-        { size: 8, color: C.dark },
-      );
-      Y -= 22;
+      if (Y < M + 82) break;
+      rect(M, Y - 18, W - M2, 20, C.bgCC);
+      rect(M, Y - 18, 3,      20, C.brand);
+
+      const ccLabel = [
+        r.name        || '',
+        r.email       ? `<${r.email}>` : '',
+        r.designation ? `[${r.designation}]` : '',
+      ].filter(Boolean).join('   ');
+
+      txt(ccLabel, M + 12, Y - 7, { size: 8, color: C.dark });
+      Y -= 24;
     }
   }
 
-  // ════════════════════════════════════════════════════════
-  // LEGAL DISCLAIMER
-  // ════════════════════════════════════════════════════════
-  // Always anchored near bottom — above footer
-  const discY = M + 50;
-  rect(M,     discY - 10, W - M2, 50, C.bgDisc);
-  rect(M,     discY - 10, 3,      50, C.brand);
-  rect(M + 3, discY + 40 - 10, W - M2 - 3, 1, C.border);
+  // ════════════════════════════════════════════════════════════════
+  // LEGAL DISCLAIMER — anchored above footer
+  // ════════════════════════════════════════════════════════════════
+  const discY = M + 52;
+  rect(M, discY - 10, W - M2, 52, C.bgDisc);
+  rect(M, discY - 10, 3,      52, C.brand);
 
-  txt('LEGAL VALIDITY', M + 14, discY + 28,
-    { font: helvBold, size: 8, color: C.brand });
+  txt('LEGAL VALIDITY', M + 14, discY + 30, {
+    font: helvBold, size: 8, color: C.brand,
+  });
   txt(
-    'This certificate is an electronically generated legal record of signature events.',
-    M + 14, discY + 15,
+    'This certificate is an electronically generated legal record of all signature events.',
+    M + 14, discY + 16,
     { size: 7.5, color: C.muted, maxWidth: W - M2 - 20 },
   );
   txt(
-    'All signature events are timestamped and legally binding under ESIGN, eIDAS, and applicable e-signature laws.',
-    M + 14, discY + 3,
+    'All events are timestamped and legally binding under ESIGN, eIDAS, and applicable e-signature laws.',
+    M + 14, discY + 4,
     { size: 7.5, color: C.muted, maxWidth: W - M2 - 20 },
   );
 
-  // ════════════════════════════════════════════════════════
+  // ════════════════════════════════════════════════════════════════
   // FOOTER
-  // ════════════════════════════════════════════════════════
-  rect(0, 0,  W, 36, C.brand);
-  rect(0, 34, W,  2, C.brandDk); // top border on footer
+  // ════════════════════════════════════════════════════════════════
+  rect(0, 0,  W, 38, C.brand);
+  rect(0, 36, W,  2, C.brandDk);
 
-  txt(
-    'NeXsign  ·  Electronic Signature Platform  ·  nexsign.app',
-    M, 22,
-    { size: 8, color: C.white },
-  );
-  txt(
-    `Certificate ID: ${doc._id}`,
-    M, 9,
-    { font: mono, size: 6.5, color: rgb(0.80, 0.93, 1.00) },
-  );
-  txt(
-    'Confidential & Legally Binding',
-    W - 200, 15,
-    { font: helvBold, size: 7.5, color: C.white },
-  );
+  txt('NeXsign  ·  Electronic Signature Platform  ·  nexsign.app', M, 23, {
+    size: 8, color: C.white,
+  });
+  txt(`Certificate ID: ${doc._id}`, M, 10, {
+    font: mono, size: 6.5, color: rgb(0.80, 0.93, 1.00),
+  });
+  txt('Confidential & Legally Binding', W - 206, 17, {
+    font: helvBold, size: 7.5, color: C.white,
+  });
 
   return pdfDoc.save();
 }

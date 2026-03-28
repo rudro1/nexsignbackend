@@ -529,7 +529,6 @@
 // next();
 // });
 // module.exports = mongoose.model('Document', documentSchema);wrokable
-
 const mongoose = require('mongoose');
 
 // ── Field sub-schema ─────────────────────────────────────────────
@@ -543,35 +542,58 @@ const fieldSchema = new mongoose.Schema({
   height:     { type: Number, default: 60 },
   partyIndex: { type: Number, default: 0 },
   value:      { type: String, default: '' },
-  // ── Typography (fixed by sender, rendered for signer) ──────────
+
+  // ── Typography ──────────────────────────────────────────────────
+  // pdf-lib supported fonts only
   fontFamily: {
     type: String,
-    enum: ['Helvetica', 'Times New Roman', 'Courier'],
+    enum: [
+      'Helvetica',
+      'Helvetica-Bold',
+      'TimesRoman',
+      'TimesRoman-Bold',
+      'Courier',
+      'Courier-Bold',
+    ],
     default: 'Helvetica',
   },
-  fontSize:   { type: Number, default: 14 },
-  isParty1Field: { type: Boolean, default: false }, // template: CEO field
+  fontSize:   { type: Number, default: 14, min: 8, max: 72 },
+  fontWeight: { type: String, enum: ['normal', 'bold'], default: 'normal' },
+
+  // ── Signature image (base64 PNG stored after signing) ──────────
+  signatureData: { type: String, default: '' },
+  signedAt:      { type: Date },
+  signedBy:      { type: String, default: '' }, // party email
+
+  isParty1Field: { type: Boolean, default: false },
 }, { _id: false });
 
 // ── Party sub-schema ─────────────────────────────────────────────
 const partySchema = new mongoose.Schema({
-  name:             { type: String, required: true, trim: true },
-  email:            { type: String, required: true, lowercase: true, trim: true },
-  color:            { type: String, default: '#0ea5e9' },
-  status:           { type: String, enum: ['pending','sent','signed'], default: 'pending' },
-  token:            { type: String, sparse: true },
-  signedAt:         { type: Date },
+  name:        { type: String, required: true, trim: true },
+  email:       { type: String, required: true, lowercase: true, trim: true },
+  designation: { type: String, default: '' }, // ✅ Added
+  color:       { type: String, default: '#0ea5e9' },
+  status:      {
+    type: String,
+    enum: ['pending', 'sent', 'viewed', 'signed', 'declined'],
+    default: 'pending',
+  },
+  token:    { type: String, sparse: true },
+  signedAt: { type: Date },
+
   // ── Audit metadata ──────────────────────────────────────────────
-  ip:               { type: String, default: '' },
-  postalCode:       { type: String, default: '' },
-  address:          { type: String, default: '' },
-  clientTime:       { type: String, default: '' },
-  userAgent:        { type: String, default: '' },
-  location:         { type: String, default: '' },
+  ip:           { type: String, default: '' },
+  postalCode:   { type: String, default: '' },
+  address:      { type: String, default: '' },
+  clientTime:   { type: String, default: '' },
+  userAgent:    { type: String, default: '' },
+  location:     { type: String, default: '' },
+
   // ── Monitoring ──────────────────────────────────────────────────
-  emailSentAt:      { type: Date },
-  linkOpenedAt:     { type: Date },
-  linkOpenCount:    { type: Number, default: 0 },
+  emailSentAt:   { type: Date },
+  linkOpenedAt:  { type: Date },
+  linkOpenCount: { type: Number, default: 0 },
 }, { _id: false });
 
 // ── CC sub-schema ────────────────────────────────────────────────
@@ -579,6 +601,19 @@ const ccSchema = new mongoose.Schema({
   name:        { type: String, default: '', trim: true },
   email:       { type: String, required: true, lowercase: true, trim: true },
   designation: { type: String, default: '' },
+}, { _id: false });
+
+// ── Audit Log sub-schema ✅ New ──────────────────────────────────
+const auditLogSchema = new mongoose.Schema({
+  event:      { type: String, required: true },
+  // e.g. 'document_created', 'invite_sent', 'document_viewed',
+  //      'document_signed', 'document_completed', 'document_declined'
+  actorName:  { type: String, default: '' },
+  actorEmail: { type: String, default: '' },
+  timestamp:  { type: Date, default: Date.now },
+  ip:         { type: String, default: '' },
+  userAgent:  { type: String, default: '' },
+  details:    { type: String, default: '' }, // extra context
 }, { _id: false });
 
 // ── Main Document Schema ─────────────────────────────────────────
@@ -594,16 +629,17 @@ const documentSchema = new mongoose.Schema({
   title:       { type: String, required: true, trim: true },
   companyLogo: { type: String, default: '' },
   companyName: { type: String, default: '' },
+  message:     { type: String, default: '' }, // ✅ optional sender message
 
   // ── Storage ──────────────────────────────────────────────────
-  fileUrl:       { type: String, required: true },
-  fileId:        { type: String, default: '' },
-  signedFileUrl: { type: String, default: '' },
+  fileUrl:       { type: String, required: true },   // original PDF
+  fileId:        { type: String, default: '' },       // Cloudinary public_id
+  signedFileUrl: { type: String, default: '' },       // final signed PDF with audit
 
   // ── Workflow ─────────────────────────────────────────────────
   status: {
     type: String,
-    enum: ['draft', 'in_progress', 'completed', 'cancelled'],
+    enum: ['draft', 'in_progress', 'completed', 'cancelled', 'declined'],
     default: 'draft',
     index: true,
   },
@@ -613,19 +649,21 @@ const documentSchema = new mongoose.Schema({
     default: 'sequential',
   },
 
-  parties:  { type: [partySchema],  default: [] },
-  ccList:   { type: [ccSchema],     default: [] },
-  fields:   { type: [fieldSchema],  default: [] },
+  parties:  { type: [partySchema],     default: [] },
+  ccList:   { type: [ccSchema],        default: [] },
+  fields:   { type: [fieldSchema],     default: [] },
+  auditLog: { type: [auditLogSchema],  default: [] }, // ✅ Added
 
   totalPages:    { type: Number, default: 1 },
   signedParties: { type: Number, default: 0 },
   totalParties:  { type: Number, default: 0 },
+  completedAt:   { type: Date },                      // ✅ Added
 
   // ── Template system ──────────────────────────────────────────
-  isTemplate:        { type: Boolean, default: false, index: true },
-  templateName:      { type: String, default: '' },
-  isParty1Signed:    { type: Boolean, default: false },
-  party1SignedPdfUrl:{ type: String, default: '' },
+  isTemplate:          { type: Boolean, default: false, index: true },
+  templateName:        { type: String, default: '' },
+  isParty1Signed:      { type: Boolean, default: false },
+  party1SignedPdfUrl:  { type: String, default: '' },
 
   // ── Template instance tracking ───────────────────────────────
   sourceTemplateId: {
@@ -636,43 +674,54 @@ const documentSchema = new mongoose.Schema({
   },
   usageCount: { type: Number, default: 0 },
 
-}, { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } });
+}, {
+  timestamps: true,
+  toJSON:   { virtuals: true },
+  toObject: { virtuals: true },
+});
 
 // ── Virtuals ─────────────────────────────────────────────────────
 documentSchema.virtual('isFullySigned').get(function () {
-  return this.parties.length > 0 && this.parties.every(p => p.status === 'signed');
+  return (
+    this.parties.length > 0 &&
+    this.parties.every((p) => p.status === 'signed')
+  );
 });
 
-// ── Pre-save: sync counters ──────────────────────────────────────
+// ── Pre-save ──────────────────────────────────────────────────────
 documentSchema.pre('save', function (next) {
   // Parse any stringified fields
   if (Array.isArray(this.fields)) {
-    this.fields = this.fields.map(f =>
+    this.fields = this.fields.map((f) =>
       typeof f === 'string' ? JSON.parse(f) : f
     );
   }
-  this.totalParties  = this.parties.length;
-  this.signedParties = this.parties.filter(p => p.status === 'signed').length;
 
-  // Auto-complete
+  // Sync counters
+  this.totalParties  = this.parties.length;
+  this.signedParties = this.parties.filter((p) => p.status === 'signed').length;
+
+  // Auto-complete when all parties signed
   if (
     this.parties.length > 0 &&
-    this.parties.every(p => p.status === 'signed') &&
+    this.parties.every((p) => p.status === 'signed') &&
     this.status === 'in_progress'
   ) {
-    this.status = 'completed';
+    this.status      = 'completed';
+    this.completedAt = new Date(); // ✅ track completion time
   }
+
   next();
 });
 
-// ── Indexes ──────────────────────────────────────────────────────
+// ── Indexes ───────────────────────────────────────────────────────
 documentSchema.index({ owner: 1, isTemplate: 1 });
 documentSchema.index({ owner: 1, status: 1 });
 documentSchema.index({ 'parties.token': 1 });
 documentSchema.index({ 'parties.email': 1 });
 documentSchema.index({ sourceTemplateId: 1, createdAt: -1 });
 documentSchema.index({ isTemplate: 1, updatedAt: -1 });
-// ── Existing indexes এর পরে এই line যোগ করুন ──
-documentSchema.index({ owner: 1, isTemplate: 1, updatedAt: -1 }); // ✅ Dashboard query fast
-documentSchema.index({ owner: 1, title: 'text' });                 // ✅ Search support
+documentSchema.index({ owner: 1, isTemplate: 1, updatedAt: -1 });
+documentSchema.index({ owner: 1, title: 'text' });
+
 module.exports = mongoose.model('Document', documentSchema);
