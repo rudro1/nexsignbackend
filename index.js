@@ -16,10 +16,10 @@ const server = http.createServer(app);
 // CORS & ORIGINS
 // ═══════════════════════════════════════════════════════════════
 const corsOptions = {
-  origin: ['https://nexsignfrontend.vercel.app', 'http://localhost:5173', 'http://localhost:3000'],
+  origin: 'https://nexsignfrontend.vercel.app',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token'],
 };
 
 app.use(cors(corsOptions));
@@ -34,7 +34,7 @@ const io = new Server(server, {
     methods: ['GET', 'POST'],
     credentials: true,
   },
-  transports: ['websocket'], // Vercel-এ এটিই সবচেয়ে স্টেবল
+  transports: ['polling', 'websocket'], // Allow both for better compatibility
 });
 
 app.set('io', io);
@@ -69,6 +69,10 @@ app.use(express.urlencoded({ limit: '15mb', extended: true }));
 // ═══════════════════════════════════════════════════════════════
 async function connectDB() {
   if (mongoose.connection.readyState === 1) return;
+  if (!process.env.MONGO_URI) {
+    console.error('💥 MONGO_URI is missing!');
+    throw new Error('Database configuration missing');
+  }
   await mongoose.connect(process.env.MONGO_URI);
 }
 
