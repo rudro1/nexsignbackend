@@ -636,21 +636,15 @@ router.get('/sign/validate/:token', async (req, res) => {
     await doc.save();
 
     // Geo — background
-    getGeoLocation(ip).then(async geo => {
-      if (!geo) return;
-      try {
-        const d = await Document.findById(doc._id);
-        if (!d) return;
-        const p = d.parties[idx];
-        if (!p) return;
-        p.city       = geo.city;
-        p.region     = geo.region;
-        p.country    = geo.country;
-        p.postalCode = geo.postalCode;
-        p.timezone   = geo.timezone;
-        await d.save();
-      } catch (_) {}
-    });
+ // ✅ Geo — এখনই নাও
+const geo = await getGeoLocation(ip);
+if (geo) {
+  party.city        = geo.city        || null;
+  party.region      = geo.region      || null;
+  party.country     = geo.country     || null;
+  party.postalCode  = geo.postalCode  || null;
+  party.timezone    = geo.timezone    || null;
+}
 
     // Audit — background
     safeAuditLog({
@@ -770,18 +764,33 @@ router.post('/sign/submit', async (req, res) => {
     }
 
     const ip        = getIP(req);
-    const ua        = req.headers['user-agent'] || '';
-    const device    = parseDevice(ua);
-    const localTime = clientTime || new Date().toUTCString();
+const ua        = req.headers['user-agent'] || '';
+const device    = parseDevice(ua);
+const localTime = clientTime || new Date().toUTCString();
 
-    party.status          = 'signed';
-    party.signedAt        = new Date();
-    party.token           = null;
-    party.ipAddress       = ip;
-    party.device          = device.device;
-    party.browser         = device.browser;
-    party.os              = device.os;
-    party.localSignedTime = localTime;
+// ✅ Geo — এখনই নাও, background এ না
+// 3s timeout আছে তাই fast
+const geo = await getGeoLocation(ip);
+
+party.status          = 'signed';
+party.signedAt        = new Date();
+party.token           = null;
+party.ipAddress       = ip;
+party.device          = device.device;
+party.browser         = device.browser;
+party.os              = device.os;
+party.localSignedTime = localTime;
+
+// ✅ Location এখনই save
+if (geo) {
+  party.city        = geo.city        || null;
+  party.region      = geo.region      || null;
+  party.country     = geo.country     || null;
+  party.postalCode  = geo.postalCode  || null;
+  party.timezone    = geo.timezone    || null;
+  party.latitude    = geo.latitude    || null;
+  party.longitude   = geo.longitude   || null;
+}
 
     // ✅ Fields merge — submitted values + preserve structure
     if (Array.isArray(fields)) {
@@ -812,37 +821,36 @@ router.post('/sign/submit', async (req, res) => {
 
       await doc.save();
 
-      // Geo + audit — background
-      getGeoLocation(ip).then(geo => {
-        safeAuditLog({
-          document_id:   doc._id,
-          document_title: doc.title,
-          action:        'signed',
-          performed_by: {
-            name:        party.name,
-            email:       party.email,
-            designation: party.designation,
-            role:        'signer',
-            party_index: idx,
-          },
-          device: {
-            device_name: device.device,
-            browser:     device.browser,
-            os:          device.os,
-          },
-          location: {
-            ip_address: ip,
-            city:       geo?.city,
-            country:    geo?.country,
-            timezone:   geo?.timezone,
-            display:    geo?.display,
-          },
-          local_time: localTime,
-          cc_list: doc.ccList.map(cc => ({
-            name: cc.name, email: cc.email, designation: cc.designation,
-          })),
-        });
-      });
+     
+    // ✅ Geo already নেওয়া হয়েছে
+safeAuditLog({
+  document_id:    doc._id,
+  document_title: doc.title,
+  action:         'signed',
+  performed_by: {
+    name:        party.name,
+    email:       party.email,
+    designation: party.designation,
+    role:        'signer',
+    party_index: idx,
+  },
+  device: {
+    device_name: device.device,
+    browser:     device.browser,
+    os:          device.os,
+  },
+  location: {
+    ip_address: ip,
+    city:       geo?.city,
+    country:    geo?.country,
+    timezone:   geo?.timezone,
+    display:    geo?.display,
+  },
+  local_time: localTime,
+  cc_list: doc.ccList.map(cc => ({
+    name: cc.name, email: cc.email, designation: cc.designation,
+  })),
+});
 
       const nextParty = doc.parties[nextIdx];
       await sendSigningEmail({
