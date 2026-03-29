@@ -15,14 +15,42 @@ const server = http.createServer(app);
 // ═══════════════════════════════════════════════════════════════
 // CORS & ORIGINS
 // ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+// CORS (Vercel Optimized)
+// ════════════════════════════════════════════════════════════════
+const allowedOrigins = [
+  'https://nexsignfrontend.vercel.app',
+  'http://localhost:5173',
+  'http://localhost:3000',
+];
+
 const corsOptions = {
-  origin: 'https://nexsignfrontend.vercel.app',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn(`[CORS] Rejected origin: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token'],
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With', 
+    'Accept', 
+    'X-CSRF-Token',
+    'X-Api-Version'
+  ],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400, // 24 hours
 };
 
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Enable pre-flight for all routes
 app.options('*', cors(corsOptions));
 
 // ═══════════════════════════════════════════════════════════════
@@ -79,6 +107,13 @@ async function connectDB() {
 app.use(async (req, res, next) => {
   await connectDB();
   next();
+});
+
+// ════════════════════════════════════════════════════════════════
+// DUMMY ROUTE FOR SOCKET.IO (Vercel Compatibility)
+// ════════════════════════════════════════════════════════════════
+app.all('/socket.io*', (req, res) => {
+  res.status(204).end();
 });
 
 // ═══════════════════════════════════════════════════════════════
