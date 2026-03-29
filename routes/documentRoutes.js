@@ -2491,32 +2491,86 @@ async function _finalizeDocument(req, doc) {
   try {
     console.log(`[finalize] Starting: ${doc._id}`);
 
-    const mergedBytes = await mergeSignaturesIntoPDF(doc.fileUrl, doc.fields);
-    const finalBuffer = await appendAuditPage(mergedBytes, doc);
+    // ✅ Fresh doc load
+    const freshDoc = await Document.findById(doc._id);
+    if (!freshDoc) {
+      console.error('[finalize] Document not found:', doc._id);
+      return;
+    }
 
-    const uploaded = await uploadToCloudinary(finalBuffer, {
-      resource_type: 'raw',
-      folder:        'nexsign/completed',
-      public_id:     `signed_${doc._id}_${Date.now()}`,
-      format:        'pdf',
+    // ✅ Already finalized check
+    if (freshDoc.signedFileUrl) {
+      console.log(`[finalize] Already done: ${doc._id}`);
+      return;
+    }
+
+    // ✅ Step 1: PDF fetch + merge
+    // fetchPdfBytes এ 55s timeout আছে — কিন্তু Vercel 60s এ kill করে
+    // তাই আলাদা timeout দাও
+    console.log(`[finalize] Step 1: Merging signatures...`);
+    const mergedBytes = await Promise.race([
+      mergeSignaturesIntoPDF(freshDoc.fileUrl, freshDoc.fields),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('mergeSignaturesIntoPDF timeout')), 25_000)
+      ),
+    ]);
+    console.log(`[finalize] Step 1 done`);
+
+    // ✅ Step 2: Audit page
+    console.log(`[finalize] Step 2: Appending audit page...`);
+    let finalBuffer;
+    try {
+      finalBuffer = await Promise.race([
+        appendAuditPage(mergedBytes, freshDoc),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('appendAuditPage timeout')), 10_000)
+        ),
+      ]);
+    } catch (auditErr) {
+      console.error('[finalize] Audit page failed, using merged only:', auditErr.message);
+      finalBuffer = Buffer.from(mergedBytes);
+    }
+    console.log(`[finalize] Step 2 done, size: ${finalBuffer.length}`);
+
+    // ✅ Step 3: Upload to Cloudinary
+    console.log(`[finalize] Step 3: Uploading to Cloudinary...`);
+    const uploaded = await Promise.race([
+      uploadToCloudinary(finalBuffer, {
+        resource_type: 'raw',
+        folder:        'nexsign/completed',
+        public_id:     `signed_${freshDoc._id}_${Date.now()}`,
+        format:        'pdf',
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Cloudinary upload timeout')), 20_000)
+      ),
+    ]);
+    console.log(`[finalize] Step 3 done: ${uploaded.secure_url}`);
+
+    // ✅ Step 4: Save URL — এটা সবার আগে save করো
+    // Email fail হলেও URL save থাকবে
+    freshDoc.signedFileUrl = uploaded.secure_url;
+    await freshDoc.save();
+    console.log(`[finalize] signedFileUrl saved to DB`);
+
+    // ✅ Socket emit — dashboard update হবে
+    emitSocket(req, 'document:finalized', {
+      documentId:   String(freshDoc._id),
+      ownerId:      String(freshDoc.owner),
+      signedPdfUrl: uploaded.secure_url,
     });
 
-    doc.signedFileUrl = uploaded.secure_url;
-    await doc.save();
-    console.log(`[finalize] Signed PDF uploaded: ${uploaded.secure_url}`);
-
-    // ✅ FIX: auditInfo তে সব location fields সঠিকভাবে দেওয়া হচ্ছে
-    const partiesWithAudit = doc.parties.map(p => ({
+    // ✅ Step 5: Build audit info
+    const partiesWithAudit = freshDoc.parties.map(p => ({
       name:        p.name,
       email:       p.email,
       designation: p.designation,
       status:      p.status,
       signedAt:    p.signedAt,
       auditInfo: {
-        device:   p.device   || null,
-        browser:  p.browser  || null,
-        os:       p.os       || null,
-        // ✅ FIX: city + region + country সব দিয়ে location বানাও
+        device:   p.device        || null,
+        browser:  p.browser       || null,
+        os:       p.os            || null,
         location: [p.city, p.region, p.country]
           .filter(Boolean).join(', ') || null,
         postal:   p.postalCode      || null,
@@ -2525,59 +2579,66 @@ async function _finalizeDocument(req, doc) {
       },
     }));
 
-    await Promise.allSettled([
-      ...doc.parties.map(party =>
-        sendCompletionEmail({
-          recipientEmail:       party.email,
-          recipientName:        party.name,
-          recipientDesignation: party.designation,
-          documentTitle:        doc.title,
-          pdfBuffer:            finalBuffer,
-          signedPdfUrl:         uploaded.secure_url,
-          companyLogoUrl:       doc.companyLogo,
-          companyName:          doc.companyName,
-          parties:              partiesWithAudit,
-          ccList:               doc.ccList,
-          isCC:                 false,
-        })
-      ),
-      ...doc.ccList.map(cc =>
-        sendCompletionEmail({
-          recipientEmail:       cc.email,
-          recipientName:        cc.name,
-          recipientDesignation: cc.designation,
-          documentTitle:        doc.title,
-          pdfBuffer:            finalBuffer,
-          signedPdfUrl:         uploaded.secure_url,
-          companyLogoUrl:       doc.companyLogo,
-          companyName:          doc.companyName,
-          parties:              partiesWithAudit,
-          ccList:               doc.ccList,
-          isCC:                 true,
-        })
-      ),
-    ]);
+    // ✅ Step 6: Emails — parallel but don't block
+    console.log(`[finalize] Step 4: Sending emails...`);
+    const emailTargets = [
+      ...freshDoc.parties.map(p => ({
+        recipientEmail:       p.email,
+        recipientName:        p.name,
+        recipientDesignation: p.designation,
+        isCC:                 false,
+      })),
+      ...freshDoc.ccList.map(cc => ({
+        recipientEmail:       cc.email,
+        recipientName:        cc.name,
+        recipientDesignation: cc.designation,
+        isCC:                 true,
+      })),
+    ];
 
+    const emailResults = await Promise.allSettled(
+      emailTargets.map(t =>
+        sendCompletionEmail({
+          recipientEmail:       t.recipientEmail,
+          recipientName:        t.recipientName,
+          recipientDesignation: t.recipientDesignation,
+          documentTitle:        freshDoc.title,
+          pdfBuffer:            finalBuffer,
+          signedPdfUrl:         uploaded.secure_url,
+          companyLogoUrl:       freshDoc.companyLogo,
+          companyName:          freshDoc.companyName,
+          parties:              partiesWithAudit,
+          ccList:               freshDoc.ccList,
+          isCC:                 t.isCC,
+        })
+      )
+    );
+
+    emailResults.forEach((r, i) => {
+      if (r.status === 'fulfilled') {
+        console.log(`[finalize] Email OK: ${emailTargets[i].recipientEmail}`);
+      } else {
+        console.error(`[finalize] Email FAIL: ${emailTargets[i].recipientEmail}`, r.reason?.message);
+      }
+    });
+
+    // ✅ Audit log
     safeAuditLog({
-      document_id:    doc._id,
-      document_title: doc.title,
+      document_id:    freshDoc._id,
+      document_title: freshDoc.title,
       action:         'completed',
       performed_by:   { name: 'System', role: 'system' },
       details: {
         signed_pdf_url: uploaded.secure_url,
-        total_signers:  doc.parties.length,
+        total_signers:  freshDoc.parties.length,
+        emails_sent:    emailResults.filter(r => r.status === 'fulfilled').length,
       },
     });
 
-    emitSocket(req, 'document:finalized', {
-      documentId:   String(doc._id),
-      ownerId:      String(doc.owner),
-      signedPdfUrl: uploaded.secure_url,
-    });
+    console.log(`[finalize] All done: ${freshDoc._id}`);
 
-    console.log(`[finalize] Done: ${doc._id}`);
   } catch (err) {
-    console.error('[_finalizeDocument]', err.message);
+    console.error('[_finalizeDocument] FATAL:', err.message);
   }
 }
 
