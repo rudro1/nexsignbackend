@@ -18,25 +18,10 @@ const server = http.createServer(app);
 // ════════════════════════════════════════════════════════════════
 // CORS (Vercel Optimized)
 // ════════════════════════════════════════════════════════════════
-const allowedOrigins = [
-  'https://nexsignfrontend.vercel.app',
-  'http://localhost:5173',
-  'http://localhost:3000',
-];
-
 const corsOptions = {
-  origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl)
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      console.warn(`[CORS] Rejected origin: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
+  origin:      'https://nexsignfrontend.vercel.app',
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  methods:     ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
     'Content-Type', 
     'Authorization', 
@@ -46,23 +31,18 @@ const corsOptions = {
     'X-Api-Version'
   ],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  maxAge: 86400, // 24 hours
+  maxAge: 86400,
 };
 
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions)); // Enable pre-flight for all routes
 app.options('*', cors(corsOptions));
 
 // ═══════════════════════════════════════════════════════════════
 // SOCKET.IO (Vercel Optimized)
 // ═══════════════════════════════════════════════════════════════
 const io = new Server(server, {
-  cors: {
-    origin: 'https://nexsignfrontend.vercel.app',
-    methods: ['GET', 'POST'],
-    credentials: true,
-  },
-  transports: ['polling', 'websocket'], // Allow both for better compatibility
+  cors: corsOptions,
+  transports: ['polling', 'websocket'],
 });
 
 app.set('io', io);
@@ -70,6 +50,13 @@ app.set('io', io);
 io.on('connection', (socket) => {
   socket.on('join:document', (docId) => socket.join(`doc:${docId}`));
   socket.on('join:owner', (ownerId) => socket.join(`owner:${ownerId}`));
+});
+
+// ════════════════════════════════════════════════════════════════
+// DUMMY ROUTE FOR SOCKET.IO (Vercel Compatibility)
+// ════════════════════════════════════════════════════════════════
+app.all('/socket.io*', (req, res) => {
+  res.status(200).json({ success: true, message: 'Socket.io placeholder' });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -84,6 +71,10 @@ app.use(helmet({
 }));
 
 app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin === 'https://nexsignfrontend.vercel.app') {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   next();
@@ -109,12 +100,7 @@ app.use(async (req, res, next) => {
   next();
 });
 
-// ════════════════════════════════════════════════════════════════
-// DUMMY ROUTE FOR SOCKET.IO (Vercel Compatibility)
-// ════════════════════════════════════════════════════════════════
-app.all('/socket.io*', (req, res) => {
-  res.status(204).end();
-});
+
 
 // ═══════════════════════════════════════════════════════════════
 // ROUTES

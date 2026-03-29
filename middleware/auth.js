@@ -66,7 +66,7 @@ const auth = async (req, res, next) => {
       });
     }
 
-    if (!user.is_active) {
+    if (user.is_active === false) {
       console.warn(`[auth] Blocked inactive user: ${user.email}`);
       return res.status(403).json({
         success: false,
