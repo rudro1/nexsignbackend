@@ -896,23 +896,66 @@ router.post('/sign/submit', async (req, res) => {
         console.error('[finalize]', e.message)
       );
 
-      return res.json({
-        success: true, completed: true,
-        message: 'Document signed and completed!',
-        signerInfo: {
-          name:     party.name,
-          device:   device.device,
-          location: 'Processing...',
-          time:     localTime,
-        },
-      });
+     return res.json({
+  success:   true,
+  completed: true,
+  message:   'Document signed and completed!',
+  document:  { _id: String(doc._id) },  // ← এটা add করো
+  signerInfo: {
+    name:     party.name,
+    device:   device.device,
+    location: 'Processing...',
+    time:     localTime,
+  },
+});
     }
   } catch (err) {
     console.error('[POST /sign/submit]', err.message);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
+// ── 7b. FINALIZE DOCUMENT ───────────────────────────────────────
+// Frontend থেকে call হবে — all parties signed হলে
+router.post('/sign/finalize/:docId', async (req, res) => {
+  try {
+    const { docId } = req.params;
 
+    const doc = await Document.findById(docId);
+    if (!doc) {
+      return res.status(404).json({
+        success: false, message: 'Document not found.',
+      });
+    }
+
+    // Already finalized
+    if (doc.signedFileUrl) {
+      return res.json({
+        success:      true,
+        alreadyDone:  true,
+        signedPdfUrl: doc.signedFileUrl,
+      });
+    }
+
+    // Not completed yet
+    if (doc.status !== 'completed') {
+      return res.status(400).json({
+        success: false, message: 'Document is not completed yet.',
+      });
+    }
+
+    // ✅ Respond immediately — frontend কে wait করাবো না
+    res.json({ success: true, message: 'Finalization started.' });
+
+    // ✅ Background এ finalize — response পাঠানোর পর
+    _finalizeDocument(req, doc).catch(e =>
+      console.error('[finalize endpoint]', e.message)
+    );
+
+  } catch (err) {
+    console.error('[POST /sign/finalize/:docId]', err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
 // ══════════════════════════════════════════════════════════════
 // GENERIC /:id ROUTES
 // ══════════════════════════════════════════════════════════════
