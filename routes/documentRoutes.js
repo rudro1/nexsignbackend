@@ -332,51 +332,82 @@ router.post('/sign/submit', async (req, res) => {
       doc.completedAt = new Date();
       await doc.save();
 
-      // Generate final PDF in background
-      (async () => {
+      // IMPORTANT: Run merging and finalization IMMEDIATELY to ensure success before response if possible, 
+      // but Vercel limits mean we should use a separate async handler. 
+      // We'll process it and update the doc.
+      
+      const finalizeDocument = async () => {
         try {
+          console.log(`📑 Finalizing document: ${doc._id}`);
+          
+          // 1. Merge signatures and text into PDF
           const mergedPdfBytes = await mergeSignaturesIntoPDF(doc.fileUrl, doc.fields);
-          const finalPdfBytes  = await appendAuditPage(mergedPdfBytes, doc);
+          
+          // 2. Append Audit Log page
+          const finalPdfBuffer = await appendAuditPage(mergedPdfBytes, doc);
 
-          // Upload final to Cloudinary
+          // 3. Upload final signed PDF to Cloudinary
           const uploadRes = await new Promise((resolve, reject) => {
             const stream = cloudinary.uploader.upload_stream(
-              { resource_type: 'raw', folder: 'nexsign/completed' },
+              { 
+                resource_type: 'raw', 
+                folder: 'nexsign/completed',
+                public_id: `signed_${doc._id}_${Date.now()}`,
+                format: 'pdf'
+              },
               (err, res) => err ? reject(err) : resolve(res)
             );
-            stream.end(Buffer.from(finalPdfBytes));
+            stream.end(finalPdfBuffer);
           });
 
+          console.log(`✅ Final PDF uploaded: ${uploadRes.secure_url}`);
+
+          // 4. Update document with the signed URL
           doc.signedFileUrl = uploadRes.secure_url;
           await doc.save();
 
-          // Send to all signers
+          // 5. Send Completion Emails to ALL parties with the PDF attached
           for (const party of doc.parties) {
-            await sendCompletionEmail({
-              recipientEmail: party.email,
-              recipientName:  party.name,
-              documentTitle:  doc.title,
-              signedPdfUrl:   doc.signedFileUrl,
-              companyLogoUrl: doc.companyLogo,
-              companyName:    doc.companyName,
-            });
+            try {
+              await sendCompletionEmail({
+                recipientEmail: party.email,
+                recipientName:  party.name,
+                documentTitle:  doc.title,
+                pdfBuffer:      finalPdfBuffer, // ATTACH THE ACTUAL PDF
+                signedPdfUrl:   uploadRes.secure_url,
+                companyLogoUrl: doc.companyLogo,
+                companyName:    doc.companyName,
+              });
+              console.log(`📧 Completion email sent to signer: ${party.email}`);
+            } catch (e) {
+              console.error(`❌ Failed to send completion email to ${party.email}:`, e.message);
+            }
           }
 
-          // Send to CC list
+          // 6. Send to CC list
           for (const cc of doc.ccList) {
-            await sendCCEmail({
-              recipientEmail: cc.email,
-              recipientName:  cc.name,
-              documentTitle:  doc.title,
-              senderName:     'Admin',
-              companyLogoUrl: doc.companyLogo,
-              companyName:    doc.companyName,
-            });
+            try {
+              await sendCompletionEmail({
+                recipientEmail: cc.email,
+                recipientName:  cc.name,
+                documentTitle:  doc.title,
+                pdfBuffer:      finalPdfBuffer,
+                signedPdfUrl:   uploadRes.secure_url,
+                companyLogoUrl: doc.companyLogo,
+                companyName:    doc.companyName,
+              });
+              console.log(`📧 Completion email sent to CC: ${cc.email}`);
+            } catch (e) {
+              console.error(`❌ Failed to send CC completion email to ${cc.email}:`, e.message);
+            }
           }
         } catch (err) {
-          console.error('Finalization Error:', err.message);
+          console.error('💥 Document Finalization Error:', err);
         }
-      })();
+      };
+
+      // Execute finalization
+      finalizeDocument();
 
       res.json({ success: true, completed: true });
     }
