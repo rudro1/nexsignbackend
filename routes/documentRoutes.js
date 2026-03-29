@@ -23,7 +23,7 @@ const {
 } = require('../utils/pdfService');
 
 // ═══════════════════════════════════════════════════════════════
-// CLOUDINARY CONFIG
+// CLOUDINARY
 // ═══════════════════════════════════════════════════════════════
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -32,32 +32,26 @@ cloudinary.config({
 });
 
 // ═══════════════════════════════════════════════════════════════
-// MULTER — PDF only (documents)
+// MULTER — PDF only
 // ═══════════════════════════════════════════════════════════════
 const pdfUpload = multer({
   storage: multer.memoryStorage(),
-  limits:  { fileSize: 15 * 1024 * 1024 }, // 15 MB
+  limits:  { fileSize: 15 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype === 'application/pdf') {
-      cb(null, true);
-    } else {
-      cb(new Error('Only PDF files are allowed'), false);
-    }
+    if (file.mimetype === 'application/pdf') cb(null, true);
+    else cb(new Error('Only PDF files are allowed'), false);
   },
 });
 
 // ═══════════════════════════════════════════════════════════════
-// MULTER — Image only (logos)   ← FIXED: আলাদা instance
+// MULTER — Image only (logos)
 // ═══════════════════════════════════════════════════════════════
 const logoUpload = multer({
   storage: multer.memoryStorage(),
-  limits:  { fileSize: 5 * 1024 * 1024 }, // 5 MB
+  limits:  { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed for logo'), false);
-    }
+    if (file.mimetype.startsWith('image/')) cb(null, true);
+    else cb(new Error('Only image files are allowed'), false);
   },
 });
 
@@ -69,7 +63,7 @@ function handleMulterError(err, req, res, next) {
     if (err.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({
         success: false,
-        message: 'File too large. Max size: 15MB for PDF, 5MB for logo.',
+        message: 'File too large. Max: 15MB for PDF, 5MB for logo.',
       });
     }
     return res.status(400).json({ success: false, message: err.message });
@@ -107,10 +101,8 @@ function getIP(req) {
 }
 
 function parseDevice(ua = '') {
-  let device     = 'Unknown Device';
-  let browser    = 'Unknown Browser';
-  let os         = 'Unknown OS';
-  let deviceType = 'desktop';
+  let device = 'Unknown Device', browser = 'Unknown Browser',
+      os = 'Unknown OS', deviceType = 'desktop';
 
   if (/iPhone/.test(ua)) {
     const m = ua.match(/iPhone\s?OS\s?([\d_]+)/i);
@@ -128,8 +120,8 @@ function parseDevice(ua = '') {
   } else if (/Windows/.test(ua)) {
     device = 'Windows PC';
     const ver = ua.match(/Windows NT ([\d.]+)/)?.[1];
-    const winMap = { '10.0': '10/11', '6.3': '8.1', '6.2': '8', '6.1': '7' };
-    os = `Windows ${winMap[ver] || ver || ''}`.trim();
+    const wm  = { '10.0': '10/11', '6.3': '8.1', '6.2': '8', '6.1': '7' };
+    os = `Windows ${wm[ver] || ver || ''}`.trim();
   } else if (/Macintosh|Mac OS X/.test(ua)) {
     device = 'Mac';
     const ver = ua.match(/Mac OS X ([\d_]+)/)?.[1];
@@ -147,22 +139,19 @@ function parseDevice(ua = '') {
   return { device, browser, os, deviceType, raw: ua };
 }
 
+// Geo — non-blocking, fast timeout
 async function getGeoLocation(ip) {
   try {
-    if (
-      !ip || ip === 'Unknown' ||
-      ip.startsWith('127.') || ip.startsWith('::')
-    ) {
+    if (!ip || ip === 'Unknown' || ip.startsWith('127.') || ip.startsWith('::')) {
       return {
         city: 'Local', region: 'Local', country: 'Local',
         countryCode: 'XX', postalCode: '0000',
         timezone: 'Asia/Dhaka', display: 'Local Development',
       };
     }
-    const res = await fetch(
-      `http://ip-api.com/json/${ip}?fields=status,city,regionName,` +
-      `country,countryCode,zip,timezone,lat,lon,isp`,
-      { signal: AbortSignal.timeout(5000) },
+    const res  = await fetch(
+      `http://ip-api.com/json/${ip}?fields=status,city,regionName,country,countryCode,zip,timezone,lat,lon`,
+      { signal: AbortSignal.timeout(3000) }, // 3s max
     );
     const data = await res.json();
     if (data.status !== 'success') return null;
@@ -175,7 +164,6 @@ async function getGeoLocation(ip) {
       timezone:    data.timezone    || null,
       latitude:    String(data.lat  || ''),
       longitude:   String(data.lon  || ''),
-      isp:         data.isp         || null,
       display: [data.city, data.countryCode, data.zip]
         .filter(Boolean).join(', '),
     };
@@ -203,22 +191,19 @@ function emitSocket(req, event, data) {
   } catch (_) {}
 }
 
-// Safe AuditLog — never crashes main flow
 async function safeAuditLog(payload) {
-  try {
-    await AuditLog.createLog(payload);
-  } catch (e) {
-    console.error('[AuditLog]', e.message);
-  }
+  try { await AuditLog.createLog(payload); }
+  catch (e) { console.error('[AuditLog]', e.message); }
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 1. GET ALL DOCUMENTS
+// ✅ ROUTE ORDER MATTERS — specific আগে, generic পরে
 // ═══════════════════════════════════════════════════════════════
+
+// ── 1. GET ALL DOCUMENTS ────────────────────────────────────────
 router.get('/', auth, async (req, res) => {
   try {
     const { status, page = 1, limit = 20 } = req.query;
-
     const query = { owner: req.user.id, isTemplate: false };
     if (status) query.status = status;
 
@@ -244,9 +229,8 @@ router.get('/', auth, async (req, res) => {
       success: true,
       documents,
       pagination: {
-        total,
-        page:       Number(page),
-        limit:      Number(limit),
+        total, page: Number(page),
+        limit: Number(limit),
         totalPages: Math.ceil(total / Number(limit)),
       },
       stats: {
@@ -262,31 +246,26 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════
-// 2. UPLOAD PDF & CREATE DRAFT
-// ═══════════════════════════════════════════════════════════════
+// ── 2. UPLOAD PDF ───────────────────────────────────────────────
 router.post(
   '/upload',
   auth,
   (req, res, next) =>
-    pdfUpload.single('file')(req, res, (err) =>
+    pdfUpload.single('file')(req, res, err =>
       handleMulterError(err, req, res, next)
     ),
   async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({
-          success: false,
-          message: 'No PDF file uploaded.',
+          success: false, message: 'No PDF file uploaded.',
         });
       }
-
       const result = await uploadToCloudinary(req.file.buffer, {
         resource_type: 'raw',
         folder:        'nexsign/documents',
         format:        'pdf',
       });
-
       const doc = await Document.create({
         owner:    req.user.id,
         title:    req.file.originalname.replace(/\.pdf$/i, '').trim(),
@@ -296,7 +275,6 @@ router.post(
         fileSize: req.file.size,
         status:   'draft',
       });
-
       return res.status(201).json({ success: true, document: doc });
     } catch (err) {
       console.error('[POST /upload]', err.message);
@@ -305,32 +283,26 @@ router.post(
   },
 );
 
-// ═══════════════════════════════════════════════════════════════
-// 3. UPLOAD COMPANY LOGO  ← FIXED
-// ═══════════════════════════════════════════════════════════════
+// ── 3. UPLOAD LOGO ──────────────────────────────────────────────
 router.post(
   '/upload-logo',
   auth,
-  // logoUpload → image/* accept করে, PDF reject করে
   (req, res, next) =>
-    logoUpload.single('logo')(req, res, (err) =>
+    logoUpload.single('logo')(req, res, err =>
       handleMulterError(err, req, res, next)
     ),
   async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({
-          success: false,
-          message: 'No logo file uploaded.',
+          success: false, message: 'No logo file uploaded.',
         });
       }
-
       const result = await uploadToCloudinary(req.file.buffer, {
         resource_type:  'image',
         folder:         'nexsign/logos',
         transformation: [{ width: 400, crop: 'limit' }],
       });
-
       return res.json({ success: true, logoUrl: result.secure_url });
     } catch (err) {
       console.error('[POST /upload-logo]', err.message);
@@ -339,23 +311,462 @@ router.post(
   },
 );
 
-// ═══════════════════════════════════════════════════════════════
-// 4. GET SINGLE DOCUMENT
-// ═══════════════════════════════════════════════════════════════
+// ── 4. SEND FOR SIGNING ─────────────────────────────────────────
+router.post(
+  '/upload-and-send',
+  auth,
+  (req, res, next) =>
+    pdfUpload.single('file')(req, res, err => {
+      if (err && err.message === 'Only PDF files are allowed') return next();
+      if (err) return handleMulterError(err, req, res, next);
+      next();
+    }),
+  async (req, res) => {
+    try {
+      const {
+        title, parties: partiesRaw, fields: fieldsRaw,
+        ccList: ccRaw, totalPages, companyName,
+        companyLogo, message, docId,
+      } = req.body;
+
+      let parsedParties, parsedFields, parsedCC;
+      try {
+        parsedParties = JSON.parse(partiesRaw || '[]');
+        parsedFields  = JSON.parse(fieldsRaw  || '[]');
+        parsedCC      = JSON.parse(ccRaw      || '[]');
+      } catch {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid JSON in parties, fields, or ccList.',
+        });
+      }
+
+      if (!Array.isArray(parsedParties) || !parsedParties.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'At least one signer is required.',
+        });
+      }
+
+      let doc = null;
+      if (docId && !['undefined','null',''].includes(docId)) {
+        doc = await Document.findOne({ _id: docId, owner: req.user.id });
+      }
+
+      if (!doc && req.file) {
+        const result = await uploadToCloudinary(req.file.buffer, {
+          resource_type: 'raw',
+          folder:        'nexsign/documents',
+          format:        'pdf',
+        });
+        doc = new Document({
+          owner:    req.user.id,
+          fileUrl:  result.secure_url,
+          fileId:   result.public_id,
+          fileName: req.file.originalname,
+          fileSize: req.file.size,
+        });
+      }
+
+      if (!doc) {
+        return res.status(400).json({
+          success: false,
+          message: 'No document found and no PDF provided.',
+        });
+      }
+
+      const firstToken = crypto.randomBytes(32).toString('hex');
+
+      doc.title             = title?.trim() || doc.title || 'Untitled';
+      doc.companyName       = companyName || '';
+      doc.companyLogo       = companyLogo || '';
+      doc.message           = message     || '';
+      doc.totalPages        = Number(totalPages) || 1;
+      doc.fields            = parsedFields;
+      doc.ccList            = parsedCC;
+      doc.status            = 'in_progress';
+      doc.currentPartyIndex = 0;
+      doc.sentAt            = new Date();
+
+      doc.parties = parsedParties.map((p, i) => ({
+        name:           p.name?.trim(),
+        email:          p.email?.toLowerCase().trim(),
+        designation:    p.designation?.trim() || null,
+        order:          i,
+        color:          p.color || '#3B82F6',
+        status:         i === 0 ? 'sent'     : 'pending',
+        token:          i === 0 ? firstToken : null,
+        emailSentAt:    i === 0 ? new Date() : null,
+        tokenExpiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
+      }));
+
+      await doc.save();
+
+      // Audit — non-blocking
+      safeAuditLog({
+        document_id: doc._id, document_title: doc.title,
+        company_name: doc.companyName, action: 'sent',
+        performed_by: {
+          user_id: req.user._id, name: req.user.full_name,
+          email: req.user.email, designation: req.user.designation,
+          role: 'owner',
+        },
+        cc_list: parsedCC.map(cc => ({
+          name: cc.name, email: cc.email, designation: cc.designation,
+        })),
+        details: {
+          total_parties: parsedParties.length,
+          total_fields:  parsedFields.length,
+        },
+      });
+
+      // Send email
+      const first = doc.parties[0];
+      await sendSigningEmail({
+        recipientEmail:       first.email,
+        recipientName:        first.name,
+        recipientDesignation: first.designation,
+        senderName:           req.user.full_name,
+        senderDesignation:    req.user.designation,
+        documentTitle:        doc.title,
+        signingLink:          `${FRONT()}/sign/${firstToken}`,
+        companyLogoUrl:       doc.companyLogo,
+        companyName:          doc.companyName,
+        partyNumber:          1,
+        totalParties:         parsedParties.length,
+        message:              doc.message,
+        ccList:               parsedCC,
+      });
+
+      // CC emails — parallel, non-blocking
+      Promise.allSettled(
+        parsedCC.map(cc =>
+          sendCCEmail({
+            recipientEmail:       cc.email,
+            recipientName:        cc.name,
+            recipientDesignation: cc.designation,
+            documentTitle:        doc.title,
+            senderName:           req.user.full_name,
+            senderDesignation:    req.user.designation,
+            companyLogoUrl:       doc.companyLogo,
+            companyName:          doc.companyName,
+            parties:              parsedParties,
+          })
+        )
+      );
+
+      emitSocket(req, 'document:created', {
+        documentId: doc._id, ownerId: req.user.id,
+        title: doc.title, status: doc.status,
+      });
+
+      return res.json({ success: true, document: doc });
+    } catch (err) {
+      console.error('[POST /upload-and-send]', err.message);
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  },
+);
+
+// ══════════════════════════════════════════════════════════════
+// ✅ SIGN ROUTES — /:id এর আগে থাকতে হবে (CRITICAL ORDER FIX)
+// ══════════════════════════════════════════════════════════════
+
+// ── 5. VALIDATE TOKEN ───────────────────────────────────────────
+router.get('/sign/validate/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    const doc = await Document.findOne({ 'parties.token': token });
+    if (!doc) {
+      return res.status(404).json({
+        success: false,
+        code:    'INVALID_LINK',
+        message: 'This signing link is invalid or has expired.',
+      });
+    }
+
+    const idx   = doc.parties.findIndex(p => p.token === token);
+    const party = doc.parties[idx];
+
+    if (party.tokenExpiresAt && new Date() > party.tokenExpiresAt) {
+      return res.status(410).json({
+        success: false, code: 'LINK_EXPIRED',
+        message: 'This signing link has expired.',
+      });
+    }
+
+    if (party.status === 'signed') {
+      return res.status(410).json({
+        success: false, code: 'ALREADY_SIGNED',
+        message: 'This document has already been signed.',
+      });
+    }
+
+    // Device info — fast, sync
+    const ip     = getIP(req);
+    const ua     = req.headers['user-agent'] || '';
+    const device = parseDevice(ua);
+
+    // Update party immediately (don't wait for geo)
+    party.linkClickedAt  = party.linkClickedAt || new Date();
+    party.linkClickCount = (party.linkClickCount || 0) + 1;
+    party.status         = 'viewed';
+    party.ipAddress      = ip;
+    if (device.device)  party.device  = device.device;
+    if (device.browser) party.browser = device.browser;
+    if (device.os)      party.os      = device.os;
+
+    await doc.save();
+
+    // Geo — background (non-blocking)
+    getGeoLocation(ip).then(async geo => {
+      if (!geo) return;
+      try {
+        const d = await Document.findById(doc._id);
+        if (!d) return;
+        const p = d.parties[idx];
+        p.city       = geo.city;
+        p.region     = geo.region;
+        p.country    = geo.country;
+        p.postalCode = geo.postalCode;
+        p.timezone   = geo.timezone;
+        await d.save();
+      } catch (_) {}
+    });
+
+    // Audit — background
+    safeAuditLog({
+      document_id: doc._id, document_title: doc.title,
+      company_name: doc.companyName, action: 'link_clicked',
+      performed_by: {
+        name: party.name, email: party.email,
+        designation: party.designation, role: 'signer',
+        party_index: idx, party_color: party.color,
+      },
+      device: {
+        device_name: device.device, browser: device.browser,
+        os: device.os, device_type: device.deviceType, raw: ua,
+      },
+    });
+
+    emitSocket(req, 'document:party_viewed', {
+      documentId: String(doc._id), partyIndex: idx,
+      partyEmail: party.email, partyName: party.name,
+      device: device.device,
+    });
+
+    // Safe doc — hide other parties' tokens
+    const safeDoc     = doc.toObject();
+    safeDoc.parties   = safeDoc.parties.map((p, i) => ({
+      ...p,
+      token: i === idx ? p.token : undefined,
+    }));
+
+    return res.json({
+      success:  true,
+      document: safeDoc,
+      party:    { ...party.toObject(), index: idx },
+      geo:      {},
+    });
+  } catch (err) {
+    console.error('[GET /sign/validate/:token]', err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ── 6. PDF PROXY ────────────────────────────────────────────────
+router.get('/sign/:token/pdf', async (req, res) => {
+  try {
+    const doc = await Document
+      .findOne({ 'parties.token': req.params.token })
+      .select('fileUrl title')
+      .lean();
+
+    if (!doc) return res.status(404).send('Not found');
+
+    const response = await fetch(doc.fileUrl);
+    if (!response.ok) return res.status(502).send('PDF fetch failed');
+
+    const buffer = await response.arrayBuffer();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${doc.title || 'document'}.pdf"`,
+    );
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.send(Buffer.from(buffer));
+  } catch (err) {
+    console.error('[GET /sign/:token/pdf]', err.message);
+    return res.status(500).send(err.message);
+  }
+});
+
+// ── 7. SUBMIT SIGNATURE ─────────────────────────────────────────
+router.post('/sign/submit', async (req, res) => {
+  try {
+    const { token, fields, clientTime } = req.body;
+
+    if (!token || !fields) {
+      return res.status(400).json({
+        success: false, message: 'Token and fields are required.',
+      });
+    }
+
+    const doc = await Document.findOne({ 'parties.token': token });
+    if (!doc) {
+      return res.status(404).json({
+        success: false, code: 'SESSION_EXPIRED',
+        message: 'Signing session expired or invalid.',
+      });
+    }
+
+    const idx   = doc.parties.findIndex(p => p.token === token);
+    const party = doc.parties[idx];
+
+    if (party.status === 'signed') {
+      return res.status(409).json({
+        success: false, code: 'ALREADY_SIGNED', message: 'Already signed.',
+      });
+    }
+
+    // Device — fast, sync
+    const ip        = getIP(req);
+    const ua        = req.headers['user-agent'] || '';
+    const device    = parseDevice(ua);
+    const localTime = clientTime || new Date().toUTCString();
+
+    party.status          = 'signed';
+    party.signedAt        = new Date();
+    party.token           = null;
+    party.ipAddress       = ip;
+    party.device          = device.device;
+    party.browser         = device.browser;
+    party.os              = device.os;
+    party.localSignedTime = localTime;
+
+    doc.fields = fields;
+
+    const nextIdx = idx + 1;
+    const hasNext = nextIdx < doc.parties.length;
+
+    if (hasNext) {
+      const nextToken = crypto.randomBytes(32).toString('hex');
+      doc.parties[nextIdx].token          = nextToken;
+      doc.parties[nextIdx].status         = 'sent';
+      doc.parties[nextIdx].emailSentAt    = new Date();
+      doc.parties[nextIdx].tokenExpiresAt =
+        new Date(Date.now() + 72 * 60 * 60 * 1000);
+      doc.currentPartyIndex = nextIdx;
+
+      await doc.save();
+
+      // Geo + audit — background
+      getGeoLocation(ip).then(geo => {
+        if (!geo) return;
+        safeAuditLog({
+          document_id: doc._id, document_title: doc.title,
+          action: 'signed',
+          performed_by: {
+            name: party.name, email: party.email,
+            designation: party.designation,
+            role: 'signer', party_index: idx,
+          },
+          device: { device_name: device.device, browser: device.browser, os: device.os },
+          location: {
+            ip_address: ip, city: geo?.city, country: geo?.country,
+            timezone: geo?.timezone, display: geo?.display,
+          },
+          local_time: localTime,
+          cc_list: doc.ccList.map(cc => ({
+            name: cc.name, email: cc.email, designation: cc.designation,
+          })),
+        });
+      });
+
+      const nextParty = doc.parties[nextIdx];
+      await sendSigningEmail({
+        recipientEmail:       nextParty.email,
+        recipientName:        nextParty.name,
+        recipientDesignation: nextParty.designation,
+        senderName:           party.name,
+        senderDesignation:    party.designation,
+        documentTitle:        doc.title,
+        signingLink:          `${FRONT()}/sign/${nextToken}`,
+        companyLogoUrl:       doc.companyLogo,
+        companyName:          doc.companyName,
+        partyNumber:          nextIdx + 1,
+        totalParties:         doc.parties.length,
+        message:              doc.message,
+        ccList:               doc.ccList,
+      });
+
+      emitSocket(req, 'document:party_signed', {
+        documentId: String(doc._id), partyIndex: idx,
+        partyName: party.name, nextSigner: nextParty.email,
+      });
+
+      return res.json({
+        success: true, next: true,
+        message: `Document sent to next signer: ${nextParty.name}`,
+        signerInfo: {
+          name:     party.name,
+          device:   device.device,
+          location: 'Processing...',
+          time:     localTime,
+        },
+      });
+
+    } else {
+      // All signed
+      doc.status      = 'completed';
+      doc.completedAt = new Date();
+      await doc.save();
+
+      emitSocket(req, 'document:completed', {
+        documentId: String(doc._id), ownerId: String(doc.owner),
+        title: doc.title, completedAt: doc.completedAt,
+      });
+
+      // Finalize background
+      _finalizeDocument(req, doc).catch(e =>
+        console.error('[finalize]', e.message)
+      );
+
+      return res.json({
+        success: true, completed: true,
+        message: 'Document signed and completed!',
+        signerInfo: {
+          name:     party.name,
+          device:   device.device,
+          location: 'Processing...',
+          time:     localTime,
+        },
+      });
+    }
+  } catch (err) {
+    console.error('[POST /sign/submit]', err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// ✅ GENERIC /:id ROUTES — sign routes এর পরে
+// ══════════════════════════════════════════════════════════════
+
+// ── 8. GET SINGLE DOCUMENT ──────────────────────────────────────
 router.get('/:id', auth, async (req, res) => {
   try {
     const doc = await Document.findOne({
-      _id:   req.params.id,
-      owner: req.user.id,
+      _id: req.params.id, owner: req.user.id,
     }).lean();
 
     if (!doc) {
       return res.status(404).json({
-        success: false,
-        message: 'Document not found.',
+        success: false, message: 'Document not found.',
       });
     }
-
     return res.json({ success: true, document: doc });
   } catch (err) {
     console.error('[GET /documents/:id]', err.message);
@@ -363,25 +774,20 @@ router.get('/:id', auth, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════
-// 4a. AUDIT LOG
-// ═══════════════════════════════════════════════════════════════
+// ── 9. AUDIT LOG ────────────────────────────────────────────────
 router.get('/:id/audit', auth, async (req, res) => {
   try {
     const doc = await Document.findOne({
-      _id:   req.params.id,
-      owner: req.user.id,
+      _id: req.params.id, owner: req.user.id,
     }).lean();
 
     if (!doc) {
       return res.status(404).json({
-        success: false,
-        message: 'Document not found.',
+        success: false, message: 'Document not found.',
       });
     }
 
     const events = [];
-
     events.push({
       action: 'created', label: 'Document Created',
       actor: { name: 'System', role: 'system' },
@@ -391,31 +797,23 @@ router.get('/:id/audit', auth, async (req, res) => {
     for (const p of doc.parties) {
       if (p.emailSentAt) events.push({
         action: 'email_sent', label: 'Email Sent',
-        actor: { name: p.name, email: p.email, designation: p.designation },
+        actor: { name: p.name, email: p.email },
         timestamp: p.emailSentAt,
-      });
-      if (p.emailOpenedAt) events.push({
-        action: 'email_opened', label: 'Email Opened',
-        actor: { name: p.name, email: p.email, designation: p.designation },
-        timestamp: p.emailOpenedAt, device: p.device,
-        location: p.city
-          ? `${p.city}, ${p.country || ''} - ${p.postalCode || ''}`
-          : null,
       });
       if (p.linkClickedAt) events.push({
         action: 'link_clicked', label: 'Link Clicked',
-        actor: { name: p.name, email: p.email, designation: p.designation },
+        actor: { name: p.name, email: p.email },
         timestamp: p.linkClickedAt,
       });
       if (p.signedAt) events.push({
         action: 'signed', label: 'Document Signed',
         actor: { name: p.name, email: p.email, designation: p.designation },
         timestamp: p.signedAt, localTime: p.localSignedTime,
-        device: p.device, browser: p.browser,
-        os: p.os, ipAddress: p.ipAddress,
+        device: p.device, browser: p.browser, os: p.os,
+        ipAddress: p.ipAddress,
         location: {
-          city: p.city, region: p.region,
-          country: p.country, postalCode: p.postalCode,
+          city: p.city, region: p.region, country: p.country,
+          postalCode: p.postalCode,
           display: [p.city, p.country, p.postalCode]
             .filter(Boolean).join(', '),
         },
@@ -450,9 +848,7 @@ router.get('/:id/audit', auth, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════
-// 5. UPDATE DOCUMENT (Save Draft)
-// ═══════════════════════════════════════════════════════════════
+// ── 10. UPDATE DOCUMENT ─────────────────────────────────────────
 router.put('/:id', auth, async (req, res) => {
   try {
     const {
@@ -478,11 +874,9 @@ router.put('/:id', auth, async (req, res) => {
 
     if (!doc) {
       return res.status(404).json({
-        success: false,
-        message: 'Document not found.',
+        success: false, message: 'Document not found.',
       });
     }
-
     return res.json({ success: true, document: doc });
   } catch (err) {
     console.error('[PUT /documents/:id]', err.message);
@@ -490,479 +884,52 @@ router.put('/:id', auth, async (req, res) => {
   }
 });
 
-// ═══════════════════════════════════════════════════════════════
-// 6. SEND FOR SIGNING  ← FIXED: ccList + docId + multer
-// ═══════════════════════════════════════════════════════════════
-router.post(
-  '/upload-and-send',
-  auth,
-  // PDF optional — existing doc এ file নাও থাকতে পারে
-  (req, res, next) =>
-    pdfUpload.single('file')(req, res, (err) => {
-      // file না থাকলে multer error ignore
-      if (err && err.message === 'Only PDF files are allowed') {
-        return next();
-      }
-      if (err) return handleMulterError(err, req, res, next);
-      next();
-    }),
-  async (req, res) => {
-    try {
-      const {
-        title,
-        parties:    partiesRaw,
-        fields:     fieldsRaw,
-        ccList:     ccRaw,       // ← 'ccList' (frontend এর সাথে match)
-        totalPages,
-        companyName,
-        companyLogo,
-        message,
-        docId,
-      } = req.body;
-
-      // ── Parse JSON ─────────────────────────────────────────
-      let parsedParties, parsedFields, parsedCC;
-      try {
-        parsedParties = JSON.parse(partiesRaw || '[]');
-        parsedFields  = JSON.parse(fieldsRaw  || '[]');
-        parsedCC      = JSON.parse(ccRaw      || '[]');
-      } catch {
-        return res.status(400).json({
-          success: false,
-          message: 'Invalid JSON in parties, fields, or ccList.',
-        });
-      }
-
-      if (!Array.isArray(parsedParties) || parsedParties.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'At least one signer is required.',
-        });
-      }
-
-      // ── Find or create document ─────────────────────────────
-      let doc = null;
-
-      if (docId && docId !== 'undefined' && docId !== 'null' && docId !== '') {
-        doc = await Document.findOne({
-          _id:   docId,
-          owner: req.user.id,
-        });
-      }
-
-      // নতুন file আছে → Cloudinary upload + new doc
-      if (!doc && req.file) {
-        const result = await uploadToCloudinary(req.file.buffer, {
-          resource_type: 'raw',
-          folder:        'nexsign/documents',
-          format:        'pdf',
-        });
-        doc = new Document({
-          owner:    req.user.id,
-          fileUrl:  result.secure_url,
-          fileId:   result.public_id,
-          fileName: req.file.originalname,
-          fileSize: req.file.size,
-        });
-      }
-
-      if (!doc) {
-        return res.status(400).json({
-          success: false,
-          message: 'No document found and no PDF file provided.',
-        });
-      }
-
-      // ── Build parties ───────────────────────────────────────
-      const firstToken = crypto.randomBytes(32).toString('hex');
-
-      doc.title             = title?.trim() || doc.title || 'Untitled Document';
-      doc.companyName       = companyName   || '';
-      doc.companyLogo       = companyLogo   || '';
-      doc.message           = message       || '';
-      doc.totalPages        = Number(totalPages) || 1;
-      doc.fields            = parsedFields;
-      doc.ccList            = parsedCC;
-      doc.status            = 'in_progress';
-      doc.currentPartyIndex = 0;
-      doc.sentAt            = new Date();
-
-      doc.parties = parsedParties.map((p, i) => ({
-        name:           p.name?.trim(),
-        email:          p.email?.toLowerCase().trim(),
-        designation:    p.designation?.trim() || null,
-        order:          i,
-        color:          p.color || '#3B82F6',
-        status:         i === 0 ? 'sent'    : 'pending',
-        token:          i === 0 ? firstToken: null,
-        emailSentAt:    i === 0 ? new Date(): null,
-        tokenExpiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
-      }));
-
-      await doc.save();
-
-      // ── Audit log (non-blocking) ────────────────────────────
-      safeAuditLog({
-        document_id:    doc._id,
-        document_title: doc.title,
-        company_name:   doc.companyName,
-        action:         'sent',
-        performed_by: {
-          user_id:     req.user._id,
-          name:        req.user.full_name,
-          email:       req.user.email,
-          designation: req.user.designation,
-          role:        'owner',
-        },
-        cc_list: parsedCC.map(cc => ({
-          name: cc.name, email: cc.email, designation: cc.designation,
-        })),
-        details: {
-          total_parties: parsedParties.length,
-          total_fields:  parsedFields.length,
-        },
-      });
-
-      // ── Send first signer email ─────────────────────────────
-      const first = doc.parties[0];
-      await sendSigningEmail({
-        recipientEmail:       first.email,
-        recipientName:        first.name,
-        recipientDesignation: first.designation,
-        senderName:           req.user.full_name,
-        senderDesignation:    req.user.designation,
-        documentTitle:        doc.title,
-        signingLink:          `${FRONT()}/sign/${firstToken}`,
-        companyLogoUrl:       doc.companyLogo,
-        companyName:          doc.companyName,
-        partyNumber:          1,
-        totalParties:         parsedParties.length,
-        message:              doc.message,
-        ccList:               parsedCC,
-      });
-
-      // ── CC emails ───────────────────────────────────────────
-      for (const cc of parsedCC) {
-        try {
-          await sendCCEmail({
-            recipientEmail:       cc.email,
-            recipientName:        cc.name,
-            recipientDesignation: cc.designation,
-            documentTitle:        doc.title,
-            senderName:           req.user.full_name,
-            senderDesignation:    req.user.designation,
-            companyLogoUrl:       doc.companyLogo,
-            companyName:          doc.companyName,
-            parties:              parsedParties,
-          });
-        } catch (e) {
-          console.error(`[CC email] ${cc.email}:`, e.message);
-        }
-      }
-
-      emitSocket(req, 'document:created', {
-        documentId: doc._id,
-        ownerId:    req.user.id,
-        title:      doc.title,
-        status:     doc.status,
-      });
-
-      return res.json({ success: true, document: doc });
-    } catch (err) {
-      console.error('[POST /upload-and-send]', err.message);
-      return res.status(500).json({ success: false, message: err.message });
-    }
-  },
-);
-
-// ═══════════════════════════════════════════════════════════════
-// 7. VALIDATE TOKEN
-// ═══════════════════════════════════════════════════════════════
-router.get('/sign/validate/:token', async (req, res) => {
+// ── 11. DELETE DOCUMENT ─────────────────────────────────────────
+router.delete('/:id', auth, async (req, res) => {
   try {
     const doc = await Document.findOne({
-      'parties.token': req.params.token,
+      _id: req.params.id, owner: req.user.id,
     });
 
     if (!doc) {
       return res.status(404).json({
-        success: false,
-        code:    'INVALID_LINK',
-        message: 'This signing link is invalid or has expired.',
+        success: false, message: 'Document not found.',
       });
     }
 
-    const idx   = doc.parties.findIndex(p => p.token === req.params.token);
-    const party = doc.parties[idx];
-
-    if (party.tokenExpiresAt && new Date() > party.tokenExpiresAt) {
-      return res.status(410).json({
-        success: false,
-        code:    'LINK_EXPIRED',
-        message: 'This signing link has expired.',
-      });
-    }
-
-    if (party.status === 'signed') {
-      return res.status(410).json({
-        success: false,
-        code:    'ALREADY_SIGNED',
-        message: 'This document has already been signed.',
-      });
-    }
-
-    const ip     = getIP(req);
-    const ua     = req.headers['user-agent'] || '';
-    const device = parseDevice(ua);
-    const geo    = await getGeoLocation(ip);
-
-    party.linkClickedAt  = party.linkClickedAt || new Date();
-    party.linkClickCount = (party.linkClickCount || 0) + 1;
-    party.status         = 'viewed';
-    party.ipAddress      = ip;
-    if (device.device)  party.device  = device.device;
-    if (device.browser) party.browser = device.browser;
-    if (device.os)      party.os      = device.os;
-    if (geo) {
-      party.city       = geo.city;
-      party.region     = geo.region;
-      party.country    = geo.country;
-      party.postalCode = geo.postalCode;
-      party.timezone   = geo.timezone;
-    }
-
-    await doc.save();
-
-    safeAuditLog({
-      document_id:  doc._id, document_title: doc.title,
-      company_name: doc.companyName, action: 'link_clicked',
-      performed_by: {
-        name: party.name, email: party.email,
-        designation: party.designation, role: 'signer',
-        party_index: idx, party_color: party.color,
-      },
-      device: {
-        device_name: device.device, browser: device.browser,
-        os: device.os, device_type: device.deviceType, raw: ua,
-      },
-      location: {
-        ip_address: ip, city: geo?.city, region: geo?.region,
-        country: geo?.country, postal_code: geo?.postalCode,
-        timezone: geo?.timezone, display: geo?.display,
-      },
-    });
-
-    emitSocket(req, 'document:party_viewed', {
-      documentId: String(doc._id), partyIndex: idx,
-      partyEmail: party.email, partyName: party.name,
-      device: device.device, location: geo?.display,
-    });
-
-    const safeDoc     = doc.toObject();
-    safeDoc.parties   = safeDoc.parties.map((p, i) => ({
-      ...p,
-      token: i === idx ? p.token : undefined,
-    }));
-
-    return res.json({
-      success:  true,
-      document: safeDoc,
-      party:    { ...party.toObject(), index: idx },
-      geo:      geo || {},
-    });
-  } catch (err) {
-    console.error('[GET /sign/validate/:token]', err.message);
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════
-// 8. SUBMIT SIGNATURE
-// ═══════════════════════════════════════════════════════════════
-router.post('/sign/submit', async (req, res) => {
-  try {
-    const { token, fields, clientTime } = req.body;
-
-    if (!token || !fields) {
+    if (doc.status === 'in_progress') {
       return res.status(400).json({
         success: false,
-        message: 'Token and fields are required.',
+        message: 'Cannot delete a document that is currently in progress.',
       });
     }
 
-    const doc = await Document.findOne({ 'parties.token': token });
-    if (!doc) {
-      return res.status(404).json({
-        success: false,
-        code:    'SESSION_EXPIRED',
-        message: 'Signing session expired or invalid.',
-      });
-    }
+    try {
+      if (doc.fileId) {
+        await cloudinary.uploader.destroy(doc.fileId, {
+          resource_type: 'raw',
+        });
+      }
+    } catch (e) { console.error('[Cloudinary delete]', e.message); }
 
-    const idx   = doc.parties.findIndex(p => p.token === token);
-    const party = doc.parties[idx];
+    await Document.findByIdAndDelete(doc._id);
 
-    if (party.status === 'signed') {
-      return res.status(409).json({
-        success: false,
-        code:    'ALREADY_SIGNED',
-        message: 'Already signed.',
-      });
-    }
+    safeAuditLog({
+      document_id: doc._id, document_title: doc.title,
+      action: 'deleted',
+      performed_by: {
+        user_id: req.user._id, name: req.user.full_name,
+        email: req.user.email, role: 'owner',
+      },
+    });
 
-    const ip        = getIP(req);
-    const ua        = req.headers['user-agent'] || '';
-    const device    = parseDevice(ua);
-    const geo       = await getGeoLocation(ip);
-    const localTime = geo?.timezone
-      ? getLocalTime(geo.timezone)
-      : (clientTime || new Date().toUTCString());
+    emitSocket(req, 'document:deleted', {
+      documentId: String(doc._id), ownerId: req.user.id,
+    });
 
-    party.status          = 'signed';
-    party.signedAt        = new Date();
-    party.token           = null;
-    party.ipAddress       = ip;
-    party.device          = device.device;
-    party.browser         = device.browser;
-    party.os              = device.os;
-    party.localSignedTime = localTime;
-
-    if (geo) {
-      party.city       = geo.city;
-      party.region     = geo.region;
-      party.country    = geo.country;
-      party.postalCode = geo.postalCode;
-      party.timezone   = geo.timezone;
-    }
-
-    doc.fields = fields;
-
-    const nextIdx = idx + 1;
-    const hasNext = nextIdx < doc.parties.length;
-
-    if (hasNext) {
-      const nextToken = crypto.randomBytes(32).toString('hex');
-      doc.parties[nextIdx].token          = nextToken;
-      doc.parties[nextIdx].status         = 'sent';
-      doc.parties[nextIdx].emailSentAt    = new Date();
-      doc.parties[nextIdx].tokenExpiresAt =
-        new Date(Date.now() + 72 * 60 * 60 * 1000);
-      doc.currentPartyIndex = nextIdx;
-
-      await doc.save();
-
-      safeAuditLog({
-        document_id: doc._id, document_title: doc.title,
-        company_name: doc.companyName, action: 'signed',
-        performed_by: {
-          name: party.name, email: party.email,
-          designation: party.designation, role: 'signer',
-          party_index: idx, party_color: party.color,
-        },
-        device: {
-          device_name: device.device, browser: device.browser,
-          os: device.os, device_type: device.deviceType,
-        },
-        location: {
-          ip_address: ip, city: geo?.city, region: geo?.region,
-          country: geo?.country, postal_code: geo?.postalCode,
-          timezone: geo?.timezone, display: geo?.display,
-        },
-        local_time: localTime,
-        cc_list: doc.ccList.map(cc => ({
-          name: cc.name, email: cc.email, designation: cc.designation,
-        })),
-      });
-
-      const nextParty = doc.parties[nextIdx];
-      await sendSigningEmail({
-        recipientEmail:       nextParty.email,
-        recipientName:        nextParty.name,
-        recipientDesignation: nextParty.designation,
-        senderName:           party.name,
-        senderDesignation:    party.designation,
-        documentTitle:        doc.title,
-        signingLink:          `${FRONT()}/sign/${nextToken}`,
-        companyLogoUrl:       doc.companyLogo,
-        companyName:          doc.companyName,
-        partyNumber:          nextIdx + 1,
-        totalParties:         doc.parties.length,
-        message:              doc.message,
-        ccList:               doc.ccList,
-      });
-
-      emitSocket(req, 'document:party_signed', {
-        documentId: String(doc._id), partyIndex: idx,
-        partyName: party.name, partyEmail: party.email,
-        device: device.device, location: geo?.display,
-        localTime, nextSigner: nextParty.email,
-      });
-
-      return res.json({
-        success: true, next: true,
-        message: `Document sent to next signer: ${nextParty.name}`,
-        signerInfo: {
-          name:     party.name,
-          device:   device.device,
-          location: geo?.display || 'Unknown',
-          time:     localTime,
-        },
-      });
-
-    } else {
-      // ── All signed → Complete ─────────────────────────────
-      doc.status      = 'completed';
-      doc.completedAt = new Date();
-      await doc.save();
-
-      safeAuditLog({
-        document_id: doc._id, document_title: doc.title,
-        company_name: doc.companyName, action: 'signed',
-        performed_by: {
-          name: party.name, email: party.email,
-          designation: party.designation, role: 'signer',
-          party_index: idx,
-        },
-        device: {
-          device_name: device.device,
-          browser: device.browser, os: device.os,
-        },
-        location: {
-          ip_address: ip, city: geo?.city, region: geo?.region,
-          country: geo?.country, postal_code: geo?.postalCode,
-          timezone: geo?.timezone, display: geo?.display,
-        },
-        local_time: localTime,
-        cc_list: doc.ccList.map(cc => ({
-          name: cc.name, email: cc.email, designation: cc.designation,
-        })),
-      });
-
-      emitSocket(req, 'document:completed', {
-        documentId:  String(doc._id),
-        ownerId:     String(doc.owner),
-        title:       doc.title,
-        completedAt: doc.completedAt,
-      });
-
-      // Background finalize (non-blocking)
-      _finalizeDocument(req, doc).catch(e =>
-        console.error('[finalize]', e.message)
-      );
-
-      return res.json({
-        success: true, completed: true,
-        message: 'Document signed and completed!',
-        signerInfo: {
-          name:     party.name,
-          device:   device.device,
-          location: geo?.display || 'Unknown',
-          time:     localTime,
-        },
-      });
-    }
+    return res.json({ success: true, message: 'Document deleted.' });
   } catch (err) {
-    console.error('[POST /sign/submit]', err.message);
+    console.error('[DELETE /documents/:id]', err.message);
     return res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -992,66 +959,44 @@ async function _finalizeDocument(req, doc) {
       name: p.name, email: p.email, designation: p.designation,
       status: p.status, signedAt: p.signedAt,
       auditInfo: {
-        device:   p.device, browser: p.browser, os: p.os,
+        device: p.device, browser: p.browser, os: p.os,
         location: [p.city, p.country].filter(Boolean).join(', '),
-        postal:   p.postalCode, time: p.localSignedTime, ip: p.ipAddress,
+        postal: p.postalCode, time: p.localSignedTime, ip: p.ipAddress,
       },
     }));
 
-    for (const party of doc.parties) {
-      try {
-        await sendCompletionEmail({
-          recipientEmail:       party.email,
-          recipientName:        party.name,
+    // Completion emails — parallel
+    await Promise.allSettled([
+      ...doc.parties.map(party =>
+        sendCompletionEmail({
+          recipientEmail: party.email, recipientName: party.name,
           recipientDesignation: party.designation,
-          documentTitle:        doc.title,
-          pdfBuffer:            finalBuffer,
-          signedPdfUrl:         uploaded.secure_url,
-          companyLogoUrl:       doc.companyLogo,
-          companyName:          doc.companyName,
-          parties:              partiesWithAudit,
-          ccList:               doc.ccList,
-          isCC:                 false,
-        });
-      } catch (e) {
-        console.error(`[completion email] ${party.email}:`, e.message);
-      }
-    }
-
-    for (const cc of doc.ccList) {
-      try {
-        await sendCompletionEmail({
-          recipientEmail:       cc.email,
-          recipientName:        cc.name,
+          documentTitle: doc.title, pdfBuffer: finalBuffer,
+          signedPdfUrl: uploaded.secure_url,
+          companyLogoUrl: doc.companyLogo, companyName: doc.companyName,
+          parties: partiesWithAudit, ccList: doc.ccList, isCC: false,
+        })
+      ),
+      ...doc.ccList.map(cc =>
+        sendCompletionEmail({
+          recipientEmail: cc.email, recipientName: cc.name,
           recipientDesignation: cc.designation,
-          documentTitle:        doc.title,
-          pdfBuffer:            finalBuffer,
-          signedPdfUrl:         uploaded.secure_url,
-          companyLogoUrl:       doc.companyLogo,
-          companyName:          doc.companyName,
-          parties:              partiesWithAudit,
-          ccList:               doc.ccList,
-          isCC:                 true,
-        });
-      } catch (e) {
-        console.error(`[CC completion] ${cc.email}:`, e.message);
-      }
-    }
+          documentTitle: doc.title, pdfBuffer: finalBuffer,
+          signedPdfUrl: uploaded.secure_url,
+          companyLogoUrl: doc.companyLogo, companyName: doc.companyName,
+          parties: partiesWithAudit, ccList: doc.ccList, isCC: true,
+        })
+      ),
+    ]);
 
     safeAuditLog({
-      document_id:    doc._id,
-      document_title: doc.title,
-      company_name:   doc.companyName,
-      action:         'completed',
-      performed_by:   { name: 'System', role: 'system' },
+      document_id: doc._id, document_title: doc.title,
+      action: 'completed',
+      performed_by: { name: 'System', role: 'system' },
       details: {
         signed_pdf_url: uploaded.secure_url,
         total_signers:  doc.parties.length,
-        cc_count:       doc.ccList.length,
       },
-      cc_list: doc.ccList.map(cc => ({
-        name: cc.name, email: cc.email, designation: cc.designation,
-      })),
     });
 
     emitSocket(req, 'document:finalized', {
@@ -1065,97 +1010,5 @@ async function _finalizeDocument(req, doc) {
     console.error('[_finalizeDocument]', err.message);
   }
 }
-
-// ═══════════════════════════════════════════════════════════════
-// 9. PROXY PDF (CORS bypass)
-// ═══════════════════════════════════════════════════════════════
-router.get('/sign/:token/pdf', async (req, res) => {
-  try {
-    const doc = await Document
-      .findOne({ 'parties.token': req.params.token })
-      .select('fileUrl title')
-      .lean();
-
-    if (!doc) return res.status(404).send('Not found');
-
-    const response = await fetch(doc.fileUrl);
-    if (!response.ok) return res.status(502).send('PDF fetch failed');
-
-    const buffer = await response.arrayBuffer();
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      `inline; filename="${doc.title || 'document'}.pdf"`,
-    );
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-
-    return res.send(Buffer.from(buffer));
-  } catch (err) {
-    console.error('[GET /sign/:token/pdf]', err.message);
-    return res.status(500).send(err.message);
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════
-// 10. DELETE DOCUMENT
-// ═══════════════════════════════════════════════════════════════
-router.delete('/:id', auth, async (req, res) => {
-  try {
-    const doc = await Document.findOne({
-      _id:   req.params.id,
-      owner: req.user.id,
-    });
-
-    if (!doc) {
-      return res.status(404).json({
-        success: false,
-        message: 'Document not found.',
-      });
-    }
-
-    if (doc.status === 'in_progress') {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot delete a document that is currently in progress.',
-      });
-    }
-
-    try {
-      if (doc.fileId) {
-        await cloudinary.uploader.destroy(doc.fileId, {
-          resource_type: 'raw',
-        });
-      }
-    } catch (e) {
-      console.error('[Cloudinary delete]', e.message);
-    }
-
-    await Document.findByIdAndDelete(doc._id);
-
-    safeAuditLog({
-      document_id:    doc._id,
-      document_title: doc.title,
-      action:         'deleted',
-      performed_by: {
-        user_id:     req.user._id,
-        name:        req.user.full_name,
-        email:       req.user.email,
-        designation: req.user.designation,
-        role:        'owner',
-      },
-    });
-
-    emitSocket(req, 'document:deleted', {
-      documentId: String(doc._id),
-      ownerId:    req.user.id,
-    });
-
-    return res.json({ success: true, message: 'Document deleted.' });
-  } catch (err) {
-    console.error('[DELETE /documents/:id]', err.message);
-    return res.status(500).json({ success: false, message: err.message });
-  }
-});
 
 module.exports = router;
