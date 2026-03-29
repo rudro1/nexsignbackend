@@ -68,7 +68,15 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   contentSecurityPolicy: false, // Set to false to allow PDF rendering/blobs
   crossOriginEmbedderPolicy: false,
+  frameguard: false, // CRITICAL: Allows embedding PDF in iframes (SignerView)
 }));
+
+// Manual override for X-Frame-Options (redundant but safe)
+app.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'ALLOWALL'); // or 'ALLOW-FROM https://nexsignfrontend.vercel.app'
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  next();
+});
 
 // ════════════════════════════════════════════════════════════════
 // BODY PARSER & TIMEOUT

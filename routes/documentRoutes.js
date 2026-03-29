@@ -487,8 +487,13 @@ router.get('/sign/:token/pdf', async (req, res) => {
     const response = await fetch(doc.fileUrl);
     const buffer   = await response.arrayBuffer();
 
+    // Headers to allow embedding in iframe
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', 'inline; filename="document.pdf"');
+    res.setHeader('X-Frame-Options', 'ALLOWALL');
+    res.setHeader('Content-Security-Policy', "frame-ancestors 'self' https://nexsignfrontend.vercel.app *;");
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    
     res.send(Buffer.from(buffer));
   } catch (err) {
     res.status(500).send(err.message);
