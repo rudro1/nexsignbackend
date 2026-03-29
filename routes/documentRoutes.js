@@ -102,6 +102,73 @@ router.get('/:id', auth, async (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════
+// 4a. GET DOCUMENT AUDIT LOG
+// ════════════════════════════════════════════════════════════════
+router.get('/:id/audit', auth, async (req, res) => {
+  try {
+    const doc = await Document.findOne({ _id: req.params.id, owner: req.user.id });
+    if (!doc) return res.status(404).json({ success: false, message: 'Document not found' });
+
+    // Construct events from document history
+    const events = [
+      { eventType: 'Document Created', occurredAt: doc.createdAt, actorName: 'System' }
+    ];
+
+    doc.parties.forEach(p => {
+      if (p.emailSentAt) {
+        events.push({ 
+          eventType: 'Email Sent', 
+          occurredAt: p.emailSentAt, 
+          actorName: p.name, 
+          actorEmail: p.email 
+        });
+      }
+      if (p.linkOpenedAt) {
+        events.push({ 
+          eventType: 'Link Opened', 
+          occurredAt: p.linkOpenedAt, 
+          actorName: p.name, 
+          actorEmail: p.email,
+          ipAddress: p.ipAddress 
+        });
+      }
+      if (p.signedAt) {
+        events.push({ 
+          eventType: 'Document Signed', 
+          occurredAt: p.signedAt, 
+          actorName: p.name, 
+          actorEmail: p.email,
+          ipAddress: p.ipAddress 
+        });
+      }
+    });
+
+    if (doc.status === 'completed') {
+      events.push({ 
+        eventType: 'Document Completed', 
+        occurredAt: doc.completedAt || doc.updatedAt, 
+        actorName: 'System' 
+      });
+    }
+
+    // Sort events by time
+    events.sort((a, b) => new Date(a.occurredAt) - new Date(b.occurredAt));
+
+    res.json({ 
+      success: true, 
+      audit: {
+        title: doc.title,
+        status: doc.status,
+        parties: doc.parties,
+        events: events
+      } 
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
 // 5. UPDATE DOCUMENT (Save Draft)
 // ════════════════════════════════════════════════════════════════
 router.put('/:id', auth, async (req, res) => {
@@ -156,7 +223,8 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
     doc.parties     = parsedParties.map((p, i) => ({
       ...p,
       token:  i === 0 ? firstPartyToken : null,
-      status: i === 0 ? 'sent' : 'pending'
+      status: i === 0 ? 'sent' : 'pending',
+      emailSentAt: i === 0 ? new Date() : null
     }));
     doc.fields      = JSON.parse(fields);
     doc.ccList      = JSON.parse(ccRecipients || '[]');
@@ -194,6 +262,18 @@ router.get('/sign/validate/:token', async (req, res) => {
     if (!doc) return res.status(404).json({ success: false, message: 'Invalid or expired link' });
 
     const partyIdx = doc.parties.findIndex(p => p.token === req.params.token);
+    
+    // Set link opened metadata
+    if (!doc.parties[partyIdx].linkOpenedAt) {
+      doc.parties[partyIdx].linkOpenedAt = new Date();
+      doc.parties[partyIdx].linkOpenCount = (doc.parties[partyIdx].linkOpenCount || 0) + 1;
+      doc.parties[partyIdx].ipAddress = req.ip || req.headers['x-forwarded-for'] || 'Unknown';
+      await doc.save();
+    } else {
+      doc.parties[partyIdx].linkOpenCount = (doc.parties[partyIdx].linkOpenCount || 0) + 1;
+      await doc.save();
+    }
+
     const party = doc.parties[partyIdx];
 
     res.json({ 
@@ -228,6 +308,7 @@ router.post('/sign/submit', async (req, res) => {
       const nextToken = crypto.randomBytes(32).toString('hex');
       doc.parties[idx + 1].token = nextToken;
       doc.parties[idx + 1].status = 'sent';
+      doc.parties[idx + 1].emailSentAt = new Date();
       doc.currentPartyIndex = idx + 1;
       await doc.save();
 
