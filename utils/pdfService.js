@@ -13,8 +13,8 @@ const fetch = require('node-fetch');
 // BRAND
 // ═══════════════════════════════════════════════════════════════
 const B = {
-  brand:  rgb(0.157, 0.671, 0.875),  // #28ABDF
-  dark2:  rgb(0.118, 0.494, 0.682),  // #1e7fb5
+  brand:  rgb(0.157, 0.671, 0.875),
+  dark2:  rgb(0.118, 0.494, 0.682),
   dark:   rgb(0.07,  0.09,  0.14),
   grey:   rgb(0.45,  0.48,  0.54),
   lgrey:  rgb(0.93,  0.95,  0.97),
@@ -29,16 +29,41 @@ const B = {
 
 // ═══════════════════════════════════════════════════════════════
 // HELPER — fetch PDF bytes
+// FIX 1: AbortController দিয়ে 55s timeout — network timeout fix
 // ═══════════════════════════════════════════════════════════════
 async function fetchPdfBytes(source) {
   if (!source) throw new Error('[pdfService] No PDF source provided.');
 
   if (source.startsWith('http://') || source.startsWith('https://')) {
-    const res = await fetch(source, { timeout: 30_000 });
-    if (!res.ok)
-      throw new Error(`[pdfService] Fetch failed: ${res.status}`);
-    const buf = await res.buffer();
-    return new Uint8Array(buf);
+    const controller = new AbortController();
+    const timeoutId  = setTimeout(() => controller.abort(), 55_000);
+
+    try {
+      const res = await fetch(source, {
+        signal:  controller.signal,
+        headers: { 'Accept': 'application/pdf, */*' },
+      });
+      clearTimeout(timeoutId);
+
+      if (!res.ok)
+        throw new Error(`[pdfService] Fetch failed: ${res.status} ${res.statusText}`);
+
+      const buf = await res.buffer();
+      return new Uint8Array(buf);
+    } catch (e) {
+      clearTimeout(timeoutId);
+      if (e.name === 'AbortError') {
+        throw new Error(`[pdfService] network timeout at: ${source}`);
+      }
+      throw e;
+    }
+  }
+
+  // Handle base64 data URI
+  if (source.startsWith('data:')) {
+    const b64 = source.split(',')[1];
+    if (!b64) throw new Error('[pdfService] Invalid data URI.');
+    return new Uint8Array(Buffer.from(b64, 'base64'));
   }
 
   const fs = require('fs');
@@ -60,25 +85,40 @@ function hexToRgb(hex = '#000000') {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// HELPER — draw rounded rectangle (simulate)
+// HELPER — draw card
 // ═══════════════════════════════════════════════════════════════
 function drawCard(page, x, y, w, h, fillColor, borderColor = null) {
   page.drawRectangle({
     x, y, width: w, height: h,
     color: fillColor,
-    ...(borderColor
-      ? { borderColor, borderWidth: 0.6 }
-      : {}),
+    ...(borderColor ? { borderColor, borderWidth: 0.6 } : {}),
   });
 }
 
 // ═══════════════════════════════════════════════════════════════
-// HELPER — safe draw text (never throws)
+// HELPER — strip emoji + non-WinAnsi characters
+// FIX 2: WinAnsi cannot encode emoji — crash fix
 // ═══════════════════════════════════════════════════════════════
+function stripEmoji(str) {
+  return String(str)
+    // Emoticons, Misc Symbols, Dingbats, Transport, etc.
+    .replace(/[\u{1F000}-\u{1FFFF}]/gu, '')
+    // Misc symbols block (arrows, stars, etc.)
+    .replace(/[\u{2600}-\u{27BF}]/gu, '')
+    // Variation selectors
+    .replace(/[\u{FE00}-\u{FEFF}]/gu, '')
+    // Replacement character
+    .replace(/\uFFFD/g, '')
+    // Zero-width joiners and similar
+    .replace(/[\u{200B}-\u{200D}]/gu, '')
+    .replace(/\u{FEFF}/gu, '')
+    .trim();
+}
+
 function safeText(page, text, x, y, opts = {}) {
   try {
     if (text === null || text === undefined) return;
-    const str = String(text);
+    const str = stripEmoji(String(text));
     if (!str.trim()) return;
     page.drawText(str, { x, y, ...opts });
   } catch (_) {}
@@ -97,20 +137,7 @@ function hRule(page, y, x1, x2, color = B.lgrey, thickness = 0.5) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// HELPER — section label
-// ═══════════════════════════════════════════════════════════════
-function sectionLabel(page, text, x, y, fontBold) {
-  safeText(page, text, x, y, {
-    font: fontBold, size: 8,
-    color: B.grey,
-  });
-  return y - 6;
-}
-
-// ═══════════════════════════════════════════════════════════════
 // EXPORT 1 — mergeSignaturesIntoPDF
-// Embeds field values (signature / text / date / checkbox)
-// Returns Uint8Array
 // ═══════════════════════════════════════════════════════════════
 async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
   const originalBytes = await fetchPdfBytes(pdfSource);
@@ -138,8 +165,6 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
     const page                      = pages[pageIndex];
     const { width: pw, height: ph } = page.getSize();
 
-    // % → absolute PDF coords
-    // PDF origin = bottom-left; fields origin = top-left
     const absX = (field.x      / 100) * pw;
     const absW = (field.width  / 100) * pw;
     const absH = (field.height / 100) * ph;
@@ -148,8 +173,8 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
     try {
       switch (field.type) {
 
-        // ── Signature ────────────────────────────────────────────
         case 'signature':
+        case 'initial':
         case 'initials': {
           const raw = String(field.value || '');
           if (!raw.startsWith('data:image/')) break;
@@ -171,25 +196,24 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
 
           const dims = img.scaleToFit(absW - 4, absH - 4);
           page.drawImage(img, {
-            x:      absX + (absW - dims.width)  / 2,
-            y:      absY + (absH - dims.height) / 2,
-            width:  dims.width,
-            height: dims.height,
-            blendMode: BlendMode.Multiply, // white → transparent
+            x:         absX + (absW - dims.width)  / 2,
+            y:         absY + (absH - dims.height) / 2,
+            width:     dims.width,
+            height:    dims.height,
+            blendMode: BlendMode.Multiply,
           });
           break;
         }
 
-        // ── Text ─────────────────────────────────────────────────
-        case 'text': {
+        case 'text':
+        case 'number': {
           const isBold   = field.fontWeight === 'bold';
           const font     = isBold ? fontBold : fontReg;
           const fontSize = Math.min(
             field.fontSize || 12,
             Math.max(8, absH * 0.6),
           );
-          let text = String(field.value);
-          // Truncate to fit
+          let text = stripEmoji(String(field.value));
           while (
             text.length > 1 &&
             font.widthOfTextAtSize(text, fontSize) > absW - 8
@@ -206,22 +230,21 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
           break;
         }
 
-        // ── Date ─────────────────────────────────────────────────
         case 'date': {
           const fontSize = Math.min(12, Math.max(8, absH * 0.45));
-          page.drawText(String(field.value), {
-            x:    absX + 4,
-            y:    absY + (absH - fontSize) / 2 + 2,
-            size: fontSize,
-            font: fontReg,
+          page.drawText(stripEmoji(String(field.value)), {
+            x:     absX + 4,
+            y:     absY + (absH - fontSize) / 2 + 2,
+            size:  fontSize,
+            font:  fontReg,
             color: rgb(0.1, 0.1, 0.1),
           });
           break;
         }
 
-        // ── Checkbox ─────────────────────────────────────────────
         case 'checkbox': {
-          if (String(field.value) !== 'true') break;
+          const val = String(field.value).toLowerCase();
+          if (val !== 'true' && val !== 'checked') break;
           const cx = absX + absW / 2;
           const cy = absY + absH / 2;
           const s  = Math.min(absW, absH) * 0.35;
@@ -266,8 +289,6 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
 
 // ═══════════════════════════════════════════════════════════════
 // EXPORT 2 — embedBossSignature
-// Embeds Boss signature as permanent transparent PNG layer
-// Returns Uint8Array (the "approved master PDF")
 // ═══════════════════════════════════════════════════════════════
 async function embedBossSignature(pdfSource, bossFields = []) {
   const bytes  = await fetchPdfBytes(pdfSource);
@@ -316,9 +337,6 @@ async function embedBossSignature(pdfSource, bossFields = []) {
 
 // ═══════════════════════════════════════════════════════════════
 // EXPORT 3 — appendAuditPage
-// Full professional audit certificate page
-// Supports: device name, location, postal code, CC with designation
-// Returns Buffer
 // ═══════════════════════════════════════════════════════════════
 async function appendAuditPage(pdfBytes, doc) {
   const pdfDoc = await PDFDocument.load(pdfBytes, {
@@ -337,7 +355,8 @@ async function appendAuditPage(pdfBytes, doc) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// INTERNAL — build full audit page
+// INTERNAL — build audit page
+// FIX 2: সব emoji সরানো হয়েছে — WinAnsi safe plain text only
 // ═══════════════════════════════════════════════════════════════
 function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
   const PW = 612;
@@ -345,11 +364,10 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
   const M  = 44;
   const CW = PW - M * 2;
 
-  let page    = pdfDoc.addPage([PW, PH]);
-  let Y       = PH;
+  let page = pdfDoc.addPage([PW, PH]);
+  let Y    = PH;
 
   // ── Header ──────────────────────────────────────────────────
-  // Gradient-like: draw two rects
   page.drawRectangle({
     x: 0, y: PH - 90, width: PW, height: 90,
     color: B.brand,
@@ -359,36 +377,35 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
     color: B.dark2,
   });
 
+  // FIX: emoji নেই — plain text only
   safeText(page, 'CERTIFICATE OF COMPLETION', M, PH - 26, {
     font: fontBold, size: 14, color: B.white,
   });
-  safeText(page, 'Electronic Signature Audit Trail  ·  NeXsign', M, PH - 44, {
+  safeText(page, 'Electronic Signature Audit Trail  -  NexSign', M, PH - 44, {
     font: fontReg, size: 9.5, color: rgb(0.82, 0.95, 1),
   });
-  safeText(
-    page,
-    `Generated: ${new Date().toUTCString()}`,
-    M, PH - 60,
-    { font: fontMono, size: 7.5, color: rgb(0.75, 0.92, 1) },
-  );
-
-  // Checkmark circle top-right
-  page.drawCircle({
-    x: PW - 58, y: PH - 45, size: 26, color: rgb(1, 1, 1, 0.15),
+  safeText(page, `Generated: ${new Date().toUTCString()}`, M, PH - 60, {
+    font: fontMono, size: 7.5, color: rgb(0.75, 0.92, 1),
   });
-  safeText(page, '✓', PW - 68, PH - 38, {
-    font: fontBold, size: 22, color: B.white,
+
+  // FIX: checkmark emoji সরানো — geometric circle + "OK" text
+  page.drawCircle({
+    x: PW - 58, y: PH - 45, size: 26,
+    color: rgb(1, 1, 1, 0.15),
+  });
+  safeText(page, 'OK', PW - 70, PH - 40, {
+    font: fontBold, size: 10, color: B.white,
   });
 
   Y = PH - 108;
 
   // ── Document Info Card ───────────────────────────────────────
   const infoRows = [
-    ['Document',    doc.title       || 'Untitled Document'],
-    ['Document ID', String(doc._id  || '')],
-    ['Company',     doc.companyName || '—'],
-    ['Status',      (doc.status || 'completed').toUpperCase()],
-    ['Completed',   doc.completedAt
+    ['Document',      doc.title       || 'Untitled Document'],
+    ['Document ID',   String(doc._id  || '')],
+    ['Company',       doc.companyName || '-'],
+    ['Status',        (doc.status || 'completed').toUpperCase()],
+    ['Completed',     doc.completedAt
       ? new Date(doc.completedAt).toUTCString()
       : new Date().toUTCString()],
     ['Total Parties', String((doc.parties || []).length)],
@@ -396,9 +413,9 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
 
   const infoH = infoRows.length * 17 + 20;
   drawCard(page, M, Y - infoH, CW, infoH, B.bg, B.lgrey);
-  // Left accent
   page.drawRectangle({ x: M, y: Y - infoH, width: 4, height: infoH, color: B.brand });
 
+  // FIX: label plain text — no emoji
   safeText(page, 'DOCUMENT DETAILS', M + 12, Y - 13, {
     font: fontBold, size: 7.5, color: B.brand,
   });
@@ -416,18 +433,19 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
     iy -= 17;
   }
 
-  // COMPLETED badge
+  // FIX: "COMPLETED" badge — no emoji
   page.drawRectangle({
     x: PW - M - 88, y: Y - 26, width: 86, height: 18,
     color: B.green,
   });
-  safeText(page, '✓  COMPLETED', PW - M - 82, Y - 18, {
+  safeText(page, 'COMPLETED', PW - M - 82, Y - 18, {
     font: fontBold, size: 8, color: B.white,
   });
 
   Y -= infoH + 18;
 
   // ── Signing Parties ──────────────────────────────────────────
+  // FIX: section header — plain text, no emoji
   safeText(page, 'SIGNING PARTIES', M, Y, {
     font: fontBold, size: 9, color: B.grey,
   });
@@ -441,7 +459,6 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
     const p      = parties[i];
     const signed = p.status === 'signed' || !!p.signedAt;
 
-    // Calculate row height based on available info
     const hasDevice   = !!(p.device || p.browser || p.os);
     const hasLocation = !!(p.city || p.region || p.postalCode);
     const hasIp       = !!p.ipAddress;
@@ -456,30 +473,26 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
     }
     const rowH = signed ? 52 + extraLines * 14 : 42;
 
-    // New page if needed
+    // New page check
     if (Y - rowH < M + 100) {
       _auditFooter(page, fontReg, fontMono, PW, M);
       page = pdfDoc.addPage([PW, PH]);
       Y    = PH - M;
+      // FIX: plain text — no emoji
       safeText(page, 'SIGNING PARTIES (continued)', M, Y, {
         font: fontBold, size: 10, color: B.brand,
       });
       Y -= 20;
     }
 
-    // Row background
     drawCard(
-      page,
-      M, Y - rowH,
-      CW, rowH,
+      page, M, Y - rowH, CW, rowH,
       i % 2 === 0 ? B.bg : rgb(0.99, 1, 1),
       B.lgrey,
     );
 
-    // Left color accent
     page.drawRectangle({
-      x: M, y: Y - rowH,
-      width: 4, height: rowH,
+      x: M, y: Y - rowH, width: 4, height: rowH,
       color: signed ? B.green : B.amber,
     });
 
@@ -492,30 +505,32 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
       font: fontBold, size: 8, color: B.white,
     });
 
-    // Name + designation + email
+    // FIX: Name — plain text
     safeText(page, p.name || 'Unknown', M + 34, Y - 12, {
       font: fontBold, size: 10, color: B.dark,
     });
+
+    // FIX: Designation — plain text, no emoji prefix
     if (p.designation) {
-      safeText(page, `🏷 ${p.designation}`, M + 34, Y - 24, {
+      safeText(page, p.designation, M + 34, Y - 24, {
         font: fontReg, size: 8, color: B.grey,
       });
     }
+
+    // FIX: Email — plain text, no emoji prefix
     safeText(page, p.email || '', M + 34, Y - (p.designation ? 36 : 24), {
       font: fontReg, size: 8, color: B.grey,
     });
 
-    // Status badge
-    const badgeColor = signed ? B.green : B.amber;
+    // FIX: Status badge — plain text "SIGNED" / "PENDING", no emoji
     page.drawRectangle({
-      x: PW - M - 78, y: Y - 20,
-      width: 76, height: 14,
-      color: badgeColor,
+      x: PW - M - 78, y: Y - 20, width: 76, height: 14,
+      color: signed ? B.green : B.amber,
     });
     safeText(
       page,
-      signed ? '✓  SIGNED' : '⏳  PENDING',
-      PW - M - 72, Y - 14,
+      signed ? 'SIGNED' : 'PENDING',
+      PW - M - 68, Y - 14,
       { font: fontBold, size: 7.5, color: B.white },
     );
 
@@ -524,49 +539,34 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
 
       let detY = Y - 50;
 
-      // ── Signed At ────────────────────────────────────────
+      // FIX: "Signed At" label — plain text, no emoji
       if (hasTime) {
         const timeStr = p.localSignedTime
-          ? `${p.localSignedTime}  (${
-              p.signedAt
-                ? new Date(p.signedAt).toUTCString()
-                : ''
-            })`
+          ? `${p.localSignedTime}  (${p.signedAt ? new Date(p.signedAt).toUTCString() : ''})`
           : new Date(p.signedAt).toUTCString();
-
-        _detailRow(page, fontBold, fontMono, M, detY, CW,
-          '🕐 Signed At', timeStr);
+        _detailRow(page, fontBold, fontMono, M, detY, CW, 'Signed At', timeStr);
         detY -= 14;
       }
 
-      // ── Device (iPhone 6, Samsung Galaxy S23) ────────────
+      // FIX: "Device" label — plain text, no emoji
       if (hasDevice) {
-        const devStr = [p.device, p.browser, p.os]
-          .filter(Boolean).join('  ·  ');
-        _detailRow(page, fontBold, fontMono, M, detY, CW,
-          '📱 Device', devStr);
+        const devStr = [p.device, p.browser, p.os].filter(Boolean).join('  /  ');
+        _detailRow(page, fontBold, fontMono, M, detY, CW, 'Device', devStr);
         detY -= 14;
       }
 
-      // ── Location (Rajshahi, BD - 6400) ───────────────────
+      // FIX: "Location" label — plain text, no emoji
       if (hasLocation) {
-        const locParts = [
-          p.city,
-          p.region,
-          p.country || p.countryCode,
-        ].filter(Boolean).join(', ');
-        const locStr = p.postalCode
-          ? `${locParts}  —  ${p.postalCode}`
-          : locParts;
-        _detailRow(page, fontBold, fontMono, M, detY, CW,
-          '📍 Location', locStr);
+        const locParts = [p.city, p.region, p.country || p.countryCode]
+          .filter(Boolean).join(', ');
+        const locStr = p.postalCode ? `${locParts}  -  ${p.postalCode}` : locParts;
+        _detailRow(page, fontBold, fontMono, M, detY, CW, 'Location', locStr);
         detY -= 14;
       }
 
-      // ── IP Address ────────────────────────────────────────
+      // FIX: "IP Address" label — plain text, no emoji
       if (hasIp) {
-        _detailRow(page, fontBold, fontMono, M, detY, CW,
-          '🌐 IP Address', p.ipAddress);
+        _detailRow(page, fontBold, fontMono, M, detY, CW, 'IP Address', p.ipAddress);
         detY -= 14;
       }
     }
@@ -578,6 +578,7 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
   const ccList = doc.ccList || [];
   if (ccList.length > 0 && Y > M + 80) {
     Y -= 8;
+    // FIX: plain text — no emoji
     safeText(page, 'CC RECIPIENTS', M, Y, {
       font: fontBold, size: 9, color: B.grey,
     });
@@ -593,9 +594,9 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
         x: M, y: Y - 20, width: 3, height: 22, color: B.blue,
       });
 
-      // Name + designation + email in one row
-      const nameStr = cc.name || cc.email || '—';
-      const desgStr = cc.designation ? ` · ${cc.designation}` : '';
+      // FIX: CC name + designation — plain text, no emoji
+      const nameStr = cc.name || cc.email || '-';
+      const desgStr = cc.designation ? ` - ${cc.designation}` : '';
       safeText(page, `${nameStr}${desgStr}`, M + 10, Y - 7, {
         font: fontBold, size: 9, color: B.dark,
         maxWidth: CW / 2,
@@ -612,7 +613,6 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
           { font: fontReg, size: 7, color: B.grey },
         );
       }
-
       Y -= 26;
     }
   }
@@ -625,7 +625,7 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
     page.drawRectangle({
       x: M, y: Y - discH, width: 4, height: discH, color: B.brand,
     });
-
+    // FIX: plain text — no emoji
     safeText(page, 'LEGAL VALIDITY', M + 12, Y - 13, {
       font: fontBold, size: 8, color: B.brand,
     });
@@ -643,17 +643,18 @@ function _buildAuditPage(pdfDoc, fontReg, fontBold, fontMono, doc) {
     );
   }
 
-  // Footer
   _auditFooter(page, fontReg, fontMono, PW, M);
 }
 
 // ── Detail Row Helper ─────────────────────────────────────────
 function _detailRow(page, fontBold, fontMono, M, y, CW, label, value) {
-  const lw = fontBold.widthOfTextAtSize(`${label}:  `, 7.5);
+  // FIX: stripEmoji ensures no WinAnsi crash from dynamic data
+  const clean = stripEmoji(String(value || 'N/A'));
+  const lw    = fontBold.widthOfTextAtSize(`${label}:  `, 7.5);
   safeText(page, `${label}:`, M + 14, y, {
     font: fontBold, size: 7.5, color: B.grey,
   });
-  safeText(page, String(value || 'N/A'), M + 14 + lw, y, {
+  safeText(page, clean, M + 14 + lw, y, {
     font: fontMono, size: 7.5, color: B.dark,
     maxWidth: CW - lw - 24,
   });
@@ -661,17 +662,17 @@ function _detailRow(page, fontBold, fontMono, M, y, CW, label, value) {
 
 // ── Audit Page Footer ─────────────────────────────────────────
 function _auditFooter(page, fontReg, fontMono, PW, M) {
-  // Footer band
   page.drawRectangle({ x: 0, y: 0, width: PW, height: 36, color: B.brand });
+  // FIX: plain text — no emoji
   safeText(
     page,
-    'NeXsign  ·  Enterprise E-Signature Platform  ·  nexsign.app',
+    'NexSign  -  Enterprise E-Signature Platform  -  nexsign.app',
     M, 22,
     { font: fontReg, size: 8, color: B.white },
   );
   safeText(
     page,
-    `Confidential & Legally Binding  ·  ${new Date().toUTCString()}`,
+    `Confidential & Legally Binding  -  ${new Date().toUTCString()}`,
     M, 10,
     { font: fontMono, size: 7, color: rgb(0.82, 0.95, 1) },
   );
@@ -679,26 +680,18 @@ function _auditFooter(page, fontReg, fontMono, PW, M) {
 
 // ═══════════════════════════════════════════════════════════════
 // EXPORT 4 — generateEmployeePdf
-// Clone of approved master PDF for each employee
-// Boss sign already embedded, only employee fields added
-// Returns Buffer
 // ═══════════════════════════════════════════════════════════════
 async function generateEmployeePdf(approvedPdfSource, employeeFields = [], sessionDoc) {
-  // approvedPdfSource = Boss signed PDF (Uint8Array or URL)
   const bytes = typeof approvedPdfSource === 'string'
     ? await fetchPdfBytes(approvedPdfSource)
     : approvedPdfSource;
 
-  // Embed employee fields
   const withFields = await mergeSignaturesIntoPDF(
-    'data:application/pdf;base64,' +
-      Buffer.from(bytes).toString('base64'),
+    'data:application/pdf;base64,' + Buffer.from(bytes).toString('base64'),
     employeeFields,
   );
 
-  // Append audit page with ONLY Boss + This Employee
   const withAudit = await appendAuditPage(withFields, sessionDoc);
-
   return withAudit;
 }
 
