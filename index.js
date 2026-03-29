@@ -16,32 +16,45 @@ app.set('trust proxy', 1);
 // ALLOWED ORIGINS (SECURE & OPTIMIZED)
 // ════════════════════════════════════════════════════════════════
 const ALLOWED_ORIGINS = [
-  'https://nexsignfrontend.vercel.app', // Your Live Frontend
-  'http://localhost:5173',               // Local Development
+  'https://nexsignfrontend.vercel.app',
+  'http://localhost:5173',
   'http://localhost:3000'
 ];
 
-// ════════════════════════════════════════════════════════════════
-// CORS CONFIGURATION (FIXES PREFLIGHT & LOCALHOST ERRORS)
-// ════════════════════════════════════════════════════════════════
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl)
+    // If no origin, it might be a server-to-server or mobile app request
     if (!origin) return callback(null, true);
     
-    const isAllowed = ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.vercel.app');
-    
+    // Check if origin is in allowed list OR is a Vercel preview/deployment
+    const isAllowed = ALLOWED_ORIGINS.includes(origin) || 
+                     origin.endsWith('.vercel.app') ||
+                     origin === 'https://nexsignfrontend.vercel.app';
+
     if (isAllowed) {
-      callback(null, true);
-    } else {
-      console.warn(`🚫 CORS blocked: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
+      return callback(null, true);
     }
+    
+    console.warn(`🚫 CORS blocked: ${origin}`);
+    return callback(new Error('Not allowed by CORS'), false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-  optionsSuccessStatus: 200 // Essential for Legacy browsers & Preflight
+  allowedHeaders: [
+    'Content-Type', 
+    'Authorization', 
+    'X-Requested-With', 
+    'Accept', 
+    'X-CSRF-Token', 
+    'Accept-Version', 
+    'Content-Length', 
+    'Content-MD5', 
+    'Date', 
+    'X-Api-Version'
+  ],
+  exposedHeaders: ['Content-Disposition', 'Content-Type', 'Authorization'],
+  optionsSuccessStatus: 200,
+  preflightContinue: false
 };
 
 // Apply CORS before any other middleware
