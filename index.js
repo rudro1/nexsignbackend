@@ -2523,6 +2523,266 @@
 // });
 
 // module.exports = app; workable
+
+// 'use strict';
+
+// require('dotenv').config();
+
+// const express  = require('express');
+// const mongoose = require('mongoose');
+// const helmet   = require('helmet');
+
+// const app = express();
+// app.set('trust proxy', 1);
+
+// // ════════════════════════════════════════════════════════════════
+// // CORS — must be FIRST, before everything else
+// // ════════════════════════════════════════════════════════════════
+// const ALLOWED_ORIGINS = [
+//   'http://localhost:5173',
+//   'http://localhost:3000',
+//   'https://nexsignfrontend.vercel.app',
+// ];
+
+// function isOriginAllowed(origin) {
+//   if (!origin) return true;                    // Postman / server-to-server
+//   if (ALLOWED_ORIGINS.includes(origin)) return true;
+//   if (origin.endsWith('.vercel.app')) return true;
+//   return false;
+// }
+
+// // ── Manual CORS middleware (no cors package needed) ──────────────
+// // This approach works reliably on Vercel serverless because we
+// // handle OPTIONS ourselves and set headers on EVERY response.
+// app.use((req, res, next) => {
+//   const origin = req.headers.origin;
+
+//   if (isOriginAllowed(origin)) {
+//     res.setHeader('Access-Control-Allow-Origin',      origin || '*');
+//     res.setHeader('Access-Control-Allow-Credentials', 'true');
+//     res.setHeader(
+//       'Access-Control-Allow-Methods',
+//       'GET,POST,PUT,PATCH,DELETE,OPTIONS'
+//     );
+//     res.setHeader(
+//       'Access-Control-Allow-Headers',
+//       'Content-Type,Authorization,X-Requested-With'
+//     );
+//     res.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
+//     res.setHeader('Access-Control-Max-Age',         '86400');   // 24h preflight cache
+//   } else {
+//     console.warn('🚫 CORS blocked:', origin);
+//   }
+
+//   // Preflight — respond immediately with 200, no body
+//   if (req.method === 'OPTIONS') {
+//     return res.status(200).end();
+//   }
+
+//   next();
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // SECURITY HEADERS
+// // ════════════════════════════════════════════════════════════════
+// app.use(helmet({
+//   crossOriginResourcePolicy: { policy: 'cross-origin' },
+//   contentSecurityPolicy:     false,
+//   crossOriginEmbedderPolicy: false,
+// }));
+
+// // ════════════════════════════════════════════════════════════════
+// // REQUEST TIMEOUT
+// // ════════════════════════════════════════════════════════════════
+// app.use((req, res, next) => {
+//   const isUpload = req.path.includes('upload') ||
+//                    req.path.includes('sign');
+//   const timeout  = isUpload ? 29000 : 15000;
+
+//   const timer = setTimeout(() => {
+//     if (!res.headersSent) {
+//       console.error(`⏰ Timeout: ${req.method} ${req.path}`);
+//       res.status(503).json({
+//         success: false,
+//         message: 'Request timed out. Please try again.',
+//         code:    'TIMEOUT',
+//       });
+//     }
+//   }, timeout);
+
+//   res.on('finish', () => clearTimeout(timer));
+//   res.on('close',  () => clearTimeout(timer));
+//   next();
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // BODY PARSER
+// // ════════════════════════════════════════════════════════════════
+// app.use(express.json({ limit: '15mb' }));
+// app.use(express.urlencoded({ limit: '15mb', extended: true }));
+
+// // JSON parse error handler
+// app.use((err, req, res, next) => {
+//   if (err.type === 'entity.parse.failed') {
+//     return res.status(400).json({ success: false, message: 'Invalid JSON.' });
+//   }
+//   next(err);
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // MONGODB — connection with retry
+// // ════════════════════════════════════════════════════════════════
+// let dbConnection = null;
+// let isConnecting = false;
+
+// const MONGO_OPTIONS = {
+//   maxPoolSize:              10,
+//   minPoolSize:              2,
+//   serverSelectionTimeoutMS: 8000,
+//   socketTimeoutMS:          45000,
+//   connectTimeoutMS:         10000,
+//   heartbeatFrequencyMS:     10000,
+//   retryWrites:              true,
+//   retryReads:               true,
+// };
+
+// async function connectDB(retries = 3) {
+//   if (dbConnection && mongoose.connection.readyState === 1) return dbConnection;
+
+//   if (isConnecting) {
+//     await new Promise(r => setTimeout(r, 1000));
+//     return connectDB(retries);
+//   }
+
+//   isConnecting = true;
+//   try {
+//     console.log('🔄 Connecting to MongoDB...');
+//     dbConnection = await mongoose.connect(process.env.MONGO_URI, MONGO_OPTIONS);
+//     console.log('✅ MongoDB connected');
+//     isConnecting = false;
+//     return dbConnection;
+//   } catch (err) {
+//     isConnecting = false;
+//     console.error(`❌ MongoDB Error: ${err.message}`);
+//     if (retries > 0) {
+//       const delay = (4 - retries) * 2000;
+//       await new Promise(r => setTimeout(r, delay));
+//       return connectDB(retries - 1);
+//     }
+//     throw err;
+//   }
+// }
+
+// mongoose.connection.on('disconnected', () => { dbConnection = null; });
+// mongoose.connection.on('error',        () => { dbConnection = null; });
+
+// app.use(async (req, res, next) => {
+//   try {
+//     await connectDB();
+//     next();
+//   } catch (err) {
+//     res.status(503).json({
+//       success: false,
+//       message: 'Database temporarily unavailable. Please retry.',
+//       code:    'DB_ERROR',
+//       retry:   true,
+//     });
+//   }
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // HEALTH CHECK
+// // ════════════════════════════════════════════════════════════════
+// app.get('/api/health', (req, res) => {
+//   const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+//   res.json({
+//     status:    'ok',
+//     timestamp: new Date().toISOString(),
+//     db:        states[mongoose.connection.readyState] || 'unknown',
+//     env:       process.env.NODE_ENV || 'development',
+//     uptime:    Math.floor(process.uptime()),
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // ROUTES
+// // ════════════════════════════════════════════════════════════════
+// app.use('/api/auth',      require('./routes/authRoutes'));
+// app.use('/api/documents', require('./routes/documentRoutes'));
+// app.use('/api/admin',     require('./routes/adminRoutes'));
+// app.use('/api/feedback',  require('./routes/feedbackRoutes'));
+
+// // 404
+// app.use((req, res) => {
+//   res.status(404).json({
+//     success: false,
+//     message: `Route not found: ${req.method} ${req.path}`,
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // GLOBAL ERROR HANDLER
+// // ════════════════════════════════════════════════════════════════
+// app.use((err, req, res, next) => {
+//   if (res.headersSent) return next(err);
+
+//   if (err.code === 'LIMIT_FILE_SIZE') {
+//     return res.status(413).json({ success: false, message: 'File too large. Max 20MB.' });
+//   }
+//   if (err.name === 'ValidationError') {
+//     const messages = Object.values(err.errors).map(e => e.message);
+//     return res.status(400).json({ success: false, message: messages.join(', ') });
+//   }
+//   if (err.name === 'CastError') {
+//     return res.status(400).json({ success: false, message: 'Invalid ID format.' });
+//   }
+//   if (err.name === 'JsonWebTokenError') {
+//     return res.status(401).json({ success: false, message: 'Invalid token.' });
+//   }
+//   if (err.name === 'TokenExpiredError') {
+//     return res.status(401).json({ success: false, message: 'Token expired.' });
+//   }
+
+//   const statusCode = err.status || err.statusCode || 500;
+//   console.error(`❌ ${req.method} ${req.path} →`, err.message);
+
+//   res.status(statusCode).json({
+//     success: false,
+//     message: process.env.NODE_ENV === 'production'
+//       ? 'Something went wrong. Please try again.'
+//       : err.message,
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // LOCAL DEV STARTUP
+// // ════════════════════════════════════════════════════════════════
+// if (process.env.NODE_ENV !== 'production') {
+//   const PORT = process.env.PORT || 5000;
+//   connectDB()
+//     .then(() => {
+//       app.listen(PORT, () => {
+//         console.log(`🚀 Server: http://localhost:${PORT}`);
+//         console.log(`🏥 Health: http://localhost:${PORT}/api/health`);
+//       });
+//     })
+//     .catch(err => {
+//       console.error('Failed to start:', err.message);
+//       process.exit(1);
+//     });
+// }
+
+// process.on('unhandledRejection', (reason) => {
+//   console.error('⚠️ Unhandled Rejection:', reason);
+// });
+// process.on('uncaughtException', (err) => {
+//   console.error('💥 Uncaught Exception:', err.message);
+//   if (process.env.NODE_ENV !== 'production') process.exit(1);
+// });
+
+// // ✅ Vercel serverless export
+// module.exports = app;
+
 'use strict';
 
 require('dotenv').config();
@@ -2530,177 +2790,115 @@ require('dotenv').config();
 const express  = require('express');
 const mongoose = require('mongoose');
 const helmet   = require('helmet');
+const cors     = require('cors');
 
 const app = express();
+
+// Vercel/Proxy support
 app.set('trust proxy', 1);
 
 // ════════════════════════════════════════════════════════════════
-// CORS — must be FIRST, before everything else
+// ALLOWED ORIGINS (SECURE & OPTIMIZED)
 // ════════════════════════════════════════════════════════════════
 const ALLOWED_ORIGINS = [
-  'http://localhost:5173',
-  'http://localhost:3000',
-  'https://nexsignfrontend.vercel.app',
+  'https://nexsignfrontend.vercel.app', // Your Live Frontend
+  'http://localhost:5173',               // Local Development
+  'http://localhost:3000'
 ];
 
-function isOriginAllowed(origin) {
-  if (!origin) return true;                    // Postman / server-to-server
-  if (ALLOWED_ORIGINS.includes(origin)) return true;
-  if (origin.endsWith('.vercel.app')) return true;
-  return false;
-}
+// ════════════════════════════════════════════════════════════════
+// CORS CONFIGURATION (FIXES PREFLIGHT & LOCALHOST ERRORS)
+// ════════════════════════════════════════════════════════════════
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like mobile apps or curl)
+    if (!origin) return callback(null, true);
+    
+    const isAllowed = ALLOWED_ORIGINS.includes(origin) || origin.endsWith('.vercel.app');
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      console.warn(`🚫 CORS blocked: ${origin}`);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+  optionsSuccessStatus: 200 // Essential for Legacy browsers & Preflight
+};
 
-// ── Manual CORS middleware (no cors package needed) ──────────────
-// This approach works reliably on Vercel serverless because we
-// handle OPTIONS ourselves and set headers on EVERY response.
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-
-  if (isOriginAllowed(origin)) {
-    res.setHeader('Access-Control-Allow-Origin',      origin || '*');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader(
-      'Access-Control-Allow-Methods',
-      'GET,POST,PUT,PATCH,DELETE,OPTIONS'
-    );
-    res.setHeader(
-      'Access-Control-Allow-Headers',
-      'Content-Type,Authorization,X-Requested-With'
-    );
-    res.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
-    res.setHeader('Access-Control-Max-Age',         '86400');   // 24h preflight cache
-  } else {
-    console.warn('🚫 CORS blocked:', origin);
-  }
-
-  // Preflight — respond immediately with 200, no body
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  next();
-});
+// Apply CORS before any other middleware
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // ════════════════════════════════════════════════════════════════
-// SECURITY HEADERS
+// SECURITY HEADERS (PRODUCTION GRADE)
 // ════════════════════════════════════════════════════════════════
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
-  contentSecurityPolicy:     false,
+  contentSecurityPolicy: false, // Set to false to allow PDF rendering/blobs
   crossOriginEmbedderPolicy: false,
 }));
 
 // ════════════════════════════════════════════════════════════════
-// REQUEST TIMEOUT
+// BODY PARSER & TIMEOUT
 // ════════════════════════════════════════════════════════════════
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ limit: '15mb', extended: true }));
+
+// Dynamic Timeout Middleware
 app.use((req, res, next) => {
-  const isUpload = req.path.includes('upload') ||
-                   req.path.includes('sign');
-  const timeout  = isUpload ? 29000 : 15000;
+  const isLargeRequest = req.path.includes('upload') || req.path.includes('sign');
+  const timeout = isLargeRequest ? 28000 : 15000; // Vercel limit is 30s
 
   const timer = setTimeout(() => {
     if (!res.headersSent) {
-      console.error(`⏰ Timeout: ${req.method} ${req.path}`);
       res.status(503).json({
         success: false,
         message: 'Request timed out. Please try again.',
-        code:    'TIMEOUT',
+        code: 'TIMEOUT'
       });
     }
   }, timeout);
 
   res.on('finish', () => clearTimeout(timer));
-  res.on('close',  () => clearTimeout(timer));
+  res.on('close', () => clearTimeout(timer));
   next();
 });
 
 // ════════════════════════════════════════════════════════════════
-// BODY PARSER
+// MONGODB CONNECTION (SERVERLESS OPTIMIZED)
 // ════════════════════════════════════════════════════════════════
-app.use(express.json({ limit: '15mb' }));
-app.use(express.urlencoded({ limit: '15mb', extended: true }));
+let isConnected = false;
 
-// JSON parse error handler
-app.use((err, req, res, next) => {
-  if (err.type === 'entity.parse.failed') {
-    return res.status(400).json({ success: false, message: 'Invalid JSON.' });
-  }
-  next(err);
-});
+const connectDB = async () => {
+  if (isConnected && mongoose.connection.readyState === 1) return;
 
-// ════════════════════════════════════════════════════════════════
-// MONGODB — connection with retry
-// ════════════════════════════════════════════════════════════════
-let dbConnection = null;
-let isConnecting = false;
-
-const MONGO_OPTIONS = {
-  maxPoolSize:              10,
-  minPoolSize:              2,
-  serverSelectionTimeoutMS: 8000,
-  socketTimeoutMS:          45000,
-  connectTimeoutMS:         10000,
-  heartbeatFrequencyMS:     10000,
-  retryWrites:              true,
-  retryReads:               true,
-};
-
-async function connectDB(retries = 3) {
-  if (dbConnection && mongoose.connection.readyState === 1) return dbConnection;
-
-  if (isConnecting) {
-    await new Promise(r => setTimeout(r, 1000));
-    return connectDB(retries);
-  }
-
-  isConnecting = true;
   try {
-    console.log('🔄 Connecting to MongoDB...');
-    dbConnection = await mongoose.connect(process.env.MONGO_URI, MONGO_OPTIONS);
-    console.log('✅ MongoDB connected');
-    isConnecting = false;
-    return dbConnection;
+    const db = await mongoose.connect(process.env.MONGO_URI, {
+      maxPoolSize: 10,
+      serverSelectionTimeoutMS: 5000,
+      socketTimeoutMS: 45000,
+    });
+    isConnected = db.connections[0].readyState;
+    console.log('✅ MongoDB Connected');
   } catch (err) {
-    isConnecting = false;
-    console.error(`❌ MongoDB Error: ${err.message}`);
-    if (retries > 0) {
-      const delay = (4 - retries) * 2000;
-      await new Promise(r => setTimeout(r, delay));
-      return connectDB(retries - 1);
-    }
+    console.error(`❌ DB Error: ${err.message}`);
+    // Don't exit process in serverless, just throw to let middleware handle it
     throw err;
   }
-}
+};
 
-mongoose.connection.on('disconnected', () => { dbConnection = null; });
-mongoose.connection.on('error',        () => { dbConnection = null; });
-
+// DB Connection Middleware
 app.use(async (req, res, next) => {
   try {
     await connectDB();
     next();
   } catch (err) {
-    res.status(503).json({
-      success: false,
-      message: 'Database temporarily unavailable. Please retry.',
-      code:    'DB_ERROR',
-      retry:   true,
-    });
+    res.status(503).json({ success: false, message: 'Database Unavailable' });
   }
-});
-
-// ════════════════════════════════════════════════════════════════
-// HEALTH CHECK
-// ════════════════════════════════════════════════════════════════
-app.get('/api/health', (req, res) => {
-  const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
-  res.json({
-    status:    'ok',
-    timestamp: new Date().toISOString(),
-    db:        states[mongoose.connection.readyState] || 'unknown',
-    env:       process.env.NODE_ENV || 'development',
-    uptime:    Math.floor(process.uptime()),
-  });
 });
 
 // ════════════════════════════════════════════════════════════════
@@ -2711,12 +2909,14 @@ app.use('/api/documents', require('./routes/documentRoutes'));
 app.use('/api/admin',     require('./routes/adminRoutes'));
 app.use('/api/feedback',  require('./routes/feedbackRoutes'));
 
-// 404
+// Health Check
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'active', uptime: process.uptime() });
+});
+
+// 404 Handler
 app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Route not found: ${req.method} ${req.path}`,
-  });
+  res.status(404).json({ success: false, message: `Route ${req.path} not found` });
 });
 
 // ════════════════════════════════════════════════════════════════
@@ -2725,60 +2925,24 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
 
-  if (err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({ success: false, message: 'File too large. Max 20MB.' });
-  }
-  if (err.name === 'ValidationError') {
-    const messages = Object.values(err.errors).map(e => e.message);
-    return res.status(400).json({ success: false, message: messages.join(', ') });
-  }
-  if (err.name === 'CastError') {
-    return res.status(400).json({ success: false, message: 'Invalid ID format.' });
-  }
-  if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({ success: false, message: 'Invalid token.' });
-  }
-  if (err.name === 'TokenExpiredError') {
-    return res.status(401).json({ success: false, message: 'Token expired.' });
-  }
-
   const statusCode = err.status || err.statusCode || 500;
-  console.error(`❌ ${req.method} ${req.path} →`, err.message);
+  console.error(`💥 Error [${req.method} ${req.path}]:`, err.message);
 
   res.status(statusCode).json({
     success: false,
-    message: process.env.NODE_ENV === 'production'
-      ? 'Something went wrong. Please try again.'
+    message: process.env.NODE_ENV === 'production' 
+      ? 'An internal error occurred.' 
       : err.message,
+    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
   });
 });
 
 // ════════════════════════════════════════════════════════════════
-// LOCAL DEV STARTUP
+// SERVER EXPORT (FOR VERCEL)
 // ════════════════════════════════════════════════════════════════
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5000;
-  connectDB()
-    .then(() => {
-      app.listen(PORT, () => {
-        console.log(`🚀 Server: http://localhost:${PORT}`);
-        console.log(`🏥 Health: http://localhost:${PORT}/api/health`);
-      });
-    })
-    .catch(err => {
-      console.error('Failed to start:', err.message);
-      process.exit(1);
-    });
+  app.listen(PORT, () => console.log(`🚀 Dev Server: http://localhost:${PORT}`));
 }
 
-process.on('unhandledRejection', (reason) => {
-  console.error('⚠️ Unhandled Rejection:', reason);
-});
-process.on('uncaughtException', (err) => {
-  console.error('💥 Uncaught Exception:', err.message);
-  if (process.env.NODE_ENV !== 'production') process.exit(1);
-});
-
-// ✅ Vercel serverless export
 module.exports = app;
-
