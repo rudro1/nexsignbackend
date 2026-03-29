@@ -2523,21 +2523,19 @@
 // });
 
 // module.exports = app; workable
+'use strict';
 
-
-// server.js
 require('dotenv').config();
 
-const express   = require('express');
-const cors      = require('cors');
-const mongoose  = require('mongoose');
-const helmet    = require('helmet');
+const express  = require('express');
+const mongoose = require('mongoose');
+const helmet   = require('helmet');
 
 const app = express();
 app.set('trust proxy', 1);
 
 // ════════════════════════════════════════════════════════════════
-// ALLOWED ORIGINS
+// CORS — must be FIRST, before everything else
 // ════════════════════════════════════════════════════════════════
 const ALLOWED_ORIGINS = [
   'http://localhost:5173',
@@ -2545,33 +2543,43 @@ const ALLOWED_ORIGINS = [
   'https://nexsignfrontend.vercel.app',
 ];
 
-const isOriginAllowed = (origin) => {
-  if (!origin) return true; // Postman / server-to-server
+function isOriginAllowed(origin) {
+  if (!origin) return true;                    // Postman / server-to-server
   if (ALLOWED_ORIGINS.includes(origin)) return true;
   if (origin.endsWith('.vercel.app')) return true;
   return false;
-};
+}
 
-// ════════════════════════════════════════════════════════════════
-// CORS — একবারই, সঠিকভাবে
-// ════════════════════════════════════════════════════════════════
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (isOriginAllowed(origin)) return callback(null, true);
-    console.warn(`🚫 CORS blocked: ${origin}`);
-    return callback(new Error(`CORS_BLOCKED: ${origin}`));
-  },
-  credentials:         true,
-  methods:             ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders:      ['Content-Type', 'Authorization', 'X-Requested-With'],
-  exposedHeaders:      ['X-Total-Count'],
-  optionsSuccessStatus: 200,
-  maxAge:              86400, // preflight 24h cache — reduces OPTIONS requests
-};
+// ── Manual CORS middleware (no cors package needed) ──────────────
+// This approach works reliably on Vercel serverless because we
+// handle OPTIONS ourselves and set headers on EVERY response.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
 
-// OPTIONS preflight — সবার আগে
-app.options('*', cors(corsOptions));
-app.use(cors(corsOptions));
+  if (isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin',      origin || '*');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader(
+      'Access-Control-Allow-Methods',
+      'GET,POST,PUT,PATCH,DELETE,OPTIONS'
+    );
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type,Authorization,X-Requested-With'
+    );
+    res.setHeader('Access-Control-Expose-Headers', 'X-Total-Count');
+    res.setHeader('Access-Control-Max-Age',         '86400');   // 24h preflight cache
+  } else {
+    console.warn('🚫 CORS blocked:', origin);
+  }
+
+  // Preflight — respond immediately with 200, no body
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  next();
+});
 
 // ════════════════════════════════════════════════════════════════
 // SECURITY HEADERS
@@ -2583,18 +2591,12 @@ app.use(helmet({
 }));
 
 // ════════════════════════════════════════════════════════════════
-// REQUEST TIMEOUT MIDDLEWARE
-// Backend slow হলেও frontend 30s পর proper error পাবে
+// REQUEST TIMEOUT
 // ════════════════════════════════════════════════════════════════
-const REQUEST_TIMEOUT_MS = 29000; // Vercel limit 30s
-
 app.use((req, res, next) => {
-  // File upload routes এ বেশি সময় দাও
-  const isUpload = req.path.includes('upload') || 
+  const isUpload = req.path.includes('upload') ||
                    req.path.includes('sign');
-  const timeout  = isUpload 
-    ? REQUEST_TIMEOUT_MS 
-    : 15000; // Normal routes 15s
+  const timeout  = isUpload ? 29000 : 15000;
 
   const timer = setTimeout(() => {
     if (!res.headersSent) {
@@ -2607,115 +2609,77 @@ app.use((req, res, next) => {
     }
   }, timeout);
 
-  // Response পাঠানোর পর timer clear করো
-  res.on('finish',  () => clearTimeout(timer));
-  res.on('close',   () => clearTimeout(timer));
-
+  res.on('finish', () => clearTimeout(timer));
+  res.on('close',  () => clearTimeout(timer));
   next();
 });
 
 // ════════════════════════════════════════════════════════════════
 // BODY PARSER
 // ════════════════════════════════════════════════════════════════
-app.use(express.json({ 
-  limit: '15mb',
-  // JSON parse error handle
-  strict: false,
-}));
-app.use(express.urlencoded({ 
-  limit: '15mb', 
-  extended: true 
-}));
+app.use(express.json({ limit: '15mb' }));
+app.use(express.urlencoded({ limit: '15mb', extended: true }));
 
-// JSON Parse Error Handler
+// JSON parse error handler
 app.use((err, req, res, next) => {
   if (err.type === 'entity.parse.failed') {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Invalid JSON in request body.' 
-    });
+    return res.status(400).json({ success: false, message: 'Invalid JSON.' });
   }
   next(err);
 });
 
 // ════════════════════════════════════════════════════════════════
-// MONGODB — Optimized Connection with Retry
+// MONGODB — connection with retry
 // ════════════════════════════════════════════════════════════════
 let dbConnection = null;
 let isConnecting = false;
 
 const MONGO_OPTIONS = {
-  maxPoolSize:        10,   // একসাথে max 10 connection
-  minPoolSize:        2,    // সবসময় 2 connection ready
-  serverSelectionTimeoutMS: 8000,  // 8s এ server খুঁজে না পেলে fail
-  socketTimeoutMS:    45000,
-  connectTimeoutMS:   10000,
-  heartbeatFrequencyMS: 10000,
-  retryWrites:        true,
-  retryReads:         true,
+  maxPoolSize:              10,
+  minPoolSize:              2,
+  serverSelectionTimeoutMS: 8000,
+  socketTimeoutMS:          45000,
+  connectTimeoutMS:         10000,
+  heartbeatFrequencyMS:     10000,
+  retryWrites:              true,
+  retryReads:               true,
 };
 
-const connectDB = async (retries = 3) => {
-  // Already connected
-  if (
-    dbConnection && 
-    mongoose.connection.readyState === 1
-  ) return dbConnection;
+async function connectDB(retries = 3) {
+  if (dbConnection && mongoose.connection.readyState === 1) return dbConnection;
 
-  // Connection in progress — wait for it
   if (isConnecting) {
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(r => setTimeout(r, 1000));
     return connectDB(retries);
   }
 
   isConnecting = true;
-
   try {
     console.log('🔄 Connecting to MongoDB...');
-    dbConnection = await mongoose.connect(
-      process.env.MONGO_URI, 
-      MONGO_OPTIONS
-    );
+    dbConnection = await mongoose.connect(process.env.MONGO_URI, MONGO_OPTIONS);
     console.log('✅ MongoDB connected');
     isConnecting = false;
     return dbConnection;
   } catch (err) {
     isConnecting = false;
     console.error(`❌ MongoDB Error: ${err.message}`);
-
     if (retries > 0) {
-      const delay = (4 - retries) * 2000; // 2s, 4s, 6s
-      console.log(`🔁 Retrying in ${delay}ms... (${retries} left)`);
+      const delay = (4 - retries) * 2000;
       await new Promise(r => setTimeout(r, delay));
       return connectDB(retries - 1);
     }
-
     throw err;
   }
-};
+}
 
-// MongoDB event listeners
-mongoose.connection.on('disconnected', () => {
-  console.warn('⚠️ MongoDB disconnected — will reconnect on next request');
-  dbConnection = null; // Cache clear করো
-});
+mongoose.connection.on('disconnected', () => { dbConnection = null; });
+mongoose.connection.on('error',        () => { dbConnection = null; });
 
-mongoose.connection.on('error', (err) => {
-  console.error('❌ MongoDB connection error:', err.message);
-  dbConnection = null;
-});
-
-mongoose.connection.on('reconnected', () => {
-  console.log('✅ MongoDB reconnected');
-});
-
-// ── DB Connection Middleware ─────────────────────────────────────
 app.use(async (req, res, next) => {
   try {
     await connectDB();
     next();
   } catch (err) {
-    console.error('DB middleware error:', err.message);
     res.status(503).json({
       success: false,
       message: 'Database temporarily unavailable. Please retry.',
@@ -2726,14 +2690,14 @@ app.use(async (req, res, next) => {
 });
 
 // ════════════════════════════════════════════════════════════════
-// HEALTH CHECK — Frontend এটা দিয়ে backend জীবিত কিনা চেক করবে
+// HEALTH CHECK
 // ════════════════════════════════════════════════════════════════
 app.get('/api/health', (req, res) => {
-  const dbState = ['disconnected','connected','connecting','disconnecting'];
+  const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
   res.json({
     status:    'ok',
     timestamp: new Date().toISOString(),
-    db:        dbState[mongoose.connection.readyState] || 'unknown',
+    db:        states[mongoose.connection.readyState] || 'unknown',
     env:       process.env.NODE_ENV || 'development',
     uptime:    Math.floor(process.uptime()),
   });
@@ -2747,7 +2711,7 @@ app.use('/api/documents', require('./routes/documentRoutes'));
 app.use('/api/admin',     require('./routes/adminRoutes'));
 app.use('/api/feedback',  require('./routes/feedbackRoutes'));
 
-// 404 Handler
+// 404
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -2759,59 +2723,25 @@ app.use((req, res) => {
 // GLOBAL ERROR HANDLER
 // ════════════════════════════════════════════════════════════════
 app.use((err, req, res, next) => {
-  // Already sent response
   if (res.headersSent) return next(err);
 
-  // CORS Error
-  if (err.message?.startsWith('CORS_BLOCKED')) {
-    return res.status(403).json({
-      success: false,
-      message: 'Origin not allowed.',
-      code:    'CORS_ERROR',
-    });
-  }
-
-  // Multer file size error
   if (err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(413).json({
-      success: false,
-      message: 'File too large. Maximum size is 20MB.',
-    });
+    return res.status(413).json({ success: false, message: 'File too large. Max 20MB.' });
   }
-
-  // Mongoose validation error
   if (err.name === 'ValidationError') {
-    const messages = Object.values(err.errors)
-      .map(e => e.message);
-    return res.status(400).json({
-      success: false,
-      message: messages.join(', '),
-    });
+    const messages = Object.values(err.errors).map(e => e.message);
+    return res.status(400).json({ success: false, message: messages.join(', ') });
   }
-
-  // Mongoose cast error (invalid ObjectId)
   if (err.name === 'CastError') {
-    return res.status(400).json({
-      success: false,
-      message: 'Invalid ID format.',
-    });
+    return res.status(400).json({ success: false, message: 'Invalid ID format.' });
   }
-
-  // JWT errors
   if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid token.',
-    });
+    return res.status(401).json({ success: false, message: 'Invalid token.' });
   }
   if (err.name === 'TokenExpiredError') {
-    return res.status(401).json({
-      success: false,
-      message: 'Token expired. Please log in again.',
-    });
+    return res.status(401).json({ success: false, message: 'Token expired.' });
   }
 
-  // Generic error
   const statusCode = err.status || err.statusCode || 500;
   console.error(`❌ ${req.method} ${req.path} →`, err.message);
 
@@ -2820,19 +2750,14 @@ app.use((err, req, res, next) => {
     message: process.env.NODE_ENV === 'production'
       ? 'Something went wrong. Please try again.'
       : err.message,
-    ...(process.env.NODE_ENV !== 'production' && {
-      stack: err.stack,
-    }),
   });
 });
 
 // ════════════════════════════════════════════════════════════════
-// STARTUP — Local Development
+// LOCAL DEV STARTUP
 // ════════════════════════════════════════════════════════════════
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5000;
-
-  // Local এ startup এই DB connect করো
   connectDB()
     .then(() => {
       app.listen(PORT, () => {
@@ -2841,16 +2766,14 @@ if (process.env.NODE_ENV !== 'production') {
       });
     })
     .catch(err => {
-      console.error('Failed to start server:', err.message);
+      console.error('Failed to start:', err.message);
       process.exit(1);
     });
 }
 
-// Process error handlers — server crash prevent
 process.on('unhandledRejection', (reason) => {
   console.error('⚠️ Unhandled Rejection:', reason);
 });
-
 process.on('uncaughtException', (err) => {
   console.error('💥 Uncaught Exception:', err.message);
   if (process.env.NODE_ENV !== 'production') process.exit(1);
@@ -2858,163 +2781,4 @@ process.on('uncaughtException', (err) => {
 
 // ✅ Vercel serverless export
 module.exports = app;
-
-
-
-// require('dotenv').config();
-// const express = require('express');
-// const cors = require('cors');
-// const mongoose = require('mongoose');
-// const helmet = require('helmet');
-// const rateLimit = require('express-rate-limit');
-// const compression = require('compression');
-
-// const app = express();
-// app.set('trust proxy', 1);
-// app.enable('trust proxy');
-
-// // ✅ PRODUCTION SECURITY HEADERS
-// app.use(helmet({
-//   contentSecurityPolicy: {
-//     directives: {
-//       defaultSrc: ["'self'"],
-//       styleSrc: ["'self'", "'unsafe-inline'"],
-//       scriptSrc: ["'self'"],
-//       imgSrc: ["'self'", "data:", "https://res.cloudinary.com"],
-//       connectSrc: ["'self'", "https://*.cloudinary.com"]
-//     }
-//   },
-//   crossOriginEmbedderPolicy: false
-// }));
-
-// // ✅ COMPRESSION (30% Size Reduce)
-// app.use(compression());
-
-// // ✅ RATE LIMITING (DDoS Protection)
-// const limiter = rateLimit({
-//   windowMs: 15 * 60 * 1000, // 15 minutes
-//   max: 100, // 100 requests per IP
-//   message: { error: 'Too many requests, please try again later.' },
-//   standardHeaders: true,
-//   legacyHeaders: false,
-// });
-// app.use('/api/', limiter);
-
-// // ✅ ULTRA FAST CORS (Production Safe)
-// const allowedOrigins = [
-//   'https://nexsignfrontend.vercel.app',
-//   'https://*.vercel.app',
-//   'https://localhost:5173'
-// ];
-// app.use(cors({
-//   origin: [
-//     'https://nexsignfrontend.vercel.app',
-//     'https://nexsignfrontend.vercel.app', 
-//     'http://localhost:5173',
-//     'http://localhost:3000'
-//   ],
-//   credentials: true,
-//   methods: ['GET','POST','PUT','DELETE','OPTIONS','PATCH'],
-//   allowedHeaders: [
-//     'Content-Type',
-//     'Authorization',
-//     'X-Requested-With',  // ✅ FIXED: এটা add করো
-//     'X-Forwarded-For'
-//   ]
-// }));
-
-// // ✅ Body Parsers (Production Limits)
-// app.use(express.json({ limit: '15mb' }));
-// app.use(express.urlencoded({ limit: '15mb', extended: true }));
-
-// // ✅ WELCOME PAGE - STATIC SECURITY CHECK
-// app.get('/', (req, res) => {
-//   // Basic security check
-//   const userAgent = req.get('User-Agent') || '';
-//   if (userAgent.includes('bot') || userAgent.includes('crawler')) {
-//     return res.status(403).json({ error: 'Access Denied' });
-//   }
-  
-//   res.send(`
-// <!DOCTYPE html>
-// <html>
-// <head>
-//   <meta charset="utf-8">
-//   <meta name="viewport" content="width=device-width, initial-scale=1">
-//   <meta http-equiv="X-UA-Compatible" content="IE=edge">
-//   <title>NeXsign - Enterprise eSign</title>
-//   <meta name="robots" content="index,follow">
-//   <style>/* Same fast CSS */</style>
-// </head>
-// <body>
-//   <!-- Same Hero Content -->
-// </body>
-// </html>`);
-// });
-
-// // ✅ BACKGROUND DB CONNECT (No Block)
-// let dbConnected = false;
-// mongoose.connect(process.env.MONGO_URI, {
-//   bufferCommands: false,
-//   bufferMaxEntries: 0,
-//   serverSelectionTimeoutMS: 5000,
-//   socketTimeoutMS: 45000,
-//   useNewUrlParser: true,
-//   useUnifiedTopology: true
-// }).then(() => {
-//   dbConnected = true;
-//   console.log('🛡️ MongoDB Connected - Production Ready');
-// }).catch(err => {
-//   console.error('❌ MongoDB Error:', err);
-// });
-
-// // ✅ API Middleware - Only if DB Ready
-// app.use('/api/', async (req, res, next) => {
-//   if (!dbConnected) {
-//     return res.status(503).json({ 
-//       error: 'Service temporarily unavailable. Please try again in a moment.' 
-//     });
-//   }
-//   next();
-// });
-
-// // ✅ ROUTES
-// app.use('/api/auth', require('./routes/authRoutes'));
-// app.use('/api/documents', require('./routes/documentRoutes'));
-// app.use('/api/admin', require('./routes/adminRoutes'));
-// app.use('/api/feedback', require('./routes/feedbackRoutes'));
-
-// // ✅ Health Check (Production Monitoring)
-// app.get('/health', (req, res) => {
-//   res.json({ 
-//     status: 'OK', 
-//     db: dbConnected,
-//     timestamp: Date.now(),
-//     uptime: process.uptime()
-//   });
-// });
-
-// // ✅ PRODUCTION ERROR HANDLER
-// app.use((err, req, res, next) => {
-//   console.error('🚨 ERROR:', err.stack);
-//   res.status(err.status || 500).json({
-//     success: false,
-//     message: process.env.NODE_ENV === 'production' 
-//       ? 'Internal Server Error' 
-//       : err.message,
-//     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-//   });
-// });
-
-// // ✅ 404 Handler
-// app.use('*', (req, res) => {
-//   res.status(404).json({ 
-//     success: false, 
-//     error: 'Route not found' 
-//   });
-// });
-
-// module.exports = app;
-
-
 
