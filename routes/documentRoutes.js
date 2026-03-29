@@ -1,4 +1,3 @@
-// server/routes/documentRoutes.js
 'use strict';
 
 const express            = require('express');
@@ -30,6 +29,19 @@ cloudinary.config({
   api_key:    process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
+
+// Cloudinary config check
+function checkCloudinary() {
+  if (
+    !process.env.CLOUDINARY_CLOUD_NAME ||
+    !process.env.CLOUDINARY_API_KEY    ||
+    !process.env.CLOUDINARY_API_SECRET
+  ) {
+    throw new Error(
+      'Cloudinary is not configured. Check environment variables.'
+    );
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════
 // MULTER — PDF only
@@ -82,6 +94,7 @@ const FRONT = () =>
     .replace(/\/$/, '');
 
 async function uploadToCloudinary(buffer, options = {}) {
+  checkCloudinary();
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
       options,
@@ -130,16 +143,15 @@ function parseDevice(ua = '') {
     device = 'Linux PC'; os = 'Linux';
   }
 
-  if      (/Edg\//.test(ua))     browser = `Edge ${ua.match(/Edg\/([\d.]+)/)?.[1]     || ''}`.trim();
-  else if (/OPR\//.test(ua))     browser = `Opera ${ua.match(/OPR\/([\d.]+)/)?.[1]    || ''}`.trim();
-  else if (/Chrome\//.test(ua))  browser = `Chrome ${ua.match(/Chrome\/([\d.]+)/)?.[1]|| ''}`.trim();
+  if      (/Edg\//.test(ua))     browser = `Edge ${ua.match(/Edg\/([\d.]+)/)?.[1]      || ''}`.trim();
+  else if (/OPR\//.test(ua))     browser = `Opera ${ua.match(/OPR\/([\d.]+)/)?.[1]     || ''}`.trim();
+  else if (/Chrome\//.test(ua))  browser = `Chrome ${ua.match(/Chrome\/([\d.]+)/)?.[1] || ''}`.trim();
   else if (/Firefox\//.test(ua)) browser = `Firefox ${ua.match(/Firefox\/([\d.]+)/)?.[1]||''}`.trim();
-  else if (/Safari\//.test(ua))  browser = `Safari ${ua.match(/Version\/([\d.]+)/)?.[1]||''}`.trim();
+  else if (/Safari\//.test(ua))  browser = `Safari ${ua.match(/Version\/([\d.]+)/)?.[1] ||''}`.trim();
 
   return { device, browser, os, deviceType, raw: ua };
 }
 
-// Geo — non-blocking, fast timeout
 async function getGeoLocation(ip) {
   try {
     if (!ip || ip === 'Unknown' || ip.startsWith('127.') || ip.startsWith('::')) {
@@ -151,7 +163,7 @@ async function getGeoLocation(ip) {
     }
     const res  = await fetch(
       `http://ip-api.com/json/${ip}?fields=status,city,regionName,country,countryCode,zip,timezone,lat,lon`,
-      { signal: AbortSignal.timeout(3000) }, // 3s max
+      { signal: AbortSignal.timeout(3000) },
     );
     const data = await res.json();
     if (data.status !== 'success') return null;
@@ -172,18 +184,6 @@ async function getGeoLocation(ip) {
   }
 }
 
-function getLocalTime(timezone) {
-  try {
-    return new Date().toLocaleString('en-GB', {
-      timeZone: timezone || 'Asia/Dhaka',
-      day: '2-digit', month: 'short', year: 'numeric',
-      hour: '2-digit', minute: '2-digit', hour12: true,
-    });
-  } catch {
-    return new Date().toUTCString();
-  }
-}
-
 function emitSocket(req, event, data) {
   try {
     const io = req.app.get('io');
@@ -196,8 +196,50 @@ async function safeAuditLog(payload) {
   catch (e) { console.error('[AuditLog]', e.message); }
 }
 
+// ✅ Token hide helper — API response এ token বের হবে না
+function sanitizeDoc(doc, visiblePartyIdx = null) {
+  const obj = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc };
+  if (Array.isArray(obj.parties)) {
+    obj.parties = obj.parties.map((p, i) => {
+      const party = { ...p };
+      if (i !== visiblePartyIdx) delete party.token;
+      return party;
+    });
+  }
+  return obj;
+}
+
+// ✅ Allowed field types — all supported types
+const ALLOWED_FIELD_TYPES = new Set([
+  'signature', 'initial', 'text',
+  'date', 'checkbox', 'number',
+]);
+
+// ✅ Field validator
+function validateFields(fields) {
+  if (!Array.isArray(fields)) return 'Fields must be an array.';
+  for (const f of fields) {
+    if (!f.id)   return `Field missing id.`;
+    if (!f.type) return `Field ${f.id} missing type.`;
+    if (!ALLOWED_FIELD_TYPES.has(f.type)) {
+      return `Field type "${f.type}" is not supported.`;
+    }
+    if (f.partyIndex === undefined || f.partyIndex === null) {
+      return `Field ${f.id} missing partyIndex.`;
+    }
+    if (f.x === undefined || f.y === undefined) {
+      return `Field ${f.id} missing position (x, y).`;
+    }
+    if (!f.width || !f.height) {
+      return `Field ${f.id} missing size (width, height).`;
+    }
+    if (!f.page) return `Field ${f.id} missing page number.`;
+  }
+  return null; // null = valid
+}
+
 // ═══════════════════════════════════════════════════════════════
-// ✅ ROUTE ORDER MATTERS — specific আগে, generic পরে
+// ✅ ROUTE ORDER MATTERS
 // ═══════════════════════════════════════════════════════════════
 
 // ── 1. GET ALL DOCUMENTS ────────────────────────────────────────
@@ -261,6 +303,7 @@ router.post(
           success: false, message: 'No PDF file uploaded.',
         });
       }
+      checkCloudinary();
       const result = await uploadToCloudinary(req.file.buffer, {
         resource_type: 'raw',
         folder:        'nexsign/documents',
@@ -298,6 +341,15 @@ router.post(
           success: false, message: 'No logo file uploaded.',
         });
       }
+
+      // ✅ Cloudinary config check — 500 এর বদলে proper error
+      try { checkCloudinary(); } catch (cfgErr) {
+        return res.status(503).json({
+          success: false,
+          message: 'Logo upload unavailable: ' + cfgErr.message,
+        });
+      }
+
       const result = await uploadToCloudinary(req.file.buffer, {
         resource_type:  'image',
         folder:         'nexsign/logos',
@@ -329,6 +381,7 @@ router.post(
         companyLogo, message, docId,
       } = req.body;
 
+      // ✅ Parse JSON safely
       let parsedParties, parsedFields, parsedCC;
       try {
         parsedParties = JSON.parse(partiesRaw || '[]');
@@ -341,6 +394,7 @@ router.post(
         });
       }
 
+      // ✅ Validate parties
       if (!Array.isArray(parsedParties) || !parsedParties.length) {
         return res.status(400).json({
           success: false,
@@ -348,12 +402,25 @@ router.post(
         });
       }
 
+      // ✅ Validate fields — all types supported
+      if (parsedFields.length > 0) {
+        const fieldErr = validateFields(parsedFields);
+        if (fieldErr) {
+          return res.status(400).json({
+            success: false,
+            message: fieldErr,
+          });
+        }
+      }
+
+      // Find or create doc
       let doc = null;
-      if (docId && !['undefined','null',''].includes(docId)) {
+      if (docId && !['undefined', 'null', ''].includes(String(docId))) {
         doc = await Document.findOne({ _id: docId, owner: req.user.id });
       }
 
       if (!doc && req.file) {
+        checkCloudinary();
         const result = await uploadToCloudinary(req.file.buffer, {
           resource_type: 'raw',
           folder:        'nexsign/documents',
@@ -382,7 +449,30 @@ router.post(
       doc.companyLogo       = companyLogo || '';
       doc.message           = message     || '';
       doc.totalPages        = Number(totalPages) || 1;
-      doc.fields            = parsedFields;
+
+      // ✅ Fields — সব type সংরক্ষণ করা হচ্ছে
+      doc.fields            = parsedFields.map(f => ({
+        id:              f.id,
+        type:            f.type,
+        partyIndex:      Number(f.partyIndex),
+        partyEmail:      f.partyEmail   || null,
+        page:            Number(f.page) || 1,
+        x:               Number(f.x),
+        y:               Number(f.y),
+        width:           Number(f.width),
+        height:          Number(f.height),
+        fontSize:        f.fontSize     || 14,
+        fontFamily:      f.fontFamily   || 'Inter',
+        fontWeight:      f.fontWeight   || 'normal',
+        color:           f.color        || '#000000',
+        backgroundColor: f.backgroundColor || 'transparent',
+        label:           f.label        || null,
+        placeholder:     f.placeholder  || null,
+        required:        f.required !== false,
+        value:           null,
+        filledAt:        null,
+      }));
+
       doc.ccList            = parsedCC;
       doc.status            = 'in_progress';
       doc.currentPartyIndex = 0;
@@ -394,7 +484,7 @@ router.post(
         designation:    p.designation?.trim() || null,
         order:          i,
         color:          p.color || '#3B82F6',
-        status:         i === 0 ? 'sent'     : 'pending',
+        status:         i === 0 ? 'sent'    : 'pending',
         token:          i === 0 ? firstToken : null,
         emailSentAt:    i === 0 ? new Date() : null,
         tokenExpiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
@@ -404,12 +494,16 @@ router.post(
 
       // Audit — non-blocking
       safeAuditLog({
-        document_id: doc._id, document_title: doc.title,
-        company_name: doc.companyName, action: 'sent',
+        document_id:   doc._id,
+        document_title: doc.title,
+        company_name:  doc.companyName,
+        action:        'sent',
         performed_by: {
-          user_id: req.user._id, name: req.user.full_name,
-          email: req.user.email, designation: req.user.designation,
-          role: 'owner',
+          user_id:     req.user._id,
+          name:        req.user.full_name,
+          email:       req.user.email,
+          designation: req.user.designation,
+          role:        'owner',
         },
         cc_list: parsedCC.map(cc => ({
           name: cc.name, email: cc.email, designation: cc.designation,
@@ -420,7 +514,7 @@ router.post(
         },
       });
 
-      // Send email
+      // Send email to first signer
       const first = doc.parties[0];
       await sendSigningEmail({
         recipientEmail:       first.email,
@@ -456,11 +550,18 @@ router.post(
       );
 
       emitSocket(req, 'document:created', {
-        documentId: doc._id, ownerId: req.user.id,
-        title: doc.title, status: doc.status,
+        documentId: doc._id,
+        ownerId:    req.user.id,
+        title:      doc.title,
+        status:     doc.status,
       });
 
-      return res.json({ success: true, document: doc });
+      // ✅ Token hide করে response
+      return res.json({
+        success:  true,
+        document: sanitizeDoc(doc),
+      });
+
     } catch (err) {
       console.error('[POST /upload-and-send]', err.message);
       return res.status(500).json({ success: false, message: err.message });
@@ -469,13 +570,21 @@ router.post(
 );
 
 // ══════════════════════════════════════════════════════════════
-// ✅ SIGN ROUTES — /:id এর আগে থাকতে হবে (CRITICAL ORDER FIX)
+// ✅ SIGN ROUTES — /:id এর আগে
 // ══════════════════════════════════════════════════════════════
 
 // ── 5. VALIDATE TOKEN ───────────────────────────────────────────
 router.get('/sign/validate/:token', async (req, res) => {
   try {
     const { token } = req.params;
+
+    if (!token || token.length < 10) {
+      return res.status(400).json({
+        success: false,
+        code:    'INVALID_TOKEN',
+        message: 'Invalid token format.',
+      });
+    }
 
     const doc = await Document.findOne({ 'parties.token': token });
     if (!doc) {
@@ -488,6 +597,14 @@ router.get('/sign/validate/:token', async (req, res) => {
 
     const idx   = doc.parties.findIndex(p => p.token === token);
     const party = doc.parties[idx];
+
+    if (!party) {
+      return res.status(404).json({
+        success: false,
+        code:    'INVALID_LINK',
+        message: 'Signing party not found.',
+      });
+    }
 
     if (party.tokenExpiresAt && new Date() > party.tokenExpiresAt) {
       return res.status(410).json({
@@ -503,12 +620,11 @@ router.get('/sign/validate/:token', async (req, res) => {
       });
     }
 
-    // Device info — fast, sync
+    // Device info
     const ip     = getIP(req);
     const ua     = req.headers['user-agent'] || '';
     const device = parseDevice(ua);
 
-    // Update party immediately (don't wait for geo)
     party.linkClickedAt  = party.linkClickedAt || new Date();
     party.linkClickCount = (party.linkClickCount || 0) + 1;
     party.status         = 'viewed';
@@ -519,13 +635,14 @@ router.get('/sign/validate/:token', async (req, res) => {
 
     await doc.save();
 
-    // Geo — background (non-blocking)
+    // Geo — background
     getGeoLocation(ip).then(async geo => {
       if (!geo) return;
       try {
         const d = await Document.findById(doc._id);
         if (!d) return;
         const p = d.parties[idx];
+        if (!p) return;
         p.city       = geo.city;
         p.region     = geo.region;
         p.country    = geo.country;
@@ -537,38 +654,45 @@ router.get('/sign/validate/:token', async (req, res) => {
 
     // Audit — background
     safeAuditLog({
-      document_id: doc._id, document_title: doc.title,
-      company_name: doc.companyName, action: 'link_clicked',
+      document_id:   doc._id,
+      document_title: doc.title,
+      company_name:  doc.companyName,
+      action:        'link_clicked',
       performed_by: {
-        name: party.name, email: party.email,
-        designation: party.designation, role: 'signer',
-        party_index: idx, party_color: party.color,
+        name:        party.name,
+        email:       party.email,
+        designation: party.designation,
+        role:        'signer',
+        party_index: idx,
+        party_color: party.color,
       },
       device: {
-        device_name: device.device, browser: device.browser,
-        os: device.os, device_type: device.deviceType, raw: ua,
+        device_name: device.device,
+        browser:     device.browser,
+        os:          device.os,
+        device_type: device.deviceType,
+        raw:         ua,
       },
     });
 
     emitSocket(req, 'document:party_viewed', {
-      documentId: String(doc._id), partyIndex: idx,
-      partyEmail: party.email, partyName: party.name,
-      device: device.device,
+      documentId: String(doc._id),
+      partyIndex: idx,
+      partyEmail: party.email,
+      partyName:  party.name,
+      device:     device.device,
     });
 
-    // Safe doc — hide other parties' tokens
-    const safeDoc     = doc.toObject();
-    safeDoc.parties   = safeDoc.parties.map((p, i) => ({
-      ...p,
-      token: i === idx ? p.token : undefined,
-    }));
+    // ✅ Token hide — শুধু current party র token দেখাবে
+    const safeDocument = sanitizeDoc(doc, idx);
 
     return res.json({
       success:  true,
-      document: safeDoc,
+      document: safeDocument,
       party:    { ...party.toObject(), index: idx },
       geo:      {},
     });
+
   } catch (err) {
     console.error('[GET /sign/validate/:token]', err.message);
     return res.status(500).json({ success: false, message: err.message });
@@ -614,6 +738,14 @@ router.post('/sign/submit', async (req, res) => {
       });
     }
 
+    // ✅ Fields validate
+    if (Array.isArray(fields) && fields.length > 0) {
+      const fieldErr = validateFields(fields);
+      if (fieldErr) {
+        return res.status(400).json({ success: false, message: fieldErr });
+      }
+    }
+
     const doc = await Document.findOne({ 'parties.token': token });
     if (!doc) {
       return res.status(404).json({
@@ -625,13 +757,18 @@ router.post('/sign/submit', async (req, res) => {
     const idx   = doc.parties.findIndex(p => p.token === token);
     const party = doc.parties[idx];
 
+    if (!party) {
+      return res.status(404).json({
+        success: false, message: 'Signing party not found.',
+      });
+    }
+
     if (party.status === 'signed') {
       return res.status(409).json({
         success: false, code: 'ALREADY_SIGNED', message: 'Already signed.',
       });
     }
 
-    // Device — fast, sync
     const ip        = getIP(req);
     const ua        = req.headers['user-agent'] || '';
     const device    = parseDevice(ua);
@@ -646,7 +783,20 @@ router.post('/sign/submit', async (req, res) => {
     party.os              = device.os;
     party.localSignedTime = localTime;
 
-    doc.fields = fields;
+    // ✅ Fields merge — submitted values + preserve structure
+    if (Array.isArray(fields)) {
+      doc.fields = doc.fields.map(existingField => {
+        const submitted = fields.find(f => f.id === existingField.id);
+        if (submitted && submitted.partyIndex === idx) {
+          return {
+            ...existingField,
+            value:    submitted.value || null,
+            filledAt: submitted.value ? new Date() : null,
+          };
+        }
+        return existingField;
+      });
+    }
 
     const nextIdx = idx + 1;
     const hasNext = nextIdx < doc.parties.length;
@@ -664,19 +814,28 @@ router.post('/sign/submit', async (req, res) => {
 
       // Geo + audit — background
       getGeoLocation(ip).then(geo => {
-        if (!geo) return;
         safeAuditLog({
-          document_id: doc._id, document_title: doc.title,
-          action: 'signed',
+          document_id:   doc._id,
+          document_title: doc.title,
+          action:        'signed',
           performed_by: {
-            name: party.name, email: party.email,
+            name:        party.name,
+            email:       party.email,
             designation: party.designation,
-            role: 'signer', party_index: idx,
+            role:        'signer',
+            party_index: idx,
           },
-          device: { device_name: device.device, browser: device.browser, os: device.os },
+          device: {
+            device_name: device.device,
+            browser:     device.browser,
+            os:          device.os,
+          },
           location: {
-            ip_address: ip, city: geo?.city, country: geo?.country,
-            timezone: geo?.timezone, display: geo?.display,
+            ip_address: ip,
+            city:       geo?.city,
+            country:    geo?.country,
+            timezone:   geo?.timezone,
+            display:    geo?.display,
           },
           local_time: localTime,
           cc_list: doc.ccList.map(cc => ({
@@ -703,8 +862,10 @@ router.post('/sign/submit', async (req, res) => {
       });
 
       emitSocket(req, 'document:party_signed', {
-        documentId: String(doc._id), partyIndex: idx,
-        partyName: party.name, nextSigner: nextParty.email,
+        documentId: String(doc._id),
+        partyIndex: idx,
+        partyName:  party.name,
+        nextSigner: nextParty.email,
       });
 
       return res.json({
@@ -725,11 +886,12 @@ router.post('/sign/submit', async (req, res) => {
       await doc.save();
 
       emitSocket(req, 'document:completed', {
-        documentId: String(doc._id), ownerId: String(doc.owner),
-        title: doc.title, completedAt: doc.completedAt,
+        documentId:  String(doc._id),
+        ownerId:     String(doc.owner),
+        title:       doc.title,
+        completedAt: doc.completedAt,
       });
 
-      // Finalize background
       _finalizeDocument(req, doc).catch(e =>
         console.error('[finalize]', e.message)
       );
@@ -752,7 +914,7 @@ router.post('/sign/submit', async (req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════
-// ✅ GENERIC /:id ROUTES — sign routes এর পরে
+// GENERIC /:id ROUTES
 // ══════════════════════════════════════════════════════════════
 
 // ── 8. GET SINGLE DOCUMENT ──────────────────────────────────────
@@ -767,7 +929,7 @@ router.get('/:id', auth, async (req, res) => {
         success: false, message: 'Document not found.',
       });
     }
-    return res.json({ success: true, document: doc });
+    return res.json({ success: true, document: sanitizeDoc(doc) });
   } catch (err) {
     console.error('[GET /documents/:id]', err.message);
     return res.status(500).json({ success: false, message: err.message });
@@ -807,14 +969,21 @@ router.get('/:id/audit', auth, async (req, res) => {
       });
       if (p.signedAt) events.push({
         action: 'signed', label: 'Document Signed',
-        actor: { name: p.name, email: p.email, designation: p.designation },
-        timestamp: p.signedAt, localTime: p.localSignedTime,
-        device: p.device, browser: p.browser, os: p.os,
-        ipAddress: p.ipAddress,
+        actor: {
+          name: p.name, email: p.email, designation: p.designation,
+        },
+        timestamp:  p.signedAt,
+        localTime:  p.localSignedTime,
+        device:     p.device,
+        browser:    p.browser,
+        os:         p.os,
+        ipAddress:  p.ipAddress,
         location: {
-          city: p.city, region: p.region, country: p.country,
+          city:       p.city,
+          region:     p.region,
+          country:    p.country,
           postalCode: p.postalCode,
-          display: [p.city, p.country, p.postalCode]
+          display:    [p.city, p.country, p.postalCode]
             .filter(Boolean).join(', '),
         },
       });
@@ -834,12 +1003,18 @@ router.get('/:id/audit', auth, async (req, res) => {
       success: true,
       audit: {
         document: {
-          _id: doc._id, title: doc.title, status: doc.status,
-          companyName: doc.companyName, companyLogo: doc.companyLogo,
-          createdAt: doc.createdAt, completedAt: doc.completedAt,
+          _id:         doc._id,
+          title:       doc.title,
+          status:      doc.status,
+          companyName: doc.companyName,
+          companyLogo: doc.companyLogo,
+          createdAt:   doc.createdAt,
+          completedAt: doc.completedAt,
         },
-        parties: doc.parties, ccList: doc.ccList,
-        events, signedFileUrl: doc.signedFileUrl,
+        parties:       doc.parties,
+        ccList:        doc.ccList,
+        events,
+        signedFileUrl: doc.signedFileUrl,
       },
     });
   } catch (err) {
@@ -877,7 +1052,7 @@ router.put('/:id', auth, async (req, res) => {
         success: false, message: 'Document not found.',
       });
     }
-    return res.json({ success: true, document: doc });
+    return res.json({ success: true, document: sanitizeDoc(doc) });
   } catch (err) {
     console.error('[PUT /documents/:id]', err.message);
     return res.status(500).json({ success: false, message: err.message });
@@ -915,16 +1090,20 @@ router.delete('/:id', auth, async (req, res) => {
     await Document.findByIdAndDelete(doc._id);
 
     safeAuditLog({
-      document_id: doc._id, document_title: doc.title,
-      action: 'deleted',
+      document_id:   doc._id,
+      document_title: doc.title,
+      action:        'deleted',
       performed_by: {
-        user_id: req.user._id, name: req.user.full_name,
-        email: req.user.email, role: 'owner',
+        user_id:     req.user._id,
+        name:        req.user.full_name,
+        email:       req.user.email,
+        role:        'owner',
       },
     });
 
     emitSocket(req, 'document:deleted', {
-      documentId: String(doc._id), ownerId: req.user.id,
+      documentId: String(doc._id),
+      ownerId:    req.user.id,
     });
 
     return res.json({ success: true, message: 'Document deleted.' });
@@ -935,7 +1114,7 @@ router.delete('/:id', auth, async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// INTERNAL — Finalize (background)
+// INTERNAL — Finalize
 // ═══════════════════════════════════════════════════════════════
 async function _finalizeDocument(req, doc) {
   try {
@@ -956,43 +1135,60 @@ async function _finalizeDocument(req, doc) {
     console.log(`✅ Signed PDF: ${uploaded.secure_url}`);
 
     const partiesWithAudit = doc.parties.map(p => ({
-      name: p.name, email: p.email, designation: p.designation,
-      status: p.status, signedAt: p.signedAt,
+      name:        p.name,
+      email:       p.email,
+      designation: p.designation,
+      status:      p.status,
+      signedAt:    p.signedAt,
       auditInfo: {
-        device: p.device, browser: p.browser, os: p.os,
+        device:   p.device,
+        browser:  p.browser,
+        os:       p.os,
         location: [p.city, p.country].filter(Boolean).join(', '),
-        postal: p.postalCode, time: p.localSignedTime, ip: p.ipAddress,
+        postal:   p.postalCode,
+        time:     p.localSignedTime,
+        ip:       p.ipAddress,
       },
     }));
 
-    // Completion emails — parallel
     await Promise.allSettled([
       ...doc.parties.map(party =>
         sendCompletionEmail({
-          recipientEmail: party.email, recipientName: party.name,
+          recipientEmail:       party.email,
+          recipientName:        party.name,
           recipientDesignation: party.designation,
-          documentTitle: doc.title, pdfBuffer: finalBuffer,
-          signedPdfUrl: uploaded.secure_url,
-          companyLogoUrl: doc.companyLogo, companyName: doc.companyName,
-          parties: partiesWithAudit, ccList: doc.ccList, isCC: false,
+          documentTitle:        doc.title,
+          pdfBuffer:            finalBuffer,
+          signedPdfUrl:         uploaded.secure_url,
+          companyLogoUrl:       doc.companyLogo,
+          companyName:          doc.companyName,
+          parties:              partiesWithAudit,
+          ccList:               doc.ccList,
+          isCC:                 false,
         })
       ),
       ...doc.ccList.map(cc =>
         sendCompletionEmail({
-          recipientEmail: cc.email, recipientName: cc.name,
+          recipientEmail:       cc.email,
+          recipientName:        cc.name,
           recipientDesignation: cc.designation,
-          documentTitle: doc.title, pdfBuffer: finalBuffer,
-          signedPdfUrl: uploaded.secure_url,
-          companyLogoUrl: doc.companyLogo, companyName: doc.companyName,
-          parties: partiesWithAudit, ccList: doc.ccList, isCC: true,
+          documentTitle:        doc.title,
+          pdfBuffer:            finalBuffer,
+          signedPdfUrl:         uploaded.secure_url,
+          companyLogoUrl:       doc.companyLogo,
+          companyName:          doc.companyName,
+          parties:              partiesWithAudit,
+          ccList:               doc.ccList,
+          isCC:                 true,
         })
       ),
     ]);
 
     safeAuditLog({
-      document_id: doc._id, document_title: doc.title,
-      action: 'completed',
-      performed_by: { name: 'System', role: 'system' },
+      document_id:   doc._id,
+      document_title: doc.title,
+      action:        'completed',
+      performed_by:  { name: 'System', role: 'system' },
       details: {
         signed_pdf_url: uploaded.secure_url,
         total_signers:  doc.parties.length,
