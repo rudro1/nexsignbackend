@@ -1516,7 +1516,50 @@ async function getGeoLocation(ip) {
     return null;
   }
 }
+// ✅ Reverse geocode — GPS coordinates থেকে exact location
+// BigDataCloud — free, no API key, Vercel এ perfect
+async function reverseGeocode(latitude, longitude) {
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 5000);
 
+    const res = await fetch(
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${latitude}&longitude=${longitude}&localityLanguage=en`,
+      { signal: controller.signal },
+    );
+    clearTimeout(tid);
+
+    if (!res.ok) return null;
+    const data = await res.json();
+
+    // BigDataCloud response structure
+    const city       = data.city
+                    || data.locality
+                    || data.principalSubdivision
+                    || null;
+    const region     = data.principalSubdivision || null;
+    const country    = data.countryName          || null;
+    const countryCode= data.countryCode          || null;
+    const postalCode = data.postcode             || null;
+    const timezone   = data.timezone?.name       || null;
+
+    return {
+      city,
+      region,
+      country,
+      countryCode,
+      postalCode,
+      timezone,
+      latitude:  String(latitude),
+      longitude: String(longitude),
+      display: [city, region, country, postalCode]
+        .filter(Boolean).join(', '),
+    };
+  } catch (e) {
+    console.warn('[reverseGeocode] failed:', e.message);
+    return null;
+  }
+}
 function emitSocket(req, event, data) {
   try {
     const io = req.app.get('io');
@@ -2011,7 +2054,7 @@ router.get('/sign/:token/pdf', async (req, res) => {
 // ── 7. SUBMIT SIGNATURE ─────────────────────────────────────────
 router.post('/sign/submit', async (req, res) => {
   try {
-    const { token, fields, clientTime } = req.body;
+    const { token, fields, clientTime, latitude, longitude } = req.body;
 
     if (!token || !fields) {
       return res.status(400).json({
@@ -2047,19 +2090,27 @@ router.post('/sign/submit', async (req, res) => {
       });
     }
 
-    const ip        = getIP(req);
-    const ua        = req.headers['user-agent'] || '';
-    const device    = parseDevice(ua);
+    const ip     = getIP(req);
+    const ua     = req.headers['user-agent'] || '';
+    const device = parseDevice(ua);
 
-    // ✅ FIX: clientTime সঠিকভাবে নেওয়া হচ্ছে
-    // Frontend থেকে ISO string আসবে
-    const localTime = clientTime
-      ? new Date(clientTime).toUTCString()
-      : new Date().toUTCString();
+    // ✅ Server time — always correct, browser time এর উপর depend করে না
+    const localTime = new Date().toUTCString();
 
-    // ✅ FIX: geo await করে নেওয়া হচ্ছে submit এ
-    // এটাই final — validate এর data overwrite হবে
-    const geo = await getGeoLocation(ip);
+    // ✅ GPS coordinates আছে → reverse geocode (exact location)
+    // না থাকলে → IP based fallback
+    let geo = null;
+
+    if (latitude && longitude) {
+      console.log(`[geo] GPS coordinates received: ${latitude}, ${longitude}`);
+      geo = await reverseGeocode(parseFloat(latitude), parseFloat(longitude));
+      if (geo) console.log(`[geo] Reverse geocode success: ${geo.display}`);
+    }
+
+    if (!geo) {
+      console.log(`[geo] Falling back to IP: ${ip}`);
+      geo = await getGeoLocation(ip);
+    }
 
     party.status          = 'signed';
     party.signedAt        = new Date();
@@ -2070,7 +2121,6 @@ router.post('/sign/submit', async (req, res) => {
     party.os              = device.os;
     party.localSignedTime = localTime;
 
-    // ✅ FIX: সব geo fields সঠিকভাবে save
     if (geo) {
       party.city        = geo.city        || null;
       party.region      = geo.region      || null;
@@ -2080,9 +2130,7 @@ router.post('/sign/submit', async (req, res) => {
       party.latitude    = geo.latitude    || null;
       party.longitude   = geo.longitude   || null;
     } else {
-      // geo fail হলে আগের validate এর data রাখো
-      // (party তে আগে থেকে city/region থাকতে পারে)
-      console.warn(`[geo] failed for IP: ${ip} — keeping previous data`);
+      console.warn(`[geo] Both GPS and IP geo failed for: ${ip}`);
     }
 
     // ✅ Fields merge
@@ -2176,14 +2224,12 @@ router.post('/sign/submit', async (req, res) => {
         signerInfo: {
           name:     party.name,
           device:   device.device,
-          // ✅ FIX: actual location দেখাও
           location: geo?.display || 'Unknown',
           time:     localTime,
         },
       });
 
     } else {
-      // ✅ All signed
       doc.status      = 'completed';
       doc.completedAt = new Date();
       await doc.save();
@@ -2195,7 +2241,6 @@ router.post('/sign/submit', async (req, res) => {
         completedAt: doc.completedAt,
       });
 
-      // ✅ Background finalize
       _finalizeDocument(req, doc).catch(e =>
         console.error('[finalize]', e.message)
       );
@@ -2208,7 +2253,6 @@ router.post('/sign/submit', async (req, res) => {
         signerInfo: {
           name:     party.name,
           device:   device.device,
-          // ✅ FIX: actual location দেখাও
           location: geo?.display || 'Unknown',
           time:     localTime,
         },
