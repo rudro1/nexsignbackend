@@ -237,6 +237,7 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
     await doc.save();
 
     // Send first email
+    console.log('📤 Attempting to send signing email to:', doc.parties[0].email);
     const frontendUrl = (process.env.FRONTEND_URL || 'https://nexsignfrontend.vercel.app').replace(/\/$/, '');
     await sendSigningEmail({
       recipientEmail: doc.parties[0].email,
@@ -458,12 +459,15 @@ router.post('/templates/:id/use', auth, async (req, res) => {
     tpl.usageCount = (tpl.usageCount || 0) + 1;
     await tpl.save();
 
+    const frontendUrl = (process.env.FRONTEND_URL || 'https://nexsignfrontend.vercel.app').replace(/\/$/, '');
     await sendSigningEmail({
       recipientEmail: doc.parties[0].email,
       recipientName:  doc.parties[0].name,
       documentTitle:  doc.title,
       senderName:     req.user.full_name || 'Admin',
-      signingLink:    `${process.env.FRONTEND_URL}/sign?token=${firstPartyToken}`,
+      signingLink:    `${frontendUrl}/sign/${firstPartyToken}`,
+      companyLogoUrl: tpl.companyLogo,
+      companyName:    tpl.companyName,
     });
 
     res.json({ success: true, document: doc });

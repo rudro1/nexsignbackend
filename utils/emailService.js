@@ -356,15 +356,19 @@ async function sendMail(mailOptions, retries = 2) {
   const transport = getTransporter();
   let lastErr;
 
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.error('❌ EMAIL_USER or EMAIL_PASS not set in environment!');
+    throw new Error('Email service misconfigured');
+  }
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const info = await transport.sendMail(mailOptions);
-      if (process.env.NODE_ENV !== 'production') {
-        console.log(`📧 Sent → ${mailOptions.to} [${info.messageId}]`);
-      }
+      console.log(`📧 Sent → ${mailOptions.to} [${info.messageId}]`);
       return info;
     } catch (err) {
       lastErr = err;
+      console.error(`📧 Attempt ${attempt + 1} failed for ${mailOptions.to}:`, err.message);
       if (attempt < retries) {
         await new Promise(r => setTimeout(r, 1_500 * (attempt + 1)));
       }
