@@ -1,79 +1,10 @@
-// const nodemailer = require('nodemailer');
-
-// // ট্রান্সপোর্টারকে ফাংশনের বাইরে রাখা ভালো যাতে কানেকশন বারবার তৈরি না হয়
-// const transporter = nodemailer.createTransport({
-//   service: 'gmail',
-//   host: 'smtp.gmail.com',
-//   port: 465,
-//   secure: true, 
-//   auth: {
-//     user: process.env.EMAIL_USER,
-//     pass: process.env.EMAIL_PASS
-//   }
-// });
-
-// // const sendFeedbackEmail = async (userEmail, userName, stars) => {
-// //   const mailOptions = {
-// //     from: `"NeXsign" <${process.env.EMAIL_USER}>`, 
-// //     to: userEmail,
-// //     subject: 'Thank you for your feedback! 🌟',
-// //     html: `
-// //       <div style="font-family: sans-serif; padding: 20px; border: 1px solid #ddd; border-radius: 10px; max-width: 500px;">
-// //         <h2 style="color: #0ea5e9;">Hi ${userName || 'User'},</h2>
-// //         <p>Thank you so much for giving us a <strong>${stars} star</strong> rating!</p>
-// //         <p>Your feedback helps us make <strong>NeXsign</strong> better every day.</p>
-// //         <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-// //         <p>Best Regards,<br/><strong>Team NeXsign</strong></p>
-// //       </div>
-// //     `
-// //   };
-
-// //   return transporter.sendMail(mailOptions);
-// // };
-
-// const sendFeedbackEmail = async (userEmail, userName, stars) => {
-//   const brandColor = "#28ABDF"; 
-//   return transporter.sendMail({
-//     from: `"NeXsign Support" <${process.env.EMAIL_USER}>`,
-//     to: userEmail,
-//     subject: 'We value your feedback! 🌟',
-//     html: `
-//       <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
-//         <div style="background-color: ${brandColor}; padding: 30px; text-align: center;">
-//           <h1 style="color: white; margin: 0; font-size: 28px; letter-spacing: 1px;">NeXsign</h1>
-//         </div>
-//         <div style="padding: 40px; background-color: #ffffff;">
-//           <h2 style="color: #1a202c; font-size: 22px; margin-top: 0;">Hello ${userName || 'Valued User'},</h2>
-//           <p style="color: #4a5568; line-height: 1.6; font-size: 16px;">
-//             Thank you so much for your incredible <strong>${stars}-star rating!</strong> 
-//           </p>
-//           <p style="color: #4a5568; line-height: 1.6; font-size: 16px;">
-//             At <strong>NeXsign</strong>, our mission is to provide the most secure and seamless signing experience. Your feedback is a vital part of our journey to excellence.
-//           </p>
-//           <div style="margin: 30px 0; padding: 20px; background-color: #f8fafc; border-radius: 12px; border-left: 4px solid ${brandColor};">
-//             <p style="margin: 0; font-style: italic; color: #64748b;">"Your support motivates our team to innovate and build a better future for digital agreements."</p>
-//           </div>
-//           <p style="color: #4a5568; font-size: 16px;">Keep signing with confidence!</p>
-//           <br>
-//           <p style="margin: 0; color: #1a202c; font-weight: bold;">Best Regards,</p>
-//           <p style="margin: 5px 0 0 0; color: ${brandColor}; font-weight: 600;">Team NeXsign</p>
-//         </div>
-//         <div style="background-color: #f1f5f9; padding: 20px; text-align: center; font-size: 12px; color: #94a3b8;">
-//           © 2026 NeXsign Inc. | Secure. Simple. Professional.
-//         </div>
-//       </div>
-//     `
-//   });
-// };
-// module.exports = { sendFeedbackEmail };
-
 'use strict';
 
 const nodemailer = require('nodemailer');
 
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 // BRAND CONFIG
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 const BRAND = Object.freeze({
   color:      '#28ABDF',
   colorDark:  '#1e7fb5',
@@ -85,12 +16,12 @@ const BRAND = Object.freeze({
   support:    'support@nexsign.app',
 });
 
-// ✅ Validation — backend must know where frontend is
-const FRONT = () => (process.env.FRONTEND_URL || 'https://nexsignfrontend.vercel.app').replace(/\/$/, '');
+const FRONT = () =>
+  (process.env.FRONTEND_URL || 'https://nexsignfrontend.vercel.app').replace(/\/$/, '');
 
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 // TRANSPORTER — singleton, pooled SMTP
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 let _transporter = null;
 
 function getTransporter() {
@@ -112,211 +43,185 @@ function getTransporter() {
     rateLimit:      10,
   });
 
-  // Verify once — non-blocking
   _transporter.verify()
-    .then(()  => {
+    .then(() => {
       if (process.env.NODE_ENV !== 'production')
         console.log('✅ Email transporter ready');
     })
     .catch(err => {
       console.error('❌ Email transporter error:', err.message);
-      _transporter = null; // reset → next call retries
+      _transporter = null;
     });
 
   return _transporter;
 }
 
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 // INTERNAL HELPERS
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 
-/** "From" field */
 function fromField(companyName) {
   return `"${companyName || BRAND.name}" <${process.env.EMAIL_USER}>`;
 }
 
-/** Optional logo block */
 function logoBlock(logoUrl, companyName) {
   if (!logoUrl) return '';
   return `
     <div style="text-align:center;margin-bottom:16px;">
-      <img
-        src="${logoUrl}"
-        alt="${companyName || 'Logo'}"
+      <img src="${logoUrl}" alt="${companyName || 'Logo'}"
         style="max-height:60px;max-width:180px;
-               object-fit:contain;display:inline-block;"
-      />
+               object-fit:contain;display:inline-block;"/>
     </div>`;
 }
 
-/** Reusable document info card */
-function docCard(documentTitle, extra = '') {
+// ── Audit Info Row (Device + Location + Time) ─────────────────
+function auditInfoBlock(auditInfo = {}) {
+  if (!auditInfo || !auditInfo.device) return '';
+  
+  const rows = [];
+  if (auditInfo.device)   rows.push(['📱 Device',   auditInfo.device]);
+  if (auditInfo.browser)  rows.push(['🌐 Browser',  auditInfo.browser]);
+  if (auditInfo.os)       rows.push(['💻 OS',        auditInfo.os]);
+  if (auditInfo.location) rows.push(['📍 Location',  auditInfo.location]);
+  if (auditInfo.postal)   rows.push(['📮 Postal',    auditInfo.postal]);
+  if (auditInfo.time)     rows.push(['🕐 Time',      auditInfo.time]);
+  if (auditInfo.ip)       rows.push(['🔗 IP',        auditInfo.ip]);
+
+  if (!rows.length) return '';
+
+  const rowsHtml = rows.map(([label, value]) => `
+    <tr>
+      <td style="padding:6px 12px;font-size:12px;color:#64748b;
+                 white-space:nowrap;font-weight:600;">
+        ${label}
+      </td>
+      <td style="padding:6px 12px;font-size:12px;color:#1e293b;">
+        ${value}
+      </td>
+    </tr>`).join('');
+
   return `
-    <div style="
-      background:#f8fafc;
-      border-left:4px solid ${BRAND.color};
-      border-radius:10px;
-      padding:16px 20px;
-      margin:0 0 16px;
-    ">
-      <p style="margin:0;font-size:17px;font-weight:700;color:#1a202c;">
-        📄 ${documentTitle}
-      </p>
-      ${extra}
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;
+                border-radius:10px;overflow:hidden;margin:12px 0;">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        ${rowsHtml}
+      </table>
     </div>`;
 }
 
-/** Parties summary table (name + email + designation + status) */
-function partiesTable(parties = []) {
-  if (!parties.length) return '';
-
-  const rows = parties.map((p, i) => {
-    const signed   = p.status === 'signed' || !!p.signedAt;
-    const rowBg    = i % 2 === 0 ? '#ffffff' : '#f8fafc';
-    const statusTd = signed
-      ? `<span style="color:#16a34a;font-weight:700;">✅ Signed</span>`
-      : `<span style="color:#d97706;font-weight:600;">⏳ Pending</span>`;
-
-    return `
-      <tr style="background:${rowBg};">
-        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;
-                   font-size:13px;color:#1a202c;font-weight:600;">
-          ${p.name || '—'}
-          ${p.designation
-            ? `<br/><span style="font-size:11px;color:#94a3b8;
-                              font-weight:400;">${p.designation}</span>`
-            : ''}
-        </td>
-        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;
-                   font-size:12px;color:#64748b;">
-          ${p.email || '—'}
-        </td>
-        <td style="padding:10px 12px;border-bottom:1px solid #e2e8f0;
-                   font-size:13px;">
-          ${statusTd}
-        </td>
-      </tr>`;
-  }).join('');
+// ── Signer Summary Card ───────────────────────────────────────
+function signerCard(party, index) {
+  const isSigned = party.status === 'signed' || !!party.signedAt;
+  const bgColor  = isSigned ? '#f0fdf4' : '#fefce8';
+  const border   = isSigned ? '#86efac' : '#fde68a';
+  const badge    = isSigned
+    ? `<span style="background:#dcfce7;color:#15803d;padding:3px 10px;
+                    border-radius:20px;font-size:11px;font-weight:700;">
+         ✅ Signed
+       </span>`
+    : `<span style="background:#fef9c3;color:#a16207;padding:3px 10px;
+                    border-radius:20px;font-size:11px;font-weight:700;">
+         ⏳ Pending
+       </span>`;
 
   return `
-    <table width="100%" cellpadding="0" cellspacing="0" style="
-      border-collapse:collapse;
-      border:1px solid #e2e8f0;
-      border-radius:10px;
-      overflow:hidden;
-      margin:16px 0;
-      font-family:'Segoe UI',sans-serif;
-    ">
-      <thead>
-        <tr style="background:#f1f5f9;">
-          <th style="padding:10px 12px;text-align:left;font-size:11px;
-                     color:#64748b;text-transform:uppercase;
-                     letter-spacing:0.6px;">Name / Designation</th>
-          <th style="padding:10px 12px;text-align:left;font-size:11px;
-                     color:#64748b;text-transform:uppercase;
-                     letter-spacing:0.6px;">Email</th>
-          <th style="padding:10px 12px;text-align:left;font-size:11px;
-                     color:#64748b;text-transform:uppercase;
-                     letter-spacing:0.6px;">Status</th>
+    <div style="background:${bgColor};border:1px solid ${border};
+                border-radius:10px;padding:14px 16px;margin:8px 0;">
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td>
+            <div style="font-size:14px;font-weight:700;color:#1e293b;">
+              ${index + 1}. ${party.name || 'Unknown'}
+            </div>
+            ${party.designation
+              ? `<div style="font-size:12px;color:#64748b;margin-top:2px;">
+                   🏷️ ${party.designation}
+                 </div>`
+              : ''}
+            <div style="font-size:12px;color:#94a3b8;margin-top:2px;">
+              📧 ${party.email || '—'}
+            </div>
+          </td>
+          <td style="text-align:right;vertical-align:top;">
+            ${badge}
+          </td>
         </tr>
-      </thead>
-      <tbody>${rows}</tbody>
-    </table>`;
+      </table>
+      ${isSigned && party.auditInfo
+        ? auditInfoBlock(party.auditInfo)
+        : ''}
+    </div>`;
 }
 
-/** Footer */
-function poweredByFooter(companyName) {
-  const sender = companyName
-    ? `<strong>${companyName}</strong>`
-    : 'This organisation';
-
+// ── CC Recipient Card ─────────────────────────────────────────
+function ccCard(cc) {
   return `
-    <table width="100%" cellpadding="0" cellspacing="0">
-      <tr>
-        <td style="
-          background:#f1f5f9;
-          padding:20px 36px;
-          text-align:center;
-          border-top:1px solid #e2e8f0;
-          font-family:'Segoe UI',sans-serif;
-        ">
-          <p style="margin:0 0 6px;font-size:12px;color:#475569;">
-            ${sender} uses
-            <strong style="color:${BRAND.color};">${BRAND.name}</strong>
-            to send and manage secure digital contracts.
-          </p>
-          <p style="margin:0 0 4px;font-size:11px;color:#94a3b8;">
-            Powered by
-            <strong style="color:${BRAND.color};">${BRAND.name}</strong>
-            &nbsp;·&nbsp;${BRAND.tagline}
-            &nbsp;·&nbsp;&copy; ${BRAND.year}
-          </p>
-          <p style="margin:0;font-size:10px;color:#cbd5e1;">
-            Questions?
-            <a href="mailto:${BRAND.support}"
-               style="color:${BRAND.color};text-decoration:none;">
-              ${BRAND.support}
-            </a>
-          </p>
-        </td>
-      </tr>
-    </table>`;
+    <div style="display:inline-block;background:#f1f5f9;border:1px solid #e2e8f0;
+                border-radius:8px;padding:8px 14px;margin:4px 4px 4px 0;">
+      <div style="font-size:13px;font-weight:700;color:#1e293b;">
+        ${cc.name || cc.email}
+      </div>
+      ${cc.designation
+        ? `<div style="font-size:11px;color:#64748b;">🏷️ ${cc.designation}</div>`
+        : ''}
+      <div style="font-size:11px;color:#94a3b8;">📧 ${cc.email}</div>
+    </div>`;
 }
 
-/** Master HTML shell */
+// ── CTA Button ────────────────────────────────────────────────
+function ctaButton(href, label, color = BRAND.color) {
+  return `
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${href}"
+        style="background:${color};color:#ffffff;
+               padding:14px 36px;text-decoration:none;
+               border-radius:10px;font-weight:700;
+               font-size:15px;display:inline-block;
+               box-shadow:0 4px 14px rgba(40,171,223,0.35);
+               letter-spacing:0.3px;">
+        ${label}
+      </a>
+    </div>`;
+}
+
+// ── Master HTML Shell ─────────────────────────────────────────
 function buildEmail({ logoUrl, companyName, subject, bodyHtml }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <meta name="x-apple-disable-message-reformatting"/>
   <title>${subject}</title>
   <style>
     @media only screen and (max-width:600px){
       .email-body { padding:20px !important; }
-      .email-card { border-radius:0 !important; }
-      .btn-cta    { padding:12px 24px !important;font-size:14px !important; }
+      .btn-cta { padding:12px 24px !important;font-size:14px !important; }
     }
   </style>
 </head>
 <body style="margin:0;padding:0;background:#e9f0f7;
-             -webkit-text-size-adjust:100%;font-family:'Segoe UI',sans-serif;">
-
+             font-family:'Segoe UI',Helvetica,Arial,sans-serif;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-    style="background:#e9f0f7;padding:32px 16px;">
+         style="background:#e9f0f7;padding:32px 16px;">
     <tr>
       <td align="center">
-        <table role="presentation" class="email-card" width="100%"
-          style="
-            max-width:600px;
-            background:#ffffff;
-            border-radius:18px;
-            overflow:hidden;
-            box-shadow:0 6px 30px rgba(0,0,0,0.09);
-          ">
+        <table role="presentation" width="100%"
+               style="max-width:600px;background:#ffffff;
+                      border-radius:18px;overflow:hidden;
+                      box-shadow:0 6px 30px rgba(0,0,0,0.09);">
 
           <!-- HEADER -->
           <tr>
-            <td style="
-              background:linear-gradient(
-                135deg,${BRAND.color} 0%,${BRAND.colorDark} 100%
-              );
-              padding:28px 36px;
-              text-align:center;
-            ">
+            <td style="background:linear-gradient(135deg,
+                       ${BRAND.color} 0%,${BRAND.colorDark} 100%);
+                       padding:28px 36px;text-align:center;">
               ${logoBlock(logoUrl, companyName)}
-              <h1 style="
-                color:#ffffff;margin:0;
-                font-size:22px;font-weight:700;
-                letter-spacing:0.4px;
-              ">
+              <h1 style="color:#fff;margin:0;font-size:22px;
+                         font-weight:700;letter-spacing:0.4px;">
                 ${companyName || BRAND.name}
               </h1>
-              <p style="
-                color:rgba(255,255,255,0.78);
-                margin:5px 0 0;font-size:12px;
-              ">
+              <p style="color:rgba(255,255,255,0.78);
+                        margin:5px 0 0;font-size:12px;">
                 ${BRAND.tagline}
               </p>
             </td>
@@ -325,41 +230,55 @@ function buildEmail({ logoUrl, companyName, subject, bodyHtml }) {
           <!-- BODY -->
           <tr>
             <td class="email-body"
-              style="
-                padding:36px;
-                font-size:15px;
-                color:#374151;
-                line-height:1.7;
-              ">
+                style="padding:36px;font-size:15px;
+                       color:#374151;line-height:1.7;">
               ${bodyHtml}
             </td>
           </tr>
 
           <!-- FOOTER -->
           <tr>
-            <td>${poweredByFooter(companyName)}</td>
+            <td style="background:#f1f5f9;padding:20px 36px;
+                       text-align:center;border-top:1px solid #e2e8f0;">
+              <p style="margin:0 0 6px;font-size:12px;color:#475569;">
+                ${companyName
+                  ? `<strong>${companyName}</strong> uses`
+                  : 'Powered by'}
+                <strong style="color:${BRAND.color};">
+                  ${BRAND.name}
+                </strong>
+                for secure digital contracts.
+              </p>
+              <p style="margin:0;font-size:11px;color:#94a3b8;">
+                ${BRAND.tagline} &nbsp;·&nbsp; © ${BRAND.year}
+                &nbsp;·&nbsp;
+                <a href="mailto:${BRAND.support}"
+                   style="color:${BRAND.color};text-decoration:none;">
+                  ${BRAND.support}
+                </a>
+              </p>
+            </td>
           </tr>
 
         </table>
       </td>
     </tr>
   </table>
-
 </body>
 </html>`;
 }
 
-// ════════════════════════════════════════════════════════════════
-// INTERNAL: send with retry
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// INTERNAL SEND WITH RETRY
+// ═══════════════════════════════════════════════════════════════
 async function sendMail(mailOptions, retries = 2) {
-  const transport = getTransporter();
-  let lastErr;
-
   if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
-    console.error('❌ EMAIL_USER or EMAIL_PASS not set in environment!');
+    console.error('❌ EMAIL_USER or EMAIL_PASS not set!');
     throw new Error('Email service misconfigured');
   }
+
+  const transport = getTransporter();
+  let lastErr;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -368,7 +287,10 @@ async function sendMail(mailOptions, retries = 2) {
       return info;
     } catch (err) {
       lastErr = err;
-      console.error(`📧 Attempt ${attempt + 1} failed for ${mailOptions.to}:`, err.message);
+      console.error(
+        `📧 Attempt ${attempt + 1} failed for ${mailOptions.to}:`,
+        err.message
+      );
       if (attempt < retries) {
         await new Promise(r => setTimeout(r, 1_500 * (attempt + 1)));
       }
@@ -377,140 +299,244 @@ async function sendMail(mailOptions, retries = 2) {
   throw lastErr;
 }
 
-// ════════════════════════════════════════════════════════════════
-// 1. SIGNING INVITATION
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// 1. SIGNING INVITATION EMAIL
+// ═══════════════════════════════════════════════════════════════
 /**
  * @param {string}  recipientEmail
  * @param {string}  recipientName
+ * @param {string}  [recipientDesignation]
  * @param {string}  senderName
+ * @param {string}  [senderDesignation]
  * @param {string}  documentTitle
- * @param {string}  signingLink        — unique token link
+ * @param {string}  signingLink
  * @param {string}  [companyLogoUrl]
  * @param {string}  [companyName]
- * @param {number}  [partyNumber]      — 1-based index
+ * @param {number}  [partyNumber]
  * @param {number}  [totalParties]
- * @param {string}  [message]          — sender's custom message
- * @param {string}  [designation]      — signer's designation
+ * @param {string}  [message]
+ * @param {Array}   [ccList]  [{name, email, designation}]
  */
 async function sendSigningEmail({
   recipientEmail,
   recipientName,
+  recipientDesignation = '',
   senderName,
+  senderDesignation    = '',
   documentTitle,
   signingLink,
   companyLogoUrl,
   companyName,
-  partyNumber,
-  totalParties,
-  message      = '',
-  designation  = '',
+  partyNumber    = 1,
+  totalParties   = 1,
+  message        = '',
+  ccList         = [],
 }) {
-  const subject = `Action Required: Sign "${documentTitle}"`;
-  const html = `
-    <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-      <div style="background-color: #f8fafc; padding: 32px 40px; border-bottom: 1px solid #e2e8f0; text-align: center;">
-        ${companyLogoUrl 
-          ? `<img src="${companyLogoUrl}" alt="${companyName || 'Logo'}" style="max-height: 48px; width: auto; margin-bottom: 16px; display: block; margin-left: auto; margin-right: auto;">`
-          : `<div style="font-size: 24px; font-weight: bold; color: #28ABDF; margin-bottom: 8px;">NeXsign</div>`
-        }
-        <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #1e293b;">Signature Request</h1>
+  const subject = `✍️ Signature Required: "${documentTitle}"`;
+
+  const progressHtml = totalParties > 1
+    ? `<div style="background:#f1f5f9;border-radius:8px;
+                   padding:10px 14px;margin:16px 0;
+                   font-size:13px;color:#475569;">
+         📋 You are signer
+         <strong style="color:${BRAND.color};">
+           ${partyNumber} of ${totalParties}
+         </strong>
+       </div>`
+    : '';
+
+  const ccHtml = ccList.length
+    ? `<div style="margin:20px 0;">
+         <div style="font-size:12px;font-weight:700;color:#64748b;
+                     text-transform:uppercase;letter-spacing:0.6px;
+                     margin-bottom:8px;">
+           CC Recipients
+         </div>
+         ${ccList.map(cc => ccCard(cc)).join('')}
+       </div>`
+    : '';
+
+  const msgHtml = message
+    ? `<div style="font-style:italic;color:#475569;
+                   border-left:4px solid #cbd5e1;
+                   padding:12px 16px;margin:20px 0;
+                   background:#f8fafc;border-radius:0 8px 8px 0;
+                   font-size:14px;">
+         "${message}"
+       </div>`
+    : '';
+
+  const bodyHtml = `
+    <h2 style="color:#1a202c;margin:0 0 16px;font-size:20px;">
+      Hello ${recipientName}
+      ${recipientDesignation
+        ? `<span style="font-size:13px;color:#64748b;
+                        font-weight:400;display:block;margin-top:4px;">
+             🏷️ ${recipientDesignation}
+           </span>`
+        : ''},
+    </h2>
+
+    <p style="color:#4a5568;margin:0 0 16px;">
+      <strong>${senderName}</strong>
+      ${senderDesignation
+        ? `<span style="font-size:13px;color:#64748b;">
+             (${senderDesignation})
+           </span>`
+        : ''}
+      ${companyName
+        ? `from <strong>${companyName}</strong>`
+        : ''}
+      has requested your digital signature on:
+    </p>
+
+    <div style="background:#f1f5f9;border-left:4px solid ${BRAND.color};
+                border-radius:10px;padding:16px 20px;margin:0 0 16px;">
+      <div style="font-size:12px;color:#64748b;font-weight:700;
+                  text-transform:uppercase;letter-spacing:0.5px;
+                  margin-bottom:4px;">
+        Document
       </div>
-      
-      <div style="padding: 40px;">
-        <p style="margin-top: 0;">Hello <strong>${recipientName}</strong>,</p>
-        <p><strong>${senderName}</strong> ${companyName ? `from <strong>${companyName}</strong>` : ''} has requested your digital signature on the following document:</p>
-        
-        <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 24px 0; text-align: center;">
-          <div style="font-size: 14px; color: #64748b; margin-bottom: 4px;">DOCUMENT</div>
-          <div style="font-size: 18px; font-weight: 600; color: #0f172a;">${documentTitle}</div>
-        </div>
-
-        ${message ? `<div style="font-style: italic; color: #475569; border-left: 4px solid #cbd5e1; padding-left: 16px; margin: 24px 0;">"${message}"</div>` : ''}
-
-        <div style="text-align: center; margin: 32px 0;">
-          <a href="${signingLink}" style="background-color: #28ABDF; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(40, 171, 223, 0.2);">Review & Sign Document</a>
-        </div>
-
-        <p style="font-size: 14px; color: #64748b; margin-bottom: 0;">
-          This is a secure request. You can sign this document from any device without creating an account.
-        </p>
-      </div>
-
-      <div style="background-color: #f8fafc; padding: 24px 40px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8;">
-        <p style="margin: 0;">© ${BRAND.year} NeXsign — Enterprise-Grade Digital Signatures.</p>
-        <p style="margin: 8px 0 0;">This email was sent to ${recipientEmail}. If you weren't expecting this, please ignore this email.</p>
+      <div style="font-size:18px;font-weight:700;color:#1a202c;">
+        📄 ${documentTitle}
       </div>
     </div>
-  `;
+
+    ${progressHtml}
+    ${msgHtml}
+
+    ${ctaButton(signingLink, '🖊️ Review & Sign Document')}
+
+    <p style="font-size:13px;color:#94a3b8;margin:16px 0 0;
+              text-align:center;">
+      🔒 Secure link · No account required · 
+      Expires in <strong>72 hours</strong>
+    </p>
+
+    ${ccHtml}`;
 
   return sendMail({
     from:    fromField(companyName),
     to:      recipientEmail,
     subject,
-    html,
+    html:    buildEmail({
+      logoUrl:     companyLogoUrl,
+      companyName,
+      subject,
+      bodyHtml,
+    }),
   });
 }
 
-// ════════════════════════════════════════════════════════════════
-// 2. COMPLETION EMAIL
-//    ✅ Sends signed PDF as attachment (Buffer or URL fallback)
-//    ✅ Includes all parties with designation
-//    ✅ Used for both signers AND CC recipients
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// 2. COMPLETION EMAIL (with PDF attachment)
+// ═══════════════════════════════════════════════════════════════
 /**
  * @param {string}        recipientEmail
  * @param {string}        recipientName
+ * @param {string}        [recipientDesignation]
  * @param {string}        documentTitle
- * @param {Buffer|null}   pdfBuffer        — final signed PDF bytes
- * @param {string}        [signedPdfUrl]   — fallback download URL
+ * @param {Buffer|null}   pdfBuffer
+ * @param {string}        [signedPdfUrl]
  * @param {string}        [companyLogoUrl]
  * @param {string}        [companyName]
- * @param {Array}         [auditParties]   — [{name, email, designation, status, signedAt}]
- * @param {boolean}       [isCC]           — true if recipient is a CC
- * @param {string}        [recipientDesignation]
+ * @param {Array}         [parties]
+ *   [{name, email, designation, status, signedAt, auditInfo}]
+ *   auditInfo: {device, browser, os, location, postal, time, ip}
+ * @param {Array}         [ccList] [{name, email, designation}]
+ * @param {boolean}       [isCC]
  */
 async function sendCompletionEmail({
   recipientEmail,
   recipientName,
+  recipientDesignation = '',
   documentTitle,
   pdfBuffer,
-  signedPdfUrl = '',
+  signedPdfUrl         = '',
   companyLogoUrl,
   companyName,
+  parties              = [],
+  ccList               = [],
+  isCC                 = false,
 }) {
   const subject = `✅ Completed: "${documentTitle}"`;
-  const html = `
-    <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-      <div style="background-color: #f8fafc; padding: 32px 40px; border-bottom: 1px solid #e2e8f0; text-align: center;">
-        ${companyLogoUrl 
-          ? `<img src="${companyLogoUrl}" alt="${companyName || 'Logo'}" style="max-height: 48px; width: auto; margin-bottom: 16px; display: block; margin-left: auto; margin-right: auto;">`
-          : `<div style="font-size: 24px; font-weight: bold; color: #28ABDF; margin-bottom: 8px;">NeXsign</div>`
-        }
-        <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #10b981;">Document Completed</h1>
+
+  const signersHtml = parties.length
+    ? `<div style="margin:20px 0;">
+         <div style="font-size:12px;font-weight:700;color:#64748b;
+                     text-transform:uppercase;letter-spacing:0.6px;
+                     margin-bottom:10px;">
+           Signing Summary
+         </div>
+         ${parties.map((p, i) => signerCard(p, i)).join('')}
+       </div>`
+    : '';
+
+  const ccHtml = ccList.length
+    ? `<div style="margin:20px 0;">
+         <div style="font-size:12px;font-weight:700;color:#64748b;
+                     text-transform:uppercase;letter-spacing:0.6px;
+                     margin-bottom:8px;">
+           CC Recipients
+         </div>
+         ${ccList.map(cc => ccCard(cc)).join('')}
+       </div>`
+    : '';
+
+  const roleNote = isCC
+    ? `<div style="background:#f0f9ff;border:1px solid #bae6fd;
+                   border-radius:8px;padding:10px 14px;
+                   font-size:13px;color:#0369a1;margin:16px 0;">
+         ℹ️ You were CC'd on this document.
+       </div>`
+    : '';
+
+  const bodyHtml = `
+    <div style="text-align:center;margin-bottom:24px;">
+      <div style="width:60px;height:60px;background:#dcfce7;
+                  border-radius:50%;display:inline-flex;
+                  align-items:center;justify-content:center;
+                  font-size:28px;margin-bottom:12px;">
+        ✅
       </div>
-      
-      <div style="padding: 40px;">
-        <p style="margin-top: 0;">Hello <strong>${recipientName}</strong>,</p>
-        <p>Great news! All parties have successfully signed the document:</p>
-        
-        <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 24px 0; text-align: center;">
-          <div style="font-size: 14px; color: #64748b; margin-bottom: 4px;">DOCUMENT</div>
-          <div style="font-size: 18px; font-weight: 600; color: #0f172a;">${documentTitle}</div>
-        </div>
+      <h2 style="color:#15803d;margin:0;font-size:22px;">
+        Document Completed!
+      </h2>
+    </div>
 
-        <p>You can find the final signed PDF attached to this email. A legal audit trail has been appended to the end of the document for compliance.</p>
+    <p style="color:#4a5568;margin:0 0 16px;">
+      Hello <strong>${recipientName}</strong>
+      ${recipientDesignation
+        ? `<span style="font-size:13px;color:#64748b;">
+             (${recipientDesignation})
+           </span>`
+        : ''},
+    </p>
 
-        <div style="text-align: center; margin: 32px 0;">
-          <a href="${signedPdfUrl}" style="background-color: #10b981; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(16, 185, 129, 0.2);">View Signed Document</a>
-        </div>
-      </div>
+    ${roleNote}
 
-      <div style="background-color: #f8fafc; padding: 24px 40px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8;">
-        <p style="margin: 0;">© ${BRAND.year} NeXsign — Enterprise-Grade Digital Signatures.</p>
+    <p style="color:#4a5568;margin:0 0 16px;">
+      All parties have successfully signed:
+    </p>
+
+    <div style="background:#f1f5f9;border-left:4px solid #22c55e;
+                border-radius:10px;padding:16px 20px;margin:0 0 16px;">
+      <div style="font-size:18px;font-weight:700;color:#1a202c;">
+        📄 ${documentTitle}
       </div>
     </div>
-  `;
+
+    ${signersHtml}
+    ${ccHtml}
+
+    ${signedPdfUrl
+      ? ctaButton(signedPdfUrl, '📥 View & Download Signed PDF', '#22c55e')
+      : ''}
+
+    <p style="font-size:13px;color:#94a3b8;margin:16px 0 0;
+              text-align:center;">
+      The signed PDF is also attached to this email.
+    </p>`;
 
   const attachments = [];
   if (pdfBuffer && pdfBuffer.length > 0) {
@@ -522,25 +548,32 @@ async function sendCompletionEmail({
   }
 
   return sendMail({
-    from:    fromField(companyName),
-    to:      recipientEmail,
+    from: fromField(companyName),
+    to:   recipientEmail,
     subject,
-    html,
+    html: buildEmail({
+      logoUrl:     companyLogoUrl,
+      companyName,
+      subject,
+      bodyHtml,
+    }),
     attachments,
   });
 }
 
-// ════════════════════════════════════════════════════════════════
-// 3. CC NOTIFICATION (sent at document dispatch time)
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// 3. CC NOTIFICATION (document dispatch time)
+// ═══════════════════════════════════════════════════════════════
 /**
  * @param {string}  recipientEmail
  * @param {string}  recipientName
  * @param {string}  [recipientDesignation]
  * @param {string}  documentTitle
  * @param {string}  senderName
+ * @param {string}  [senderDesignation]
  * @param {string}  [companyLogoUrl]
  * @param {string}  [companyName]
+ * @param {Array}   [parties] [{name, email, designation}]
  */
 async function sendCCEmail({
   recipientEmail,
@@ -548,188 +581,362 @@ async function sendCCEmail({
   recipientDesignation = '',
   documentTitle,
   senderName,
+  senderDesignation    = '',
   companyLogoUrl,
   companyName,
+  parties              = [],
 }) {
-  const subject = `FYI: You've been CC'd on "${documentTitle}"`;
+  const subject = `📋 CC: "${documentTitle}" — Signing in Progress`;
 
-  const html = `
-    <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-      <div style="background-color: #f8fafc; padding: 32px 40px; border-bottom: 1px solid #e2e8f0; text-align: center;">
-        ${companyLogoUrl 
-          ? `<img src="${companyLogoUrl}" alt="${companyName || 'Logo'}" style="max-height: 48px; width: auto; margin-bottom: 16px; display: block; margin-left: auto; margin-right: auto;">`
-          : `<div style="font-size: 24px; font-weight: bold; color: #28ABDF; margin-bottom: 8px;">NeXsign</div>`
-        }
-        <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #1e293b;">Document CC</h1>
-      </div>
-      
-      <div style="padding: 40px;">
-        <p style="margin-top: 0;">Hello <strong>${recipientName}</strong>,</p>
-        <p>You have been added as a CC recipient for the following document initiated by <strong>${senderName}</strong>:</p>
-        
-        <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 24px 0; text-align: center;">
-          <div style="font-size: 14px; color: #64748b; margin-bottom: 4px;">DOCUMENT</div>
-          <div style="font-size: 18px; font-weight: 600; color: #0f172a;">${documentTitle}</div>
-        </div>
+  const partiesHtml = parties.length
+    ? `<div style="margin:20px 0;">
+         <div style="font-size:12px;font-weight:700;color:#64748b;
+                     text-transform:uppercase;letter-spacing:0.6px;
+                     margin-bottom:10px;">
+           Signers
+         </div>
+         ${parties.map((p, i) => signerCard(p, i)).join('')}
+       </div>`
+    : '';
 
-        <p>You will receive a final copy of this document once all parties have finished signing.</p>
-      </div>
+  const bodyHtml = `
+    <h2 style="color:#1a202c;margin:0 0 16px;font-size:20px;">
+      Hello ${recipientName}
+      ${recipientDesignation
+        ? `<span style="font-size:13px;color:#64748b;
+                        font-weight:400;display:block;margin-top:4px;">
+             🏷️ ${recipientDesignation}
+           </span>`
+        : ''},
+    </h2>
 
-      <div style="background-color: #f8fafc; padding: 24px 40px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8;">
-        <p style="margin: 0;">© ${BRAND.year} NeXsign — Enterprise-Grade Digital Signatures.</p>
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;
+                border-radius:8px;padding:10px 14px;
+                font-size:13px;color:#0369a1;margin:0 0 16px;">
+      ℹ️ You have been added as a
+      <strong>CC recipient</strong> on this document.
+    </div>
+
+    <p style="color:#4a5568;margin:0 0 16px;">
+      <strong>${senderName}</strong>
+      ${senderDesignation
+        ? `<span style="font-size:13px;color:#64748b;">
+             (${senderDesignation})
+           </span>`
+        : ''}
+      ${companyName
+        ? `from <strong>${companyName}</strong>`
+        : ''}
+      has initiated a signing process for:
+    </p>
+
+    <div style="background:#f1f5f9;border-left:4px solid ${BRAND.color};
+                border-radius:10px;padding:16px 20px;margin:0 0 16px;">
+      <div style="font-size:18px;font-weight:700;color:#1a202c;">
+        📄 ${documentTitle}
       </div>
     </div>
-  `;
+
+    ${partiesHtml}
+
+    <div style="background:#fef9c3;border:1px solid #fde68a;
+                border-radius:8px;padding:12px 16px;
+                font-size:13px;color:#713f12;margin:16px 0;">
+      📬 You will receive the
+      <strong>final signed PDF</strong>
+      once all parties have completed signing.
+    </div>`;
 
   return sendMail({
     from:    fromField(companyName),
     to:      recipientEmail,
     subject,
-    html,
+    html:    buildEmail({
+      logoUrl:     companyLogoUrl,
+      companyName,
+      subject,
+      bodyHtml,
+    }),
   });
 }
 
-// ════════════════════════════════════════════════════════════════
-// 4. VIEW DOCUMENT (No signature required)
-// ════════════════════════════════════════════════════════════════
-/**
- * @param {string}  recipientEmail
- * @param {string}  recipientName
- * @param {string}  documentTitle
- * @param {string}  senderName
- * @param {string}  viewLink
- * @param {string}  [companyLogoUrl]
- * @param {string}  [companyName]
- */
-async function sendViewEmail({
-  recipientEmail,
-  recipientName,
-  documentTitle,
-  senderName,
-  viewLink,
-  companyLogoUrl,
-  companyName,
-}) {
-  const subject = `Document Shared: "${documentTitle}"`;
-
-  const html = `
-    <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-      <div style="background-color: #f8fafc; padding: 32px 40px; border-bottom: 1px solid #e2e8f0; text-align: center;">
-        ${companyLogoUrl 
-          ? `<img src="${companyLogoUrl}" alt="${companyName || 'Logo'}" style="max-height: 48px; width: auto; margin-bottom: 16px; display: block; margin-left: auto; margin-right: auto;">`
-          : `<div style="font-size: 24px; font-weight: bold; color: #28ABDF; margin-bottom: 8px;">NeXsign</div>`
-        }
-        <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #1e293b;">Document View</h1>
-      </div>
-      
-      <div style="padding: 40px;">
-        <p style="margin-top: 0;">Hello <strong>${recipientName}</strong>,</p>
-        <p><strong>${senderName}</strong> ${companyName ? `from <strong>${companyName}</strong>` : ''} has sent you a document for your records:</p>
-        
-        <div style="background-color: #f1f5f9; padding: 20px; border-radius: 8px; margin: 24px 0; text-align: center;">
-          <div style="font-size: 14px; color: #64748b; margin-bottom: 4px;">DOCUMENT</div>
-          <div style="font-size: 18px; font-weight: 600; color: #0f172a;">${documentTitle}</div>
-        </div>
-
-        <div style="text-align: center; margin: 32px 0;">
-          <a href="${viewLink}" style="background-color: #28ABDF; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; display: inline-block; box-shadow: 0 4px 6px -1px rgba(40, 171, 223, 0.2);">View Document</a>
-        </div>
-
-        <p style="font-size: 14px; color: #64748b; margin-bottom: 0;">
-          No signature is required for this document. It has been shared with you for informational purposes.
-        </p>
-      </div>
-
-      <div style="background-color: #f8fafc; padding: 24px 40px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8;">
-        <p style="margin: 0;">© ${BRAND.year} NeXsign — Enterprise-Grade Digital Signatures.</p>
-      </div>
-    </div>
-  `;
-
-  return sendMail({
-    from:    fromField(companyName),
-    to:      recipientEmail,
-    subject,
-    html,
-  });
-}
-
-// ════════════════════════════════════════════════════════════════
-// 4. DOCUMENT DECLINED  ✅ New
-// ════════════════════════════════════════════════════════════════
-/**
- * @param {string}  ownerEmail
- * @param {string}  ownerName
- * @param {string}  documentTitle
- * @param {string}  declinerName
- * @param {string}  declinerEmail
- * @param {string}  [reason]
- * @param {string}  [companyLogoUrl]
- * @param {string}  [companyName]
- */
+// ═══════════════════════════════════════════════════════════════
+// 4. DOCUMENT DECLINED
+// ═══════════════════════════════════════════════════════════════
 async function sendDeclinedEmail({
   ownerEmail,
   ownerName,
   documentTitle,
   declinerName,
   declinerEmail,
-  reason       = '',
+  declinerDesignation  = '',
+  reason               = '',
   companyLogoUrl,
   companyName,
 }) {
   const subject = `⚠️ Declined: "${documentTitle}"`;
 
-  const html = `
-    <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #334155; line-height: 1.6; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden;">
-      <div style="background-color: #f8fafc; padding: 32px 40px; border-bottom: 1px solid #e2e8f0; text-align: center;">
-        ${companyLogoUrl 
-          ? `<img src="${companyLogoUrl}" alt="${companyName || 'Logo'}" style="max-height: 48px; width: auto; margin-bottom: 16px; display: block; margin-left: auto; margin-right: auto;">`
-          : `<div style="font-size: 24px; font-weight: bold; color: #ef4444; margin-bottom: 8px;">NeXsign</div>`
-        }
-        <h1 style="margin: 0; font-size: 20px; font-weight: 700; color: #b91c1c;">Signing Declined</h1>
+  const bodyHtml = `
+    <div style="text-align:center;margin-bottom:24px;">
+      <div style="width:60px;height:60px;background:#fee2e2;
+                  border-radius:50%;display:inline-flex;
+                  align-items:center;justify-content:center;
+                  font-size:28px;margin-bottom:12px;">
+        ⚠️
       </div>
-      
-      <div style="padding: 40px;">
-        <p style="margin-top: 0;">Hello <strong>${ownerName}</strong>,</p>
-        <p>A signer has declined to sign your document:</p>
-        
-        <div style="background-color: #fef2f2; padding: 20px; border-radius: 8px; margin: 24px 0;">
-          <div style="margin-bottom: 12px;">
-            <span style="font-size: 12px; color: #991b1b; font-weight: 600; text-transform: uppercase;">Document</span><br/>
-            <span style="font-size: 16px; color: #1e293b; font-weight: 600;">${documentTitle}</span>
-          </div>
-          <div style="margin-bottom: 12px;">
-            <span style="font-size: 12px; color: #991b1b; font-weight: 600; text-transform: uppercase;">Declined By</span><br/>
-            <span style="font-size: 14px; color: #1e293b;">${declinerName} (${declinerEmail})</span>
-          </div>
-          ${reason ? `
-          <div>
-            <span style="font-size: 12px; color: #991b1b; font-weight: 600; text-transform: uppercase;">Reason</span><br/>
-            <span style="font-size: 14px; color: #475569; font-style: italic;">"${reason}"</span>
-          </div>
-          ` : ''}
-        </div>
-
-        <p style="margin-bottom: 0;">The signing process for this document has been automatically cancelled.</p>
-      </div>
-
-      <div style="background-color: #f8fafc; padding: 24px 40px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 12px; color: #94a3b8;">
-        <p style="margin: 0;">© ${BRAND.year} NeXsign — Enterprise-Grade Digital Signatures.</p>
-      </div>
+      <h2 style="color:#dc2626;margin:0;font-size:22px;">
+        Signing Declined
+      </h2>
     </div>
-  `;
+
+    <p style="color:#4a5568;margin:0 0 16px;">
+      Hello <strong>${ownerName}</strong>,
+    </p>
+
+    <p style="color:#4a5568;margin:0 0 16px;">
+      A signer has declined to sign your document.
+      The signing process has been automatically cancelled.
+    </p>
+
+    <div style="background:#fef2f2;border:1px solid #fecaca;
+                border-radius:10px;padding:16px 20px;margin:16px 0;">
+
+      <div style="margin-bottom:10px;">
+        <div style="font-size:11px;color:#991b1b;font-weight:700;
+                    text-transform:uppercase;letter-spacing:0.5px;">
+          Document
+        </div>
+        <div style="font-size:16px;font-weight:700;color:#1a202c;
+                    margin-top:2px;">
+          📄 ${documentTitle}
+        </div>
+      </div>
+
+      <div style="margin-bottom:10px;">
+        <div style="font-size:11px;color:#991b1b;font-weight:700;
+                    text-transform:uppercase;letter-spacing:0.5px;">
+          Declined By
+        </div>
+        <div style="font-size:14px;color:#1a202c;margin-top:2px;">
+          ${declinerName}
+          ${declinerDesignation
+            ? `<span style="color:#64748b;font-size:12px;">
+                 (${declinerDesignation})
+               </span>`
+            : ''}
+        </div>
+        <div style="font-size:12px;color:#94a3b8;">
+          📧 ${declinerEmail}
+        </div>
+      </div>
+
+      ${reason
+        ? `<div>
+             <div style="font-size:11px;color:#991b1b;font-weight:700;
+                         text-transform:uppercase;letter-spacing:0.5px;">
+               Reason
+             </div>
+             <div style="font-size:13px;color:#475569;
+                         font-style:italic;margin-top:2px;">
+               "${reason}"
+             </div>
+           </div>`
+        : ''}
+    </div>`;
 
   return sendMail({
     from:    fromField(companyName),
     to:      ownerEmail,
     subject,
-    html,
+    html:    buildEmail({
+      logoUrl:     companyLogoUrl,
+      companyName,
+      subject,
+      bodyHtml,
+    }),
   });
 }
 
-// ════════════════════════════════════════════════════════════════
-// 5. FEEDBACK THANK-YOU
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// 5. BOSS APPROVAL EMAIL (Master Template - Module 2)
+// ═══════════════════════════════════════════════════════════════
+/**
+ * @param {string}  bossEmail
+ * @param {string}  bossName
+ * @param {string}  [bossDesignation]
+ * @param {string}  documentTitle
+ * @param {string}  signingLink
+ * @param {number}  employeeCount
+ * @param {string}  senderName
+ * @param {string}  [companyLogoUrl]
+ * @param {string}  [companyName]
+ * @param {string}  [message]
+ */
+async function sendBossApprovalEmail({
+  bossEmail,
+  bossName,
+  bossDesignation  = '',
+  documentTitle,
+  signingLink,
+  employeeCount    = 0,
+  senderName,
+  companyLogoUrl,
+  companyName,
+  message          = '',
+}) {
+  const subject = `🔐 Master Approval Required: "${documentTitle}"`;
+
+  const bodyHtml = `
+    <h2 style="color:#1a202c;margin:0 0 16px;font-size:20px;">
+      Hello ${bossName}
+      ${bossDesignation
+        ? `<span style="font-size:13px;color:#64748b;
+                        font-weight:400;display:block;margin-top:4px;">
+             🏷️ ${bossDesignation}
+           </span>`
+        : ''},
+    </h2>
+
+    <div style="background:#fef9c3;border:1px solid #fde68a;
+                border-radius:8px;padding:12px 16px;
+                font-size:13px;color:#713f12;margin:0 0 16px;">
+      👑 You are the <strong>Primary Approver</strong>
+      for this document.
+    </div>
+
+    <p style="color:#4a5568;margin:0 0 16px;">
+      <strong>${senderName}</strong>
+      ${companyName ? `from <strong>${companyName}</strong>` : ''}
+      requires your approval on the Master Template:
+    </p>
+
+    <div style="background:#f1f5f9;border-left:4px solid ${BRAND.color};
+                border-radius:10px;padding:16px 20px;margin:0 0 16px;">
+      <div style="font-size:18px;font-weight:700;color:#1a202c;">
+        📄 ${documentTitle}
+      </div>
+      <div style="font-size:13px;color:#64748b;margin-top:6px;">
+        👥 Will be distributed to
+        <strong style="color:${BRAND.color};">
+          ${employeeCount} employees
+        </strong>
+        after your approval
+      </div>
+    </div>
+
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;
+                border-radius:8px;padding:12px 16px;
+                font-size:13px;color:#0369a1;margin:0 0 16px;">
+      ℹ️ Your signature will be embedded as a permanent layer
+      on each employee's individual copy.
+    </div>
+
+    ${message
+      ? `<div style="font-style:italic;color:#475569;
+                     border-left:4px solid #cbd5e1;
+                     padding:12px 16px;margin:20px 0;
+                     background:#f8fafc;border-radius:0 8px 8px 0;
+                     font-size:14px;">
+           "${message}"
+         </div>`
+      : ''}
+
+    ${ctaButton(signingLink, '👑 Review & Approve as Master Signer', '#7c3aed')}
+
+    <p style="font-size:13px;color:#94a3b8;margin:16px 0 0;
+              text-align:center;">
+      🔒 Secure link · Expires in 72 hours
+    </p>`;
+
+  return sendMail({
+    from:    fromField(companyName),
+    to:      bossEmail,
+    subject,
+    html:    buildEmail({
+      logoUrl:     companyLogoUrl,
+      companyName,
+      subject,
+      bodyHtml,
+    }),
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 6. EMPLOYEE SIGNING EMAIL (Master Template - Module 2)
+// ═══════════════════════════════════════════════════════════════
+/**
+ * @param {string}  employeeEmail
+ * @param {string}  employeeName
+ * @param {string}  documentTitle
+ * @param {string}  signingLink
+ * @param {string}  bossName
+ * @param {string}  [bossDesignation]
+ * @param {string}  [companyLogoUrl]
+ * @param {string}  [companyName]
+ */
+async function sendEmployeeSigningEmail({
+  employeeEmail,
+  employeeName,
+  documentTitle,
+  signingLink,
+  bossName,
+  bossDesignation  = '',
+  companyLogoUrl,
+  companyName,
+}) {
+  const subject = `✍️ Please Sign: "${documentTitle}"`;
+
+  const bodyHtml = `
+    <h2 style="color:#1a202c;margin:0 0 16px;font-size:20px;">
+      Hello ${employeeName},
+    </h2>
+
+    <p style="color:#4a5568;margin:0 0 16px;">
+      You have a document ready for your signature from
+      ${companyName ? `<strong>${companyName}</strong>` : 'your organisation'}:
+    </p>
+
+    <div style="background:#f1f5f9;border-left:4px solid ${BRAND.color};
+                border-radius:10px;padding:16px 20px;margin:0 0 16px;">
+      <div style="font-size:18px;font-weight:700;color:#1a202c;">
+        📄 ${documentTitle}
+      </div>
+    </div>
+
+    <div style="background:#f0fdf4;border:1px solid #86efac;
+                border-radius:8px;padding:12px 16px;
+                font-size:13px;color:#15803d;margin:0 0 20px;">
+      ✅ Already approved by:
+      <strong>${bossName}</strong>
+      ${bossDesignation
+        ? `<span style="color:#64748b;">(${bossDesignation})</span>`
+        : ''}
+    </div>
+
+    ${ctaButton(signingLink, '🖊️ Sign My Document')}
+
+    <p style="font-size:13px;color:#94a3b8;margin:16px 0 0;
+              text-align:center;">
+      🔒 This link is unique to you · No account required ·
+      Expires in 72 hours
+    </p>`;
+
+  return sendMail({
+    from:    fromField(companyName),
+    to:      employeeEmail,
+    subject,
+    html:    buildEmail({
+      logoUrl:     companyLogoUrl,
+      companyName,
+      subject,
+      bodyHtml,
+    }),
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 7. FEEDBACK THANK-YOU
+// ═══════════════════════════════════════════════════════════════
 async function sendFeedbackEmail(userEmail, userName, stars) {
   const starCount = Math.min(Math.max(Number(stars) || 0, 0), 5);
   const starBar   = '⭐'.repeat(starCount);
@@ -737,43 +944,31 @@ async function sendFeedbackEmail(userEmail, userName, stars) {
 
   const bodyHtml = `
     <h2 style="color:#1a202c;margin:0 0 14px;font-size:20px;">
-      Hello ${userName || 'Valued User'}, 😊
+      Hello ${userName || 'Valued User'} 😊
     </h2>
 
     <p style="color:#4a5568;margin:0 0 16px;">
       Thank you for taking the time to rate us!
     </p>
 
-    <div style="
-      background:#fefce8;
-      border:1px solid #fde68a;
-      border-radius:12px;
-      padding:20px;
-      text-align:center;
-      margin:0 0 20px;
-    ">
-      <div style="font-size:28px;letter-spacing:4px;">${starBar}</div>
-      <p style="
-        margin:8px 0 0;
-        font-size:18px;font-weight:700;color:#92400e;
-      ">
+    <div style="background:#fefce8;border:1px solid #fde68a;
+                border-radius:12px;padding:20px;
+                text-align:center;margin:0 0 20px;">
+      <div style="font-size:28px;letter-spacing:4px;">
+        ${starBar}
+      </div>
+      <p style="margin:8px 0 0;font-size:18px;
+                font-weight:700;color:#92400e;">
         ${starCount}-Star Rating
       </p>
     </div>
 
-    <div style="
-      background:#f8fafc;
-      border-left:4px solid ${BRAND.color};
-      border-radius:10px;
-      padding:16px 20px;
-      margin:0 0 20px;
-    ">
-      <p style="
-        margin:0;font-style:italic;
-        color:#475569;font-size:14px;line-height:1.7;
-      ">
-        "Your feedback drives us to build a better future for
-        digital agreements. Every star motivates our team."
+    <div style="background:#f8fafc;border-left:4px solid ${BRAND.color};
+                border-radius:10px;padding:16px 20px;margin:0 0 20px;">
+      <p style="margin:0;font-style:italic;
+                color:#475569;font-size:14px;line-height:1.7;">
+        "Your feedback drives us to build a better future
+        for digital agreements. Every star motivates our team."
       </p>
     </div>
 
@@ -797,14 +992,68 @@ async function sendFeedbackEmail(userEmail, userName, stars) {
   });
 }
 
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// 8. VIEW ONLY EMAIL
+// ═══════════════════════════════════════════════════════════════
+async function sendViewEmail({
+  recipientEmail,
+  recipientName,
+  documentTitle,
+  senderName,
+  viewLink,
+  companyLogoUrl,
+  companyName,
+}) {
+  const subject = `📄 Document Shared: "${documentTitle}"`;
+
+  const bodyHtml = `
+    <h2 style="color:#1a202c;margin:0 0 16px;font-size:20px;">
+      Hello ${recipientName},
+    </h2>
+
+    <p style="color:#4a5568;margin:0 0 16px;">
+      <strong>${senderName}</strong>
+      ${companyName ? `from <strong>${companyName}</strong>` : ''}
+      has shared a document with you for your records:
+    </p>
+
+    <div style="background:#f1f5f9;border-left:4px solid ${BRAND.color};
+                border-radius:10px;padding:16px 20px;margin:0 0 20px;">
+      <div style="font-size:18px;font-weight:700;color:#1a202c;">
+        📄 ${documentTitle}
+      </div>
+    </div>
+
+    ${ctaButton(viewLink, '👁️ View Document')}
+
+    <p style="font-size:13px;color:#94a3b8;margin:16px 0 0;
+              text-align:center;">
+      No signature required · View only
+    </p>`;
+
+  return sendMail({
+    from:    fromField(companyName),
+    to:      recipientEmail,
+    subject,
+    html:    buildEmail({
+      logoUrl:     companyLogoUrl,
+      companyName,
+      subject,
+      bodyHtml,
+    }),
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
 // EXPORTS
-// ════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 module.exports = {
   sendSigningEmail,
-  sendCompletionEmail,  // ✅ now attaches PDF buffer
+  sendCompletionEmail,
   sendCCEmail,
-  sendViewEmail,        // ✅ new
-  sendDeclinedEmail,    // ✅ new
+  sendDeclinedEmail,
+  sendBossApprovalEmail,
+  sendEmployeeSigningEmail,
   sendFeedbackEmail,
+  sendViewEmail,
 };

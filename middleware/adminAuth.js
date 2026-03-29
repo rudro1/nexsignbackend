@@ -1,160 +1,210 @@
-// /**
-//  * Admin Authorization Middleware (Production Ready)
-//  * Supports role hierarchy, audit logging, and rate limiting
-//  */
-// const adminAuth = (req, res, next) => {
-//   try {
-//     // 1. Verify Authentication
-//     if (!req.user) {
-//       return res.status(401).json({ 
-//         success: false,
-//         message: "Authentication required" 
-//       });
-//     }
+'use strict';
 
-//     // 2. Role Hierarchy Check (Flexible)
-//     const allowedRoles = ['admin', 'super_admin'];
-//     const userRole = req.user.role?.toLowerCase().trim();
+// ═══════════════════════════════════════════════════════════════
+// ADMIN AUTH MIDDLEWARE
+// Must be used AFTER auth middleware
+// auth → adminAuth → controller
+// ═══════════════════════════════════════════════════════════════
 
-//     if (!allowedRoles.includes(userRole)) {
-//       // ✅ Audit Log for Failed Access
-//       console.warn(`🚫 Admin Access Denied: ${req.user.email} (${userRole}) → ${req.originalUrl}`);
-      
-//       return res.status(403).json({ 
-//         success: false,
-//         error: "Forbidden",
-//         message: "Admin privileges required",
-//         requiredRole: 'admin'
-//       });
-//     }
+const ADMIN_ROLES      = ['admin', 'super_admin'];
+const SUPER_ADMIN_ONLY = ['super_admin'];
 
-//     // 3. Super Admin Logging (Audit Trail)
-//     if (userRole === 'super_admin') {
-//       console.log(`👑 Super Admin Access: ${req.user.email} → ${req.method} ${req.originalUrl}`);
-//     }
-
-//     // 4. Rate Limit Check (Admin Abuse Prevention)
-//     const now = Date.now();
-//     const oneHour = 60 * 60 * 1000;
-    
-//     // Admin Action Counter (In-Memory for Vercel)
-//     if (!req.user.adminActions) req.user.adminActions = [];
-    
-//     // Cleanup old actions
-//     req.user.adminActions = req.user.adminActions.filter(
-//       time => now - time < oneHour
-//     );
-    
-//     // Check limit (50 admin actions/hour)
-//     if (req.user.adminActions.length >= 50) {
-//       return res.status(429).json({
-//         success: false,
-//         error: "Rate Limited",
-//         message: "Too many admin actions. Wait 1 hour."
-//       });
-//     }
-    
-//     // Track action
-//     req.user.adminActions.push(now);
-    
-//     // ✅ Attach Admin Context
-//     req.adminContext = {
-//       userId: req.user._id,
-//       role: userRole,
-//       ip: req.ip || req.headers['x-forwarded-for']
-//     };
-
-//     return next();
-
-//   } catch (error) {
-//     console.error("🚨 Admin Auth Error:", {
-//       error: error.message,
-//       userId: req.user?._id,
-//       url: req.originalUrl,
-//       ip: req.ip
-//     });
-    
-//     return res.status(500).json({ 
-//       success: false,
-//       error: "Server Error",
-//       message: "Administrative verification failed" 
-//     });
-//   }
-// };
-
-// // ✅ Role-Based Permission Helper
-// adminAuth.can = (roles) => {
-//   return (req, res, next) => {
-//     if (!req.user || !roles.includes(req.user.role)) {
-//       return res.status(403).json({ 
-//         success: false, 
-//         message: "Insufficient permissions" 
-//       });
-//     }
-//     next();
-//   };
-// };
-
-// module.exports = adminAuth;
-
-
-/**
-
-
-
-
-Admin Authorization Middleware
-
-
-
-
-Ensures the user has 'admin' or 'super_admin' privileges.
-*/
+// ═══════════════════════════════════════════════════════════════
+// MAIN — adminAuth
+// Allows: admin + super_admin
+// ═══════════════════════════════════════════════════════════════
 const adminAuth = (req, res, next) => {
-try {
-// 1. Verify req.user existence (Injected by the 'auth' middleware)
-if (!req.user) {
-return res.status(401).json({
-success: false,
-message: "Unauthorized! Please log in first."
-});
-}
+  try {
+    // ── Must be authenticated first ───────────────────────────
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        code:    'NOT_AUTHENTICATED',
+        message: 'Authentication required. Please log in.',
+      });
+    }
 
+    const role = req.user.role;
 
-// 2. Role validation
-// Using optional chaining and ensuring exact match with your Model Enums
-const userRole = req.user.role;
+    // ── Role check ────────────────────────────────────────────
+    if (!ADMIN_ROLES.includes(role)) {
+      console.warn(
+        `🚫 [adminAuth] Access denied → ` +
+        `${req.user.email} (${role}) → ` +
+        `${req.method} ${req.originalUrl}`
+      );
 
+      return res.status(403).json({
+        success: false,
+        code:    'FORBIDDEN',
+        message: 'Admin privileges required to access this resource.',
+      });
+    }
 
-if (userRole === 'admin' || userRole === 'super_admin') {
-return next(); // ✅ Access granted
-}
+    // ── Log super admin actions ───────────────────────────────
+    if (role === 'super_admin') {
+      console.log(
+        `👑 [superAdmin] ${req.user.email} → ` +
+        `${req.method} ${req.originalUrl}`
+      );
+    }
 
+    // ── Attach admin context to request ───────────────────────
+    req.adminContext = {
+      userId:    req.user.id,
+      email:     req.user.email,
+      role,
+      ip:        req.ip ||
+                 req.headers['x-forwarded-for'] ||
+                 req.socket?.remoteAddress,
+      timestamp: new Date().toISOString(),
+      isSuperAdmin: role === 'super_admin',
+    };
 
-// 3. Access Denied (Forbidden)
-// Used when the user is authenticated but lacks required permissions
-return res.status(403).json({
-success: false,
-error: "Access Forbidden",
-message: "You do not have permission to access the admin panel."
-});
+    return next();
 
+  } catch (err) {
+    console.error('[adminAuth] Error:', {
+      message:  err.message,
+      userId:   req.user?._id,
+      url:      req.originalUrl,
+      ip:       req.ip,
+    });
 
-
-
-} catch (error) {
-// Log error with context for easier debugging in production
-console.error("Admin Auth Middleware Error:", error.message);
-
-
-return res.status(500).json({ 
-  success: false,
-  error: "Internal Server Error",
-  message: "An error occurred during administrative verification." 
-});
-
-}
+    return res.status(500).json({
+      success: false,
+      code:    'ADMIN_AUTH_ERROR',
+      message: 'Administrative verification failed.',
+    });
+  }
 };
 
+// ═══════════════════════════════════════════════════════════════
+// SUPER ADMIN ONLY
+// Allows: super_admin only
+// ═══════════════════════════════════════════════════════════════
+const superAdminOnly = (req, res, next) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        code:    'NOT_AUTHENTICATED',
+        message: 'Authentication required.',
+      });
+    }
 
-module.exports = adminAuth;
+    if (!SUPER_ADMIN_ONLY.includes(req.user.role)) {
+      console.warn(
+        `🚫 [superAdminOnly] Access denied → ` +
+        `${req.user.email} (${req.user.role})`
+      );
+
+      return res.status(403).json({
+        success: false,
+        code:    'SUPER_ADMIN_REQUIRED',
+        message: 'Super admin privileges required.',
+      });
+    }
+
+    console.log(
+      `👑 [superAdmin] ${req.user.email} → ` +
+      `${req.method} ${req.originalUrl}`
+    );
+
+    req.adminContext = {
+      userId:       req.user.id,
+      email:        req.user.email,
+      role:         req.user.role,
+      ip:           req.ip || req.headers['x-forwarded-for'],
+      timestamp:    new Date().toISOString(),
+      isSuperAdmin: true,
+    };
+
+    return next();
+
+  } catch (err) {
+    console.error('[superAdminOnly] Error:', err.message);
+    return res.status(500).json({
+      success: false,
+      code:    'AUTH_ERROR',
+      message: 'Authorization failed.',
+    });
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════
+// CAN — Permission helper
+// Usage: adminAuth.can(['super_admin'])
+// ═══════════════════════════════════════════════════════════════
+adminAuth.can = (roles = []) => {
+  const allowed = Array.isArray(roles) ? roles : [roles];
+
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        code:    'NOT_AUTHENTICATED',
+        message: 'Authentication required.',
+      });
+    }
+
+    if (!allowed.includes(req.user.role)) {
+      return res.status(403).json({
+        success: false,
+        code:    'INSUFFICIENT_PERMISSIONS',
+        message: `Required role: ${allowed.join(' or ')}.`,
+      });
+    }
+
+    next();
+  };
+};
+
+// ═══════════════════════════════════════════════════════════════
+// OWNER OR ADMIN
+// Resource owner অথবা admin access করতে পারবে
+// Usage: adminAuth.ownerOrAdmin('ownerId')
+// ═══════════════════════════════════════════════════════════════
+adminAuth.ownerOrAdmin = (ownerField = 'owner') => {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({
+        success: false,
+        code:    'NOT_AUTHENTICATED',
+        message: 'Authentication required.',
+      });
+    }
+
+    const isAdmin = ADMIN_ROLES.includes(req.user.role);
+
+    // Admin সব access করতে পারবে
+    if (isAdmin) return next();
+
+    // Owner check (resource এ owner field থাকলে)
+    const resourceOwner =
+      req.resource?.[ownerField] ||
+      req.body?.[ownerField] ||
+      req.params?.[ownerField];
+
+    if (
+      resourceOwner &&
+      String(resourceOwner) === String(req.user.id)
+    ) {
+      return next();
+    }
+
+    return res.status(403).json({
+      success: false,
+      code:    'FORBIDDEN',
+      message: 'You do not have permission to access this resource.',
+    });
+  };
+};
+
+// ═══════════════════════════════════════════════════════════════
+// EXPORTS
+// ═══════════════════════════════════════════════════════════════
+module.exports = {
+  adminAuth,
+  superAdminOnly,
+};
