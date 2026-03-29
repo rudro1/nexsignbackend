@@ -856,7 +856,7 @@
 // module.exports = { embedSignaturesAndAuditLog };
 'use strict';
 
-const { PDFDocument, rgb, StandardFonts, degrees } = require('pdf-lib');
+const { PDFDocument, rgb, StandardFonts, degrees, BlendMode } = require('pdf-lib');
 const fetch = require('node-fetch');
 
 // ════════════════════════════════════════════════════════════════
@@ -868,7 +868,7 @@ async function fetchPdfBytes(source) {
   // If it's a URL (Cloudinary), fetch it
   if (source.startsWith('http://') || source.startsWith('https://')) {
     const response = await fetch(source, {
-      signal: AbortSignal.timeout(30_000),
+      timeout: 30_000,
     });
     if (!response.ok) {
       throw new Error(`[pdfService] Failed to fetch PDF: ${response.status}`);
@@ -954,14 +954,7 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
             y:      absY + (absH - dims.height) / 2,
             width:  dims.width,
             height: dims.height,
-          });
-
-          // Underline
-          page.drawLine({
-            start:     { x: absX,        y: absY },
-            end:       { x: absX + absW, y: absY },
-            thickness: 0.8,
-            color:     rgb(0.6, 0.6, 0.6),
+            blendMode: BlendMode.Multiply, // CRITICAL: Makes white background transparent
           });
           break;
         }
@@ -970,8 +963,8 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
           const isBold   = field.fontWeight === 'bold';
           const font     = isBold ? fontBold : fontRegular;
           const fontSize = Math.min(
-            field.fontSize || 14,
-            Math.max(8, absH * 0.5)
+            field.fontSize || 12,
+            Math.max(8, absH * 0.6)
           );
           let text = String(field.value);
 
@@ -984,12 +977,12 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
           }
 
           page.drawText(text, {
-            x:        absX + 2,
-            y:        absY + (absH - fontSize) / 2,
+            x:        absX + 4,
+            y:        absY + (absH - fontSize) / 2 + 2,
             size:     fontSize,
             font,
-            color:    rgb(0.05, 0.05, 0.1),
-            maxWidth: absW - 4,
+            color:    rgb(0.1, 0.1, 0.1),
+            maxWidth: absW - 8,
           });
           break;
         }
@@ -997,11 +990,11 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
         case 'date': {
           const fontSize = Math.min(12, Math.max(8, absH * 0.45));
           page.drawText(String(field.value), {
-            x:    absX + 2,
-            y:    absY + (absH - fontSize) / 2,
+            x:    absX + 4,
+            y:    absY + (absH - fontSize) / 2 + 2,
             size: fontSize,
             font: fontRegular,
-            color: rgb(0.1, 0.1, 0.2),
+            color: rgb(0.1, 0.1, 0.1),
           });
           break;
         }
@@ -1065,44 +1058,15 @@ async function appendAuditPage(pdfBytes, doc) {
   const fontReg  = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
-  // Fetch audit logs from DB
-  let auditLogs = [];
-  try {
-    const AuditLog = require('../models/AuditLog');
-    auditLogs = await AuditLog.find({ document_id: doc._id })
-      .sort({ timestamp: 1 })
-      .lean();
-  } catch (e) {
-    console.error('[pdfService] Could not fetch audit logs:', e.message);
-  }
-
-  _appendAuditPageToPdf(pdfDoc, fontReg, fontBold, auditLogs, {
+  // Fetch audit data
+  const auditData = {
     title:       doc.title,
     documentId:  doc._id,
     completedAt: doc.completedAt || new Date(),
-  });
+    parties:     doc.parties || [],
+  };
 
-  const finalBytes = await pdfDoc.save({ useObjectStreams: false });
-  return Buffer.from(finalBytes);
-}
-
-// ════════════════════════════════════════════════════════════════
-// EXPORT 3: embedSignaturesAndAuditLog (legacy compat)
-// Used by older route code — wraps mergeSignaturesIntoPDF + appendAuditPage
-// ════════════════════════════════════════════════════════════════
-async function embedSignaturesAndAuditLog(
-  originalPdfPath,
-  fields    = [],
-  auditLogs = [],
-  docMeta   = {}
-) {
-  const mergedBytes = await mergeSignaturesIntoPDF(originalPdfPath, fields);
-
-  const pdfDoc  = await PDFDocument.load(mergedBytes, { ignoreEncryption: true });
-  const fontReg  = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
-  _appendAuditPageToPdf(pdfDoc, fontReg, fontBold, auditLogs, docMeta);
+  _appendAuditPageToPdf(pdfDoc, fontReg, fontBold, auditData);
 
   const finalBytes = await pdfDoc.save({ useObjectStreams: false });
   return Buffer.from(finalBytes);
@@ -1111,7 +1075,7 @@ async function embedSignaturesAndAuditLog(
 // ════════════════════════════════════════════════════════════════
 // INTERNAL — build audit-log page(s)
 // ════════════════════════════════════════════════════════════════
-function _appendAuditPageToPdf(pdfDoc, fontReg, fontBold, auditLogs, docMeta) {
+function _appendAuditPageToPdf(pdfDoc, fontReg, fontBold, doc) {
   const PAGE_W = 612;
   const PAGE_H = 792;
   const MARGIN = 48;
@@ -1123,19 +1087,6 @@ function _appendAuditPageToPdf(pdfDoc, fontReg, fontBold, auditLogs, docMeta) {
   const LGREY  = rgb(0.86, 0.89, 0.93);
   const WHITE  = rgb(1, 1, 1);
   const GREEN  = rgb(0.06, 0.55, 0.25);
-  const RED    = rgb(0.72, 0.13, 0.13);
-  const AMBER  = rgb(0.62, 0.40, 0.05);
-
-  const actionColor = (action) => ({
-    signed:    GREEN,
-    completed: GREEN,
-    sent:      BRAND,
-    opened:    rgb(0.28, 0.42, 0.72),
-    created:   GREY,
-    cancelled: RED,
-    expired:   AMBER,
-    draft_saved: GREY,
-  }[action] || GREY);
 
   let page    = pdfDoc.addPage([PAGE_W, PAGE_H]);
   let cursorY = PAGE_H;
@@ -1153,12 +1104,10 @@ function _appendAuditPageToPdf(pdfDoc, fontReg, fontBold, auditLogs, docMeta) {
 
   // Document metadata box
   const metaRows = [
-    ['Document',    docMeta.title       || 'N/A'],
-    ['Document ID', String(docMeta.documentId || '')],
-    ['Completed',   docMeta.completedAt
-      ? new Date(docMeta.completedAt).toUTCString()
-      : new Date().toUTCString()],
-    ['Signers',     String(auditLogs.filter(l => l.action === 'signed').length)],
+    ['Document',    doc.title       || 'N/A'],
+    ['Document ID', String(doc.documentId || '')],
+    ['Completed',   new Date(doc.completedAt).toUTCString()],
+    ['Signers',     String(doc.parties.length)],
   ];
 
   const BOX_H = metaRows.length * 18 + 16;
@@ -1175,7 +1124,8 @@ function _appendAuditPageToPdf(pdfDoc, fontReg, fontBold, auditLogs, docMeta) {
     const lw = fontBold.widthOfTextAtSize(`${label}: `, 9);
     page.drawText(`${label}: `, { x: MARGIN + 10, y: metaY, size: 9, font: fontBold, color: GREY });
     page.drawText(value, {
-      x: MARGIN + 10 + lw, y: metaY, size: 9, font: fontReg, color: DARK,
+      x: MARGIN + 10 + lw, y: metaY,
+      size: 9, font: fontReg, color: DARK,
       maxWidth: COL_W - 20 - lw,
     });
     metaY -= 18;
@@ -1183,7 +1133,7 @@ function _appendAuditPageToPdf(pdfDoc, fontReg, fontBold, auditLogs, docMeta) {
   cursorY -= BOX_H + 20;
 
   // Section title
-  page.drawText('AUDIT TRAIL', {
+  page.drawText('SIGNING LOG', {
     x: MARGIN, y: cursorY, size: 10, font: fontBold, color: BRAND,
   });
   cursorY -= 8;
@@ -1193,89 +1143,47 @@ function _appendAuditPageToPdf(pdfDoc, fontReg, fontBold, auditLogs, docMeta) {
   });
   cursorY -= 16;
 
-  const ROW_MIN_H = 52;
-
-  for (const log of auditLogs) {
-    if (cursorY < MARGIN + ROW_MIN_H + 30) {
-      _drawFooter(page, fontReg, PAGE_W, MARGIN);
-      page    = pdfDoc.addPage([PAGE_W, PAGE_H]);
+  for (const p of doc.parties) {
+    if (cursorY < 150) {
+      page = pdfDoc.addPage([PAGE_W, PAGE_H]);
       cursorY = PAGE_H - MARGIN;
-      page.drawText('Audit Trail (continued)', {
-        x: MARGIN, y: cursorY, size: 11, font: fontBold, color: BRAND,
-      });
-      cursorY -= 20;
     }
 
-    const color   = actionColor(log.action);
-    const action  = (log.action || '').toUpperCase();
-    const ts      = log.timestamp ? new Date(log.timestamp).toUTCString() : '';
-    const actor   = log.performed_by?.email || log.performed_by?.name || 'System';
-    const details = log.details    || '';
-    const ip      = log.ip_address ? `IP: ${log.ip_address}` : '';
-    const loc     = log.location   ? `  •  ${log.location}` : '';
-
-    const BADGE_W = 66;
-    const BADGE_H = 14;
-    const ROW_TOP = cursorY;
-
+    const rowH = 60;
     page.drawRectangle({
-      x: MARGIN, y: ROW_TOP - BADGE_H - 2,
-      width: BADGE_W, height: BADGE_H,
-      color, borderRadius: 2,
-    });
-    page.drawText(action, {
-      x: MARGIN + 4, y: ROW_TOP - BADGE_H + 2,
-      size: 7, font: fontBold, color: WHITE, maxWidth: BADGE_W - 6,
+      x: MARGIN, y: cursorY - rowH,
+      width: COL_W, height: rowH,
+      color: LGREY,
+      opacity: 0.2
     });
 
-    const tsW = fontReg.widthOfTextAtSize(ts, 8);
-    page.drawText(ts, {
-      x: MARGIN + COL_W - tsW, y: ROW_TOP, size: 8, font: fontReg, color: GREY,
-    });
-    page.drawText(actor, {
-      x: MARGIN + BADGE_W + 8, y: ROW_TOP, size: 9, font: fontBold, color: DARK,
-      maxWidth: COL_W - BADGE_W - 8 - tsW - 4,
-    });
-
-    let lineY = ROW_TOP - 14;
-
-    if (details) {
-      page.drawText(details, {
-        x: MARGIN + BADGE_W + 8, y: lineY, size: 8, font: fontReg, color: GREY,
-        maxWidth: COL_W - BADGE_W - 8,
-      });
-      lineY -= 12;
-    }
-    if (ip || loc) {
-      page.drawText(`${ip}${loc}`, {
-        x: MARGIN + BADGE_W + 8, y: lineY, size: 7.5, font: fontReg,
-        color: rgb(0.6, 0.62, 0.67), maxWidth: COL_W - BADGE_W - 8,
-      });
-      lineY -= 12;
+    page.drawText(p.name || 'Unknown', { x: MARGIN + 10, y: cursorY - 18, size: 10, font: fontBold, color: DARK });
+    page.drawText(p.email || '', { x: MARGIN + 10, y: cursorY - 32, size: 9, font: fontReg, color: GREY });
+    
+    if (p.signedAt) {
+      page.drawText('SIGNED', { x: MARGIN + COL_W - 60, y: cursorY - 18, size: 8, font: fontBold, color: GREEN });
+      page.drawText(new Date(p.signedAt).toUTCString(), { x: MARGIN + COL_W - 180, y: cursorY - 32, size: 8, font: fontReg, color: GREY });
+      if (p.ipAddress) {
+        page.drawText(`IP: ${p.ipAddress}`, { x: MARGIN + 10, y: cursorY - 46, size: 8, font: fontReg, color: GREY });
+      }
+    } else {
+      page.drawText('PENDING', { x: MARGIN + COL_W - 60, y: cursorY - 18, size: 8, font: fontBold, color: rgb(0.8, 0.5, 0) });
     }
 
-    cursorY = lineY - 4;
-    page.drawLine({
-      start: { x: MARGIN, y: cursorY }, end: { x: MARGIN + COL_W, y: cursorY },
-      thickness: 0.25, color: LGREY,
-    });
-    cursorY -= 8;
+    cursorY -= rowH + 10;
   }
 
-  _drawFooter(page, fontReg, PAGE_W, MARGIN);
-}
-
-function _drawFooter(page, fontReg, pageW, margin) {
-  const txt = `Generated by NeXsign  •  ${new Date().toUTCString()}  •  Tamper-evident certificate.`;
-  const tw  = fontReg.widthOfTextAtSize(txt, 7);
-  page.drawText(txt, {
-    x: (pageW - tw) / 2, y: margin - 24, size: 7,
-    font: fontReg, color: rgb(0.62, 0.65, 0.70),
+  const footerText = `Generated by NeXsign • ${new Date().toUTCString()} • Tamper-evident digital signature record.`;
+  page.drawText(footerText, {
+    x: MARGIN,
+    y: 20,
+    size: 7,
+    font: fontReg,
+    color: GREY,
   });
 }
 
 module.exports = {
   mergeSignaturesIntoPDF,
   appendAuditPage,
-  embedSignaturesAndAuditLog,
 };

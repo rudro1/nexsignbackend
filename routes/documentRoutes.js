@@ -237,12 +237,13 @@ router.post('/upload-and-send', auth, upload.single('file'), async (req, res) =>
     await doc.save();
 
     // Send first email
+    const frontendUrl = (process.env.FRONTEND_URL || 'https://nexsignfrontend.vercel.app').replace(/\/$/, '');
     await sendSigningEmail({
       recipientEmail: doc.parties[0].email,
       recipientName:  doc.parties[0].name,
       documentTitle:  doc.title,
       senderName:     req.user.full_name || 'Admin',
-      signingLink:    `${process.env.FRONTEND_URL}/sign?token=${firstPartyToken}`,
+      signingLink:    `${frontendUrl}/sign/${firstPartyToken}`,
       companyLogoUrl: doc.companyLogo,
       companyName:    doc.companyName,
     });
@@ -312,12 +313,13 @@ router.post('/sign/submit', async (req, res) => {
       doc.currentPartyIndex = idx + 1;
       await doc.save();
 
+      const frontendUrl = (process.env.FRONTEND_URL || 'https://nexsignfrontend.vercel.app').replace(/\/$/, '');
       await sendSigningEmail({
         recipientEmail: doc.parties[idx+1].email,
         recipientName:  doc.parties[idx+1].name,
         documentTitle:  doc.title,
         senderName:     'Admin', // could be improved
-        signingLink:    `${process.env.FRONTEND_URL}/sign?token=${nextToken}`,
+        signingLink:    `${frontendUrl}/sign/${nextToken}`,
         companyLogoUrl: doc.companyLogo,
         companyName:    doc.companyName,
       });
