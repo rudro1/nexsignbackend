@@ -1486,8 +1486,6 @@ const employeeSign = asyncHandler(async (req, res) => {
     latitude, longitude, clientTime,
   } = req.body;
 
-  if (!signatureDataUrl)
-    return res.status(400).json({ success: false, message: 'Signature is required.' });
 
   const session = await TemplateSession.findByToken(req.params.token);
 
@@ -1523,12 +1521,53 @@ const employeeSign = asyncHandler(async (req, res) => {
   const deviceInfo = parseDevice(ua);
   const localTime  = new Date().toUTCString();
 
-  const template = await Template.findById(session.template._id || session.template);
-  if (!template)
-    return res.status(404).json({ success: false, message: 'Template not found.' });
+ const template = await Template.findById(
+  session.template._id || session.template
+);
+if (!template)
+  return res.status(404).json({ success: false, message: 'Template not found.' });
 
-  // ── Upload signature image to Cloudinary ──────────
-  let signatureImageUrl      = null;
+// ✅ Employee fields বের করো
+const employeeFields = (template.fields || [])
+  .filter(f => f.assignedTo === 'employee');
+
+// ✅ Signature field আছে কিনা check
+const hasSignatureField = employeeFields.some(
+  f => f.type === 'signature' || f.type === 'initial'
+);
+
+// ✅ শুধু তখনই block করো যখন signature field আছে
+if (hasSignatureField && !signatureDataUrl) {
+  return res.status(400).json({
+    success: false,
+    message: 'Signature is required.',
+  });
+}
+
+// ✅ Required fields check
+const parsedFieldValues = Array.isArray(fieldValues) ? fieldValues : [];
+
+const missing = employeeFields.filter(f => {
+  if (!f.required) return false;
+  if (f.type === 'signature' || f.type === 'initial') {
+    return !signatureDataUrl;
+  }
+  const fv = parsedFieldValues.find(v => v.fieldId === f.id);
+  return !fv?.value;
+});
+
+if (missing.length > 0) {
+  return res.status(400).json({
+    success: false,
+    message: `${missing.length} required field(s) incomplete.`,
+    missingFields: missing.map(f => ({
+      id: f.id, type: f.type, page: f.page,
+    })),
+  });
+}
+
+// ── Upload signature image to Cloudinary ──────────
+let signatureImageUrl      = null;
   let signatureImagePublicId = '';
   try {
     const uploaded       = await uploadSignaturePng(
@@ -1574,15 +1613,16 @@ const employeeSign = asyncHandler(async (req, res) => {
       });
 
       // Generate individual PDF
-      let signedFileUrl = null;
-      if (pdfService?.generateEmployeePdf) {
-        try {
-          const pdfBytes = await Promise.race([
-            pdfService.generateEmployeePdf({
-              baseFileUrl:    template.bossSignedFileUrl || template.fileUrl,
-              signatureDataUrl,
-              fields:         (template.fields || []).filter(f => f.assignedTo === 'employee'),
-              fieldValues:    Array.isArray(fieldValues) ? fieldValues : [],
+     // Generate individual PDF
+let signedFileUrl = null;
+if (pdfService?.generateEmployeePdf) {
+  try {
+    const pdfBytes = await Promise.race([
+      pdfService.generateEmployeePdf({
+        baseFileUrl:    template.bossSignedFileUrl || template.fileUrl,
+        signatureDataUrl: signatureDataUrl || null,
+        fields:         employeeFields,  // ✅ already filtered above
+        fieldValues:    parsedFieldValues, // ✅ already parsed above
               recipientName:  session.recipientName,
               recipientEmail: session.recipientEmail,
               auditData: {
