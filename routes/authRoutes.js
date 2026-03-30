@@ -1,13 +1,14 @@
 'use strict';
 
-const express    = require('express');
-const rateLimit  = require('express-rate-limit');
-const router     = express.Router();
+const express   = require('express');
+const rateLimit = require('express-rate-limit');
+const router    = express.Router();
 
 const {
   login,
   register,
   googleAuth,
+  syncPassword,
   getMe,
   updateProfile,
   changePassword,
@@ -19,16 +20,13 @@ const { auth } = require('../middleware/auth');
 // ═══════════════════════════════════════════════════════════════
 // RATE LIMITERS
 // ═══════════════════════════════════════════════════════════════
-
-// Strict — login / register / google (15 min, 15 attempts)
 const authLimiter = rateLimit({
   windowMs:        15 * 60 * 1000,
-  max:             15,
+  max:             20,
   standardHeaders: true,
   legacyHeaders:   false,
-  keyGenerator:    (req) =>
-    req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-    req.ip,
+  keyGenerator: (req) =>
+    req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip,
   message: {
     success: false,
     code:    'RATE_LIMITED',
@@ -36,7 +34,6 @@ const authLimiter = rateLimit({
   },
 });
 
-// Relaxed — profile updates (1 min, 30 attempts)
 const updateLimiter = rateLimit({
   windowMs:        60 * 1000,
   max:             30,
@@ -50,38 +47,27 @@ const updateLimiter = rateLimit({
 });
 
 // ═══════════════════════════════════════════════════════════════
-// PUBLIC ROUTES (No auth required)
+// PUBLIC ROUTES
 // ═══════════════════════════════════════════════════════════════
+router.post('/register',      authLimiter, register);
+router.post('/login',         authLimiter, login);
+router.post('/google',        authLimiter, googleAuth);
 
-// POST /api/auth/register
-router.post('/register', authLimiter, register);
-
-// POST /api/auth/login
-router.post('/login', authLimiter, login);
-
-// POST /api/auth/google
-router.post('/google', authLimiter, googleAuth);
+// ✅ sync-password route add
+router.post('/sync-password', authLimiter, syncPassword);
 
 // ═══════════════════════════════════════════════════════════════
-// PROTECTED ROUTES (Auth required)
+// PROTECTED ROUTES
 // ═══════════════════════════════════════════════════════════════
-
-// GET /api/auth/me
-router.get('/me', auth, getMe);
-
-// PUT /api/auth/profile
-router.put('/profile', auth, updateLimiter, updateProfile);
-
-// PUT /api/auth/change-password
-router.put('/change-password', auth, authLimiter, changePassword);
-
-// POST /api/auth/logout
-router.post('/logout', auth, logout);
+router.get('/me',              auth, getMe);
+router.put('/profile',         auth, updateLimiter, updateProfile);
+router.put('/change-password', auth, authLimiter,   changePassword);
+router.post('/logout',         auth, logout);
 
 // ═══════════════════════════════════════════════════════════════
 // HEALTH CHECK
 // ═══════════════════════════════════════════════════════════════
-router.get('/health', (req, res) => {
+router.get('/health', (_req, res) => {
   res.json({
     success:   true,
     status:    'Auth service OK',

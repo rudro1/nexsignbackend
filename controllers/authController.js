@@ -19,28 +19,28 @@ function generateToken(user, expiresIn = '7d') {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// HELPER — Safe user response (no sensitive fields)
+// HELPER — Safe user response
 // ═══════════════════════════════════════════════════════════════
 function userResponse(user) {
   return {
-    id:               String(user._id),
-    full_name:        user.full_name,
-    email:            user.email,
-    role:             user.role,
-    avatar:           user.avatar           || null,
-    company_name:     user.company_name     || null,
-    company_logo:     user.company_logo     || null,
-    designation:      user.designation      || null,
-    phone:            user.phone            || null,
-    is_email_verified:user.is_email_verified|| false,
-    stats:            user.stats            || {},
-    last_login:       user.last_login       || null,
-    createdAt:        user.createdAt,
+    id:                String(user._id),
+    full_name:         user.full_name,
+    email:             user.email,
+    role:              user.role,
+    avatar:            user.avatar            || null,
+    company_name:      user.company_name      || null,
+    company_logo:      user.company_logo      || null,
+    designation:       user.designation       || null,
+    phone:             user.phone             || null,
+    is_email_verified: user.is_email_verified || false,
+    stats:             user.stats             || {},
+    last_login:        user.last_login        || null,
+    createdAt:         user.createdAt,
   };
 }
 
 // ═══════════════════════════════════════════════════════════════
-// HELPER — Get device + IP info from request
+// HELPER — Get IP + UA
 // ═══════════════════════════════════════════════════════════════
 function getRequestMeta(req) {
   const ip =
@@ -51,7 +51,6 @@ function getRequestMeta(req) {
     'Unknown';
 
   const ua = req.headers['user-agent'] || '';
-
   return { ip, userAgent: ua };
 }
 
@@ -61,15 +60,10 @@ function getRequestMeta(req) {
 exports.register = async (req, res) => {
   try {
     const {
-      full_name,
-      email,
-      password,
-      company_name,
-      designation,
-      phone,
+      full_name, email, password,
+      company_name, designation, phone,
     } = req.body;
 
-    // ── Validation ─────────────────────────────────────────────
     if (!full_name?.trim() || !email?.trim() || !password) {
       return res.status(400).json({
         success: false,
@@ -88,10 +82,8 @@ exports.register = async (req, res) => {
 
     const cleanEmail = email.toLowerCase().trim();
 
-    // ── Duplicate check ────────────────────────────────────────
     const existing = await User.findOne({ email: cleanEmail })
-      .select('_id')
-      .lean();
+      .select('_id').lean();
 
     if (existing) {
       return res.status(409).json({
@@ -101,8 +93,6 @@ exports.register = async (req, res) => {
       });
     }
 
-    // ── Create user ────────────────────────────────────────────
-    // Password hashing → User model pre-save hook handles it
     const user = await User.create({
       full_name:    full_name.trim(),
       email:        cleanEmail,
@@ -111,9 +101,9 @@ exports.register = async (req, res) => {
       company_name: company_name?.trim() || null,
       designation:  designation?.trim()  || null,
       phone:        phone?.trim()        || null,
+      is_email_verified: false,
     });
 
-    // ── Update last login ──────────────────────────────────────
     const { ip, userAgent } = getRequestMeta(req);
     user.last_login        = new Date();
     user.last_login_ip     = ip;
@@ -132,7 +122,6 @@ exports.register = async (req, res) => {
   } catch (err) {
     console.error('[authController] Register error:', err.message);
 
-    // MongoDB duplicate key
     if (err.code === 11000) {
       return res.status(409).json({
         success: false,
@@ -156,7 +145,6 @@ exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // ── Validation ─────────────────────────────────────────────
     if (!email?.trim() || !password) {
       return res.status(400).json({
         success: false,
@@ -166,9 +154,7 @@ exports.login = async (req, res) => {
     }
 
     const cleanEmail = email.toLowerCase().trim();
-
-    // ── Find user (include password) ───────────────────────────
-    const user = await User.findByEmailWithPassword(cleanEmail);
+    const user       = await User.findByEmailWithPassword(cleanEmail);
 
     if (!user) {
       return res.status(401).json({
@@ -178,7 +164,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // ── Account status check ───────────────────────────────────
     if (!user.is_active) {
       return res.status(403).json({
         success: false,
@@ -187,7 +172,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // ── Password check ─────────────────────────────────────────
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res.status(401).json({
@@ -197,7 +181,6 @@ exports.login = async (req, res) => {
       });
     }
 
-    // ── Update last login ──────────────────────────────────────
     const { ip, userAgent } = getRequestMeta(req);
     user.last_login        = new Date();
     user.last_login_ip     = ip;
@@ -224,46 +207,62 @@ exports.login = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
-// POST /auth/google
+// POST /auth/google  ← FIXED
 // ═══════════════════════════════════════════════════════════════
 exports.googleAuth = async (req, res) => {
   try {
-    const { name, email, googleId, avatar } = req.body;
+    const {
+      name,
+      email,
+      googleId,  // optional
+      avatar,
+      photoURL,  // frontend photoURL ও accept করবে
+    } = req.body;
 
-    if (!email || !googleId) {
+    // ✅ শুধু email required — googleId optional
+    if (!email?.trim()) {
       return res.status(400).json({
         success: false,
         code:    'VALIDATION_ERROR',
-        message: 'Google authentication data is incomplete.',
+        message: 'Email is required for Google authentication.',
       });
     }
 
-    const cleanEmail = email.toLowerCase().trim();
+    const cleanEmail        = email.toLowerCase().trim();
     const { ip, userAgent } = getRequestMeta(req);
+    const userAvatar        = avatar || photoURL || null;
 
-    // ── Find or create user ────────────────────────────────────
+    // ── Find or create ─────────────────────────────────────
     let user = await User.findOne({ email: cleanEmail });
 
     if (!user) {
-      // New user via Google
-      user = await User.create({
-        full_name: name?.trim() || 'Google User',
-        email:     cleanEmail,
-        googleId,
-        avatar:    avatar || null,
-        role:      'user',
-        is_email_verified: true, // Google verified
-      });
+      // ✅ New Google user — password ছাড়াই create
+      const createData = {
+        full_name:         name?.trim() ||
+                           cleanEmail.split('@')[0] ||
+                           'Google User',
+        email:             cleanEmail,
+        role:              'user',
+        is_email_verified: true,
+        is_active:         true,
+      };
+
+      // Optional fields
+      if (googleId)   createData.googleId = googleId;
+      if (userAvatar) createData.avatar   = userAvatar;
+
+      user = await User.create(createData);
+
     } else {
-      // Existing user — update Google info
+      // ✅ Existing user — update info
       let changed = false;
 
-      if (!user.googleId) {
+      if (googleId && !user.googleId) {
         user.googleId = googleId;
         changed = true;
       }
-      if (avatar && !user.avatar) {
-        user.avatar = avatar;
+      if (userAvatar && !user.avatar) {
+        user.avatar = userAvatar;
         changed = true;
       }
       if (!user.is_email_verified) {
@@ -274,8 +273,8 @@ exports.googleAuth = async (req, res) => {
       if (changed) await user.save();
     }
 
-    // ── Account status check ───────────────────────────────────
-    if (!user.is_active) {
+    // ── Account check ───────────────────────────────────────
+    if (user.is_active === false) {
       return res.status(403).json({
         success: false,
         code:    'ACCOUNT_DISABLED',
@@ -283,7 +282,7 @@ exports.googleAuth = async (req, res) => {
       });
     }
 
-    // ── Update last login ──────────────────────────────────────
+    // ── Update last login ───────────────────────────────────
     user.last_login        = new Date();
     user.last_login_ip     = ip;
     user.last_login_device = userAgent.substring(0, 200);
@@ -301,18 +300,97 @@ exports.googleAuth = async (req, res) => {
   } catch (err) {
     console.error('[authController] Google auth error:', err.message);
 
+    // ✅ Duplicate key → still login
     if (err.code === 11000) {
+      try {
+        const cleanEmail = req.body.email?.toLowerCase().trim();
+        const user       = await User.findOne({ email: cleanEmail });
+
+        if (user?.is_active !== false) {
+          user.last_login = new Date();
+          await user.save();
+          const token = generateToken(user);
+          return res.json({
+            success: true,
+            message: 'Google authentication successful.',
+            token,
+            user:    userResponse(user),
+          });
+        }
+      } catch (innerErr) {
+        console.error('Duplicate recovery failed:', innerErr.message);
+      }
+
       return res.status(409).json({
         success: false,
         code:    'EMAIL_EXISTS',
-        message: 'This email is already registered with a different method.',
+        message: 'This email is already registered.',
       });
     }
 
     return res.status(500).json({
       success: false,
       code:    'SERVER_ERROR',
-      message: 'Google authentication failed.',
+      message: 'Google authentication failed. Please try again.',
+    });
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════
+// POST /auth/sync-password
+// Firebase password reset এর পর backend sync
+// ═══════════════════════════════════════════════════════════════
+exports.syncPassword = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email?.trim() || !password) {
+      return res.status(400).json({
+        success: false,
+        code:    'VALIDATION_ERROR',
+        message: 'Email and password required.',
+      });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const user       = await User.findOne({ email: cleanEmail });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        code:    'USER_NOT_FOUND',
+        message: 'User not found.',
+      });
+    }
+
+    if (!user.is_active) {
+      return res.status(403).json({
+        success: false,
+        code:    'ACCOUNT_DISABLED',
+        message: 'Account disabled.',
+      });
+    }
+
+    // Update password
+    user.password  = password;
+    user.last_login = new Date();
+    await user.save();
+
+    const token = generateToken(user);
+
+    return res.json({
+      success: true,
+      message: 'Password synced successfully.',
+      token,
+      user:    userResponse(user),
+    });
+
+  } catch (err) {
+    console.error('[authController] SyncPassword error:', err.message);
+    return res.status(500).json({
+      success: false,
+      code:    'SERVER_ERROR',
+      message: 'Password sync failed.',
     });
   }
 };
@@ -351,27 +429,21 @@ exports.getMe = async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════════
 // PUT /auth/profile
-// Update profile info
 // ═══════════════════════════════════════════════════════════════
 exports.updateProfile = async (req, res) => {
   try {
     const {
-      full_name,
-      company_name,
-      company_logo,
-      designation,
-      phone,
-      avatar,
+      full_name, company_name, company_logo,
+      designation, phone, avatar,
     } = req.body;
 
-    // ── Build update object ────────────────────────────────────
     const updates = {};
-    if (full_name?.trim())    updates.full_name    = full_name.trim();
-    if (company_name !== undefined) updates.company_name = company_name?.trim() || null;
-    if (company_logo !== undefined) updates.company_logo = company_logo || null;
-    if (designation  !== undefined) updates.designation  = designation?.trim()  || null;
-    if (phone        !== undefined) updates.phone        = phone?.trim()        || null;
-    if (avatar       !== undefined) updates.avatar       = avatar || null;
+    if (full_name?.trim())          updates.full_name    = full_name.trim();
+    if (company_name !== undefined)  updates.company_name = company_name?.trim() || null;
+    if (company_logo !== undefined)  updates.company_logo = company_logo || null;
+    if (designation  !== undefined)  updates.designation  = designation?.trim() || null;
+    if (phone        !== undefined)  updates.phone        = phone?.trim() || null;
+    if (avatar       !== undefined)  updates.avatar       = avatar || null;
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({
@@ -434,7 +506,6 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    // ── Get user with password ─────────────────────────────────
     const user = await User.findByEmailWithPassword(req.user.email);
 
     if (!user) {
@@ -445,7 +516,6 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    // ── Verify current password ────────────────────────────────
     const isMatch = await user.comparePassword(current_password);
     if (!isMatch) {
       return res.status(401).json({
@@ -455,11 +525,9 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    // ── Update password (pre-save hook will hash it) ───────────
     user.password = new_password;
     await user.save();
 
-    // ── Generate new token ─────────────────────────────────────
     const token = generateToken(user);
 
     return res.json({
@@ -479,13 +547,10 @@ exports.changePassword = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
-// POST /auth/logout (optional — client clears token)
+// POST /auth/logout
 // ═══════════════════════════════════════════════════════════════
 exports.logout = async (req, res) => {
-  // JWT is stateless — client must clear token
-  // If using cookies:
   res.clearCookie('nexsign_token');
-
   return res.json({
     success: true,
     message: 'Logged out successfully.',
