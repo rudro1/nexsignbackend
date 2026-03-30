@@ -983,14 +983,19 @@ const createTemplate = asyncHandler(async (req, res) => {
   // Send boss approval email
   if (bossSignsFirst) {
     try {
-      await sendBossApprovalEmail?.({
-        bossName:   req.user.full_name || req.user.name || 'Boss',
-        bossEmail:  req.user.email,
-        templateId: template._id.toString(),
-        title:      template.title,
-        totalCount: parsedRecipients.length,
-        signUrl:    `${FRONT()}/templates/${template._id}`,
-      });
+   await sendBossApprovalEmail?.({
+    // ✅ FIXED
+    bossEmail:     req.user.email,
+    bossName:      req.user.full_name || req.user.name || 'Boss',
+    bossDesignation: req.user.designation || '',
+    documentTitle: template.title,
+    signingLink:   `${FRONT()}/templates/${template._id}`,
+    employeeCount: parsedRecipients.length,
+    senderName:    req.user.full_name || req.user.name || 'Boss',
+    companyName:   template.companyName || '',
+    companyLogoUrl: template.companyLogo || '',
+    message:       template.message || '',
+  });
     } catch (e) {
       console.error('[createTemplate] Boss email failed:', e.message);
     }
@@ -1268,19 +1273,17 @@ const bossSign = asyncHandler(async (req, res) => {
   // ── Step 5: Send emails to employees ──────────────────────
   const emailResults = await Promise.allSettled(
     sessions.map(session =>
-      sendEmployeeSigningEmail?.({
-        recipientName:        session.recipientName,
-        recipientEmail:       session.recipientEmail,
-        recipientDesignation: session.recipientDesignation,
-        templateTitle:        template.title,
-        signingUrl:           `${FRONT()}/template-sign/${session.token}`,
-        bossName:             req.user.full_name || req.user.name || 'Your Manager',
-        companyName:          template.companyName || '',
-        companyLogo:          template.companyLogo || '',
-        message:              template.message || '',
-        expiresAt,
-        ccList:               template.ccList || [],
-      })
+     sendEmployeeSigningEmail?.({
+    // ✅ FIXED: correct parameter names
+    employeeEmail:   session.recipientEmail,
+    employeeName:    session.recipientName,
+    documentTitle:   template.title,
+    signingLink:     `${FRONT()}/template-sign/${session.token}`,
+    bossName:        req.user.full_name || req.user.name || 'Your Manager',
+    bossDesignation: req.user.designation || '',
+    companyName:     template.companyName || '',
+    companyLogoUrl:  template.companyLogo || '',
+  })
     )
   );
 
@@ -1830,17 +1833,16 @@ const resendEmail = asyncHandler(async (req, res) => {
   await session.addReminder({ note: `Reminder by ${req.user.email}` });
   await session.save();
 
-  await sendEmployeeSigningEmail?.({
-    recipientName:        session.recipientName,
-    recipientEmail:       session.recipientEmail,
-    recipientDesignation: session.recipientDesignation,
-    templateTitle:        template.title,
-    signingUrl:           `${FRONT()}/template-sign/${session.token}`,
-    bossName:             req.user.full_name || req.user.name || 'Your Manager',
-    companyName:          template.companyName || '',
-    companyLogo:          template.companyLogo || '',
-    expiresAt:            session.expiresAt,
-    isReminder:           true,
+await sendEmployeeSigningEmail?.({
+    // ✅ FIXED
+    employeeEmail:   session.recipientEmail,
+    employeeName:    session.recipientName,
+    documentTitle:   template.title,
+    signingLink:     `${FRONT()}/template-sign/${session.token}`,
+    bossName:        req.user.full_name || req.user.name || 'Your Manager',
+    bossDesignation: req.user.designation || '',
+    companyName:     template.companyName || '',
+    companyLogoUrl:  template.companyLogo || '',
   });
 
   return res.json({
