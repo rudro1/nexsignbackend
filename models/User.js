@@ -1,136 +1,133 @@
+'use strict';
+
 const mongoose = require('mongoose');
-const bcrypt = require('bcryptjs');
+const bcrypt   = require('bcryptjs');
 
 const userSchema = new mongoose.Schema(
   {
     full_name: {
-      type: String,
-      required: [true, 'Full name is required'],
-      trim: true,
+      type:      String,
+      required:  [true, 'Full name is required'],
+      trim:      true,
       maxlength: [100, 'Name cannot exceed 100 characters'],
     },
     email: {
-      type: String,
-      required: [true, 'Email is required'],
-      unique: true,
+      type:      String,
+      required:  [true, 'Email is required'],
+      unique:    true,
       lowercase: true,
-      trim: true,
+      trim:      true,
       match: [
-        /^\w+([.-]?\w+)*@\w+([.-]?\w+)*(\.\w{2,3})+$/,
+        /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
         'Please enter a valid email',
       ],
     },
     password: {
-      type: String,
-      required: function () {
-        return !this.googleId;
-      },
-      minlength: [6, 'Password must be at least 6 characters'],
-      default: 'google_login_user',
-      select: false, // password query তে automatically আসবে না
+      type:    String,
+      // ✅ Google login এ password required নয়
+      // required function সম্পূর্ণ বাদ
+      default: null,
+      select:  false,
     },
     googleId: {
-      type: String,
+      type:    String,
       default: null,
     },
     role: {
-      type: String,
-      enum: ['user', 'admin', 'super_admin'],
+      type:    String,
+      enum:    ['user', 'admin', 'super_admin'],
       default: 'user',
     },
 
-    // ── Profile ──────────────────────────────────────────
     avatar: {
-      type: String,
-      default: null, // Cloudinary URL
+      type:    String,
+      default: null,
     },
     company_name: {
-      type: String,
-      trim: true,
+      type:    String,
+      trim:    true,
       default: null,
     },
     company_logo: {
-      type: String,
-      default: null, // Cloudinary URL
+      type:    String,
+      default: null,
     },
     designation: {
-      type: String,
-      trim: true,
+      type:    String,
+      trim:    true,
       default: null,
     },
     phone: {
-      type: String,
-      trim: true,
+      type:    String,
+      trim:    true,
       default: null,
     },
 
-    // ── Account Status ────────────────────────────────────
     is_active: {
-      type: Boolean,
+      type:    Boolean,
       default: true,
     },
     is_email_verified: {
-      type: Boolean,
+      type:    Boolean,
       default: false,
     },
     email_verification_token: {
-      type: String,
+      type:    String,
       default: null,
-      select: false,
+      select:  false,
     },
     password_reset_token: {
-      type: String,
+      type:    String,
       default: null,
-      select: false,
+      select:  false,
     },
     password_reset_expires: {
-      type: Date,
+      type:    Date,
       default: null,
-      select: false,
+      select:  false,
     },
 
-    // ── Usage Stats (Dashboard fast load এর জন্য) ─────────
     stats: {
-      total_documents: { type: Number, default: 0 },
+      total_documents:     { type: Number, default: 0 },
       completed_documents: { type: Number, default: 0 },
-      pending_documents: { type: Number, default: 0 },
-      total_templates: { type: Number, default: 0 },
+      pending_documents:   { type: Number, default: 0 },
+      total_templates:     { type: Number, default: 0 },
     },
 
-    // ── Last Login Info ───────────────────────────────────
     last_login: {
-      type: Date,
+      type:    Date,
       default: null,
     },
     last_login_ip: {
-      type: String,
+      type:    String,
       default: null,
     },
     last_login_device: {
-      type: String,
+      type:    String,
       default: null,
     },
   },
   {
-    timestamps: true, // createdAt & updatedAt auto
-  }
+    timestamps: true,
+  },
 );
 
-// ── Indexes (Fast query) ──────────────────────────────────
-userSchema.index({ email: 1 });
-userSchema.index({ googleId: 1 });
-userSchema.index({ role: 1 });
+// ── Indexes ───────────────────────────────────────────────────
+userSchema.index({ email:     1 });
+userSchema.index({ googleId:  1 });
+userSchema.index({ role:      1 });
 userSchema.index({ createdAt: -1 });
 
-// ── Pre-save: Hash password ───────────────────────────────
+// ── Pre-save: Hash password ───────────────────────────────────
 userSchema.pre('save', async function (next) {
-  // Password change না হলে skip
-  if (!this.isModified('password')) return next();
-  // Google login user skip
-  if (this.password === 'google_login_user') return next();
+  // Password নেই বা change হয়নি → skip
+  if (!this.password)                    return next();
+  if (!this.isModified('password'))      return next();
+  // Already hashed → skip
+  if (this.password.startsWith('\$2'))    return next();
 
   try {
-    const salt = await bcrypt.genSalt(12);
+    const salt    = await bcrypt.genSalt(12);
     this.password = await bcrypt.hash(this.password, salt);
     next();
   } catch (error) {
@@ -138,46 +135,44 @@ userSchema.pre('save', async function (next) {
   }
 });
 
-// ── Method: Compare Password ──────────────────────────────
-userSchema.methods.comparePassword = async function (enteredPassword) {
-  return await bcrypt.compare(enteredPassword, this.password);
+// ── Method: Compare Password ──────────────────────────────────
+userSchema.methods.comparePassword = async function (entered) {
+  if (!this.password) return false;
+  return bcrypt.compare(entered, this.password);
 };
 
-// ── Method: Get Public Profile (sensitive data বাদ) ───────
+// ── Method: Public Profile ────────────────────────────────────
 userSchema.methods.getPublicProfile = function () {
   return {
-    _id: this._id,
-    full_name: this.full_name,
-    email: this.email,
-    role: this.role,
-    avatar: this.avatar,
-    company_name: this.company_name,
-    company_logo: this.company_logo,
-    designation: this.designation,
-    phone: this.phone,
-    is_active: this.is_active,
+    _id:               this._id,
+    full_name:         this.full_name,
+    email:             this.email,
+    role:              this.role,
+    avatar:            this.avatar,
+    company_name:      this.company_name,
+    company_logo:      this.company_logo,
+    designation:       this.designation,
+    phone:             this.phone,
+    is_active:         this.is_active,
     is_email_verified: this.is_email_verified,
-    stats: this.stats,
-    last_login: this.last_login,
-    createdAt: this.createdAt,
+    stats:             this.stats,
+    last_login:        this.last_login,
+    createdAt:         this.createdAt,
   };
 };
 
-// ── Method: Update Stats ──────────────────────────────────
+// ── Method: Update Stats ──────────────────────────────────────
 userSchema.methods.updateStats = async function (field, increment = 1) {
-  const validFields = [
-    'total_documents',
-    'completed_documents',
-    'pending_documents',
-    'total_templates',
+  const valid = [
+    'total_documents', 'completed_documents',
+    'pending_documents', 'total_templates',
   ];
-  if (!validFields.includes(field)) return;
-
+  if (!valid.includes(field)) return;
   this.stats[field] = (this.stats[field] || 0) + increment;
   await this.save();
 };
 
-// ── Static: Find by Email (with password) ─────────────────
+// ── Static: Find by Email with password ──────────────────────
 userSchema.statics.findByEmailWithPassword = function (email) {
   return this.findOne({ email }).select('+password');
 };
