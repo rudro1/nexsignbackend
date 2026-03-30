@@ -3,10 +3,10 @@
 const User = require('../models/User');
 const jwt  = require('jsonwebtoken');
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // HELPER — Generate JWT
-// ═══════════════════════════════════════════════════════════════
-function generateToken(user, expiresIn = '7d') {
+// ════════════════════════════════════════════════════════════════
+function generateToken(user, expiresIn = '30d') {
   return jwt.sign(
     {
       id:    String(user._id),
@@ -18,35 +18,41 @@ function generateToken(user, expiresIn = '7d') {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // HELPER — Safe user response
-// ═══════════════════════════════════════════════════════════════
+// ✅ Frontend সবসময় এই shape expect করে
+// ════════════════════════════════════════════════════════════════
 function userResponse(user) {
   return {
     id:                String(user._id),
-    full_name:         user.full_name,
+    // ✅ Frontend "name" expect করে — full_name থেকে map করো
+    name:              user.full_name || user.name || '',
+    full_name:         user.full_name || user.name || '',
     email:             user.email,
-    role:              user.role,
-    avatar:            user.avatar            || null,
+    role:              user.role              || 'user',
+    // ✅ Frontend "photoURL" expect করে — avatar থেকে map
+    photoURL:          user.avatar            || user.photoURL || null,
+    avatar:            user.avatar            || user.photoURL || null,
     company_name:      user.company_name      || null,
     company_logo:      user.company_logo      || null,
     designation:       user.designation       || null,
     phone:             user.phone             || null,
-    is_email_verified: user.is_email_verified || false,
+    is_email_verified: user.is_email_verified ?? false,
+    isVerified:        user.is_email_verified ?? false,
     stats:             user.stats             || {},
     last_login:        user.last_login        || null,
     createdAt:         user.createdAt,
   };
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // HELPER — Get IP + UA
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 function getRequestMeta(req) {
   const ip =
     req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-    req.headers['x-real-ip'] ||
-    req.ip ||
+    req.headers['x-real-ip']  ||
+    req.ip                    ||
     req.socket?.remoteAddress ||
     'Unknown';
 
@@ -54,21 +60,29 @@ function getRequestMeta(req) {
   return { ip, userAgent: ua };
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // POST /auth/register
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 exports.register = async (req, res) => {
   try {
     const {
-      full_name, email, password,
-      company_name, designation, phone,
+      // ✅ Accept করো both "name" and "full_name"
+      name,
+      full_name,
+      email,
+      password,
+      company_name,
+      designation,
+      phone,
     } = req.body;
 
-    if (!full_name?.trim() || !email?.trim() || !password) {
+    const resolvedName = (full_name || name || '').trim();
+
+    if (!resolvedName || !email?.trim() || !password) {
       return res.status(400).json({
         success: false,
         code:    'VALIDATION_ERROR',
-        message: 'Full name, email and password are required.',
+        message: 'Name, email and password are required.',
       });
     }
 
@@ -82,9 +96,7 @@ exports.register = async (req, res) => {
 
     const cleanEmail = email.toLowerCase().trim();
 
-    const existing = await User.findOne({ email: cleanEmail })
-      .select('_id').lean();
-
+    const existing = await User.findOne({ email: cleanEmail }).select('_id').lean();
     if (existing) {
       return res.status(409).json({
         success: false,
@@ -94,7 +106,7 @@ exports.register = async (req, res) => {
     }
 
     const user = await User.create({
-      full_name:    full_name.trim(),
+      full_name:    resolvedName,
       email:        cleanEmail,
       password,
       role:         'user',
@@ -120,7 +132,7 @@ exports.register = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[authController] Register error:', err.message);
+    console.error('[Register Error]:', err.message);
 
     if (err.code === 11000) {
       return res.status(409).json({
@@ -138,9 +150,9 @@ exports.register = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // POST /auth/login
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -172,6 +184,18 @@ exports.login = async (req, res) => {
       });
     }
 
+    // ── Google-only account password check ──
+    if (
+      !user.googleId === false &&
+      user.password === 'google_login_user'
+    ) {
+      return res.status(401).json({
+        success: false,
+        code:    'GOOGLE_ONLY',
+        message: 'This account uses Google sign-in. Please use Google login.',
+      });
+    }
+
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
       return res.status(401).json({
@@ -197,7 +221,7 @@ exports.login = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[authController] Login error:', err.message);
+    console.error('[Login Error]:', err.message);
     return res.status(500).json({
       success: false,
       code:    'SERVER_ERROR',
@@ -206,83 +230,109 @@ exports.login = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════
-// POST /auth/google  ← FIXED
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
+// POST /auth/google
+// ✅ FULLY FIXED — field name mismatch resolved
+// ════════════════════════════════════════════════════════════════
 exports.googleAuth = async (req, res) => {
   try {
-    const {
-      name,
-      email,
-      photoURL,
-      googleId,
-    } = req.body;
+    console.log('[Google Auth] Received body:', JSON.stringify(req.body));
 
-    // ✅ শুধু email required
+    const { name, email, photoURL, googleId } = req.body;
+
+    // ✅ শুধু email required — name/photoURL optional
     if (!email?.trim()) {
+      console.error('[Google Auth] Missing email in body:', req.body);
       return res.status(400).json({
         success: false,
         code:    'VALIDATION_ERROR',
-        message: 'Email is required.',
+        message: 'Email is required for Google authentication.',
+      });
+    }
+
+    // Email format check
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email.trim())) {
+      return res.status(400).json({
+        success: false,
+        code:    'INVALID_EMAIL',
+        message: 'Invalid email format.',
       });
     }
 
     const cleanEmail        = email.toLowerCase().trim();
     const { ip, userAgent } = getRequestMeta(req);
-    const userAvatar        = photoURL || null;
 
     let user = await User.findOne({ email: cleanEmail });
 
     if (!user) {
-      // ✅ New user — password ছাড়াই create
+      // ── New User ─────────────────────────────────────────
+      // ✅ full_name এ name রাখো — model এর field অনুযায়ী
+      const resolvedName =
+        name?.trim() ||
+        cleanEmail.split('@')[0] ||
+        'Google User';
+
       const createData = {
-        full_name:         name?.trim() ||
-                           cleanEmail.split('@')[0] ||
-                           'Google User',
+        full_name:         resolvedName,
         email:             cleanEmail,
         role:              'user',
         is_email_verified: true,
         is_active:         true,
+        // Google login user এর password দরকার নেই
+        // model এ default: 'google_login_user' আছে
       };
 
-      if (googleId)    createData.googleId = googleId;
-      if (userAvatar)  createData.avatar   = userAvatar;
+      if (googleId)  createData.googleId = googleId;
+      if (photoURL)  createData.avatar   = photoURL;  // ✅ avatar field
 
       user = await User.create(createData);
+      console.log('[Google Auth] New user created:', cleanEmail);
 
     } else {
-      // ✅ Existing user — update
+      // ── Existing User ─────────────────────────────────────
+      if (user.is_active === false) {
+        return res.status(403).json({
+          success: false,
+          code:    'ACCOUNT_DISABLED',
+          message: 'Account disabled. Contact support.',
+        });
+      }
+
       let changed = false;
 
+      // ✅ googleId update
       if (googleId && !user.googleId) {
         user.googleId = googleId;
         changed = true;
       }
-      if (userAvatar && !user.avatar) {
-        user.avatar = userAvatar;
+
+      // ✅ avatar update (photoURL → avatar field)
+      if (photoURL && !user.avatar) {
+        user.avatar = photoURL;
         changed = true;
       }
+
+      // ✅ Email auto-verify করো Google login এ
       if (!user.is_email_verified) {
         user.is_email_verified = true;
         changed = true;
       }
-      if (changed) await user.save();
+
+      if (changed) {
+        await user.save();
+      }
     }
 
-    if (user.is_active === false) {
-      return res.status(403).json({
-        success: false,
-        code:    'ACCOUNT_DISABLED',
-        message: 'Account disabled. Contact support.',
-      });
-    }
-
+    // Update login meta
     user.last_login        = new Date();
     user.last_login_ip     = ip;
     user.last_login_device = userAgent.substring(0, 200);
     await user.save();
 
     const token = generateToken(user);
+
+    console.log('[Google Auth] Success for:', cleanEmail);
 
     return res.json({
       success: true,
@@ -292,9 +342,9 @@ exports.googleAuth = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[googleAuth] Error:', err.message);
+    console.error('[Google Auth Error]:', err.message, err.stack);
 
-    // ✅ Duplicate key → still login
+    // ── Duplicate key race condition ──────────────────────
     if (err.code === 11000) {
       try {
         const cleanEmail = req.body.email?.toLowerCase().trim();
@@ -303,7 +353,10 @@ exports.googleAuth = async (req, res) => {
         if (user && user.is_active !== false) {
           user.last_login = new Date();
           await user.save();
+
           const token = generateToken(user);
+          console.log('[Google Auth] Recovered from duplicate:', cleanEmail);
+
           return res.json({
             success: true,
             message: 'Google authentication successful.',
@@ -311,23 +364,23 @@ exports.googleAuth = async (req, res) => {
             user:    userResponse(user),
           });
         }
-      } catch (e) {
-        console.error('Recovery failed:', e.message);
+      } catch (retryErr) {
+        console.error('[Google Auth] Recovery failed:', retryErr.message);
       }
     }
 
     return res.status(500).json({
       success: false,
       code:    'SERVER_ERROR',
-      message: 'Google authentication failed.',
+      message: 'Google authentication failed. Please try again.',
     });
   }
 };
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // POST /auth/sync-password
-// Firebase password reset এর পর backend sync
-// ═══════════════════════════════════════════════════════════════
+// Firebase password reset → Backend sync
+// ════════════════════════════════════════════════════════════════
 exports.syncPassword = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -336,7 +389,15 @@ exports.syncPassword = async (req, res) => {
       return res.status(400).json({
         success: false,
         code:    'VALIDATION_ERROR',
-        message: 'Email and password required.',
+        message: 'Email and password are required.',
+      });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({
+        success: false,
+        code:    'WEAK_PASSWORD',
+        message: 'Password must be at least 6 characters.',
       });
     }
 
@@ -359,8 +420,7 @@ exports.syncPassword = async (req, res) => {
       });
     }
 
-    // Update password
-    user.password  = password;
+    user.password   = password;
     user.last_login = new Date();
     await user.save();
 
@@ -374,7 +434,7 @@ exports.syncPassword = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[authController] SyncPassword error:', err.message);
+    console.error('[SyncPassword Error]:', err.message);
     return res.status(500).json({
       success: false,
       code:    'SERVER_ERROR',
@@ -383,13 +443,16 @@ exports.syncPassword = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // GET /auth/me
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 exports.getMe = async (req, res) => {
   try {
     const user = await User.findById(req.user.id)
-      .select('-password -email_verification_token -password_reset_token -password_reset_expires')
+      .select(
+        '-password -email_verification_token ' +
+        '-password_reset_token -password_reset_expires',
+      )
       .lean();
 
     if (!user) {
@@ -406,7 +469,7 @@ exports.getMe = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[authController] GetMe error:', err.message);
+    console.error('[GetMe Error]:', err.message);
     return res.status(500).json({
       success: false,
       code:    'SERVER_ERROR',
@@ -415,23 +478,34 @@ exports.getMe = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // PUT /auth/profile
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 exports.updateProfile = async (req, res) => {
   try {
     const {
-      full_name, company_name, company_logo,
-      designation, phone, avatar,
+      // ✅ Accept both name formats
+      name,
+      full_name,
+      company_name,
+      company_logo,
+      designation,
+      phone,
+      avatar,
+      photoURL,
     } = req.body;
 
     const updates = {};
-    if (full_name?.trim())          updates.full_name    = full_name.trim();
-    if (company_name !== undefined)  updates.company_name = company_name?.trim() || null;
-    if (company_logo !== undefined)  updates.company_logo = company_logo || null;
-    if (designation  !== undefined)  updates.designation  = designation?.trim() || null;
-    if (phone        !== undefined)  updates.phone        = phone?.trim() || null;
-    if (avatar       !== undefined)  updates.avatar       = avatar || null;
+    const resolvedName = full_name || name;
+
+    if (resolvedName?.trim())       updates.full_name    = resolvedName.trim();
+    if (company_name !== undefined)  updates.company_name = company_name?.trim()  || null;
+    if (company_logo !== undefined)  updates.company_logo = company_logo           || null;
+    if (designation  !== undefined)  updates.designation  = designation?.trim()   || null;
+    if (phone        !== undefined)  updates.phone        = phone?.trim()          || null;
+    // ✅ Accept both avatar and photoURL
+    const resolvedAvatar = avatar || photoURL;
+    if (resolvedAvatar !== undefined) updates.avatar = resolvedAvatar || null;
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({
@@ -445,7 +519,10 @@ exports.updateProfile = async (req, res) => {
       req.user.id,
       { $set: updates },
       { new: true, runValidators: true },
-    ).select('-password -email_verification_token -password_reset_token');
+    ).select(
+      '-password -email_verification_token ' +
+      '-password_reset_token -password_reset_expires',
+    );
 
     if (!user) {
       return res.status(404).json({
@@ -462,7 +539,7 @@ exports.updateProfile = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[authController] UpdateProfile error:', err.message);
+    console.error('[UpdateProfile Error]:', err.message);
     return res.status(500).json({
       success: false,
       code:    'SERVER_ERROR',
@@ -471,9 +548,9 @@ exports.updateProfile = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // PUT /auth/change-password
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 exports.changePassword = async (req, res) => {
   try {
     const { current_password, new_password } = req.body;
@@ -525,7 +602,7 @@ exports.changePassword = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[authController] ChangePassword error:', err.message);
+    console.error('[ChangePassword Error]:', err.message);
     return res.status(500).json({
       success: false,
       code:    'SERVER_ERROR',
@@ -534,9 +611,9 @@ exports.changePassword = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 // POST /auth/logout
-// ═══════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════
 exports.logout = async (req, res) => {
   res.clearCookie('nexsign_token');
   return res.json({
