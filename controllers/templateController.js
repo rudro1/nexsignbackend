@@ -1194,12 +1194,12 @@ const bossSign = asyncHandler(async (req, res) => {
   if (pdfService?.embedBossSignature) {
     try {
       const mergedBytes = await Promise.race([
-        pdfService.embedBossSignature({
-          fileUrl:         template.fileUrl,
-          signatureDataUrl,
-          fields:          (template.fields || []).filter(f => f.assignedTo === 'boss'),
-          fieldValues:     Array.isArray(fieldValues) ? fieldValues : [],
-        }),
+         pdfService.embedBossSignature({
+    fileUrl:         template.fileUrl,
+    signatureDataUrl,
+    fields:          (template.fields || []).filter(f => f.assignedTo === 'boss'),
+    fieldValues:     Array.isArray(fieldValues) ? fieldValues : [],
+  }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('embedBossSignature timeout')), 25_000)
         ),

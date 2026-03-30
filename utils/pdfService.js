@@ -165,10 +165,15 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
     const page                      = pages[pageIndex];
     const { width: pw, height: ph } = page.getSize();
 
-    const absX = (field.x      / 100) * pw;
-    const absW = (field.width  / 100) * pw;
-    const absH = (field.height / 100) * ph;
-    const absY = ph - ((field.y / 100) * ph) - absH;
+    // const absX = (field.x      / 100) * pw;
+    // const absW = (field.width  / 100) * pw;
+    // const absH = (field.height / 100) * ph;
+    // const absY = ph - ((field.y / 100) * ph) - absH;
+    // ✅ FIXED: PDF points directly use করো
+const absX = field.x;
+const absW = field.width;
+const absH = field.height;
+const absY = ph - field.y - field.height; // top-left → bottom-left flip
 
     try {
       switch (field.type) {
@@ -290,18 +295,39 @@ async function mergeSignaturesIntoPDF(pdfSource, fields = []) {
 // ═══════════════════════════════════════════════════════════════
 // EXPORT 2 — embedBossSignature
 // ═══════════════════════════════════════════════════════════════
-async function embedBossSignature(pdfSource, bossFields = []) {
-  const bytes  = await fetchPdfBytes(pdfSource);
+// ═══════════════════════════════════════════════════════════════
+// EXPORT 2 — embedBossSignature
+// ✅ FIXED: controller থেকে object আসে, সেটা handle করছে
+// ✅ FIXED: field coordinates PDF points এ আছে, percentage নয়
+// ═══════════════════════════════════════════════════════════════
+async function embedBossSignature({
+  fileUrl,
+  signatureDataUrl,
+  fields        = [],
+  fieldValues   = [],
+}) {
+  // ── PDF load ────────────────────────────────────────────
+  const bytes  = await fetchPdfBytes(fileUrl);
   const pdfDoc = await PDFDocument.load(bytes, {
     ignoreEncryption: true,
     updateMetadata:   false,
   });
 
-  const pages = pdfDoc.getPages();
+  const fontReg  = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const pages    = pdfDoc.getPages();
 
-  for (const field of bossFields) {
-    if (field.type !== 'signature') continue;
-    if (!field.value || !String(field.value).startsWith('data:image/')) continue;
+  // ── fieldValues map তৈরি করো ────────────────────────────
+  // fieldValues = [{ fieldId, type, value }]
+  const valueMap = {};
+  for (const fv of fieldValues) {
+    if (fv.fieldId) valueMap[fv.fieldId] = fv.value;
+  }
+
+  // ── Boss fields process করো ──────────────────────────────
+  for (const field of fields) {
+    // assignedTo boss field only
+    if (field.assignedTo && field.assignedTo !== 'boss') continue;
 
     const pageIndex = Math.max(0, (field.page || 1) - 1);
     if (pageIndex >= pages.length) continue;
@@ -309,26 +335,120 @@ async function embedBossSignature(pdfSource, bossFields = []) {
     const page                      = pages[pageIndex];
     const { width: pw, height: ph } = page.getSize();
 
-    const absX = (field.x      / 100) * pw;
-    const absW = (field.width  / 100) * pw;
-    const absH = (field.height / 100) * ph;
-    const absY = ph - ((field.y / 100) * ph) - absH;
+    // ✅ FIXED: PDF points → absolute coordinates
+    // field.x, field.y = points from top-left
+    // PDF coordinate system: bottom-left origin
+    // তাই Y flip করতে হবে
+    const absX = field.x;
+    const absW = field.width;
+    const absH = field.height;
+    const absY = ph - field.y - field.height; // ✅ top-left → bottom-left flip
+
+    // field এর value নির্ধারণ করো
+    let value = valueMap[field.id] || field.value || null;
+
+    // signature field এ signatureDataUrl use করো
+    if (field.type === 'signature' || field.type === 'initial') {
+      value = signatureDataUrl || value;
+    }
+
+    if (!value) continue;
 
     try {
-      const b64    = field.value.split(',')[1];
-      const imgBuf = Buffer.from(b64, 'base64');
-      const img    = await pdfDoc.embedPng(imgBuf);
-      const dims   = img.scaleToFit(absW - 4, absH - 4);
+      switch (field.type) {
 
-      page.drawImage(img, {
-        x:         absX + (absW - dims.width)  / 2,
-        y:         absY + (absH - dims.height) / 2,
-        width:     dims.width,
-        height:    dims.height,
-        blendMode: BlendMode.Multiply,
-      });
+        case 'signature':
+        case 'initial': {
+          const raw = String(value);
+          if (!raw.startsWith('data:image/')) break;
+
+          const b64Parts = raw.split(',');
+          if (b64Parts.length < 2) break;
+
+          const imgBytes = Buffer.from(b64Parts[1], 'base64');
+          let img;
+          try {
+            img = raw.includes('image/png')
+              ? await pdfDoc.embedPng(imgBytes)
+              : await pdfDoc.embedJpg(imgBytes);
+          } catch {
+            try { img = await pdfDoc.embedPng(imgBytes); }
+            catch { break; }
+          }
+
+          const dims = img.scaleToFit(absW - 4, absH - 4);
+          page.drawImage(img, {
+            x:         absX + (absW - dims.width)  / 2,
+            y:         absY + (absH - dims.height) / 2,
+            width:     dims.width,
+            height:    dims.height,
+            blendMode: BlendMode.Multiply,
+          });
+          break;
+        }
+
+        case 'text':
+        case 'number': {
+          const isBold   = field.fontWeight === 'bold';
+          const font     = isBold ? fontBold : fontReg;
+          const fontSize = Math.min(
+            field.fontSize || 12,
+            Math.max(8, absH * 0.6),
+          );
+          let text = stripEmoji(String(value));
+          while (
+            text.length > 1 &&
+            font.widthOfTextAtSize(text, fontSize) > absW - 8
+          ) text = text.slice(0, -1);
+
+          page.drawText(text, {
+            x:        absX + 4,
+            y:        absY + (absH - fontSize) / 2 + 2,
+            size:     fontSize,
+            font,
+            color:    rgb(0.1, 0.1, 0.1),
+            maxWidth: absW - 8,
+          });
+          break;
+        }
+
+        case 'date': {
+          const fontSize = Math.min(12, Math.max(8, absH * 0.45));
+          page.drawText(stripEmoji(String(value)), {
+            x:     absX + 4,
+            y:     absY + (absH - fontSize) / 2 + 2,
+            size:  fontSize,
+            font:  fontReg,
+            color: rgb(0.1, 0.1, 0.1),
+          });
+          break;
+        }
+
+        case 'checkbox': {
+          const val = String(value).toLowerCase();
+          if (val !== 'true' && val !== 'checked') break;
+          const cx = absX + absW / 2;
+          const cy = absY + absH / 2;
+          const s  = Math.min(absW, absH) * 0.35;
+          page.drawLine({
+            start:     { x: cx - s,       y: cy },
+            end:       { x: cx - s * 0.2, y: cy - s * 0.65 },
+            thickness: 2,
+            color:     rgb(0.05, 0.55, 0.2),
+          });
+          page.drawLine({
+            start:     { x: cx - s * 0.2, y: cy - s * 0.65 },
+            end:       { x: cx + s,       y: cy + s * 0.55 },
+            thickness: 2,
+            color:     rgb(0.05, 0.55, 0.2),
+          });
+          break;
+        }
+
+        default: break;
+      }
     } catch (e) {
-      console.error('[pdfService] Boss signature embed error:', e.message);
+      console.error(`[embedBossSignature] Field "${field.id}" error:`, e.message);
     }
   }
 
