@@ -878,8 +878,20 @@ const FRONT = () =>
 
 // ── Safe audit log ────────────────────────────────
 async function safeAuditLog(payload) {
-  try { await AuditLog.create(payload); }
-  catch (e) { console.error('[AuditLog]', e.message); }
+  try {
+    await AuditLog.create({
+      document_id:        payload.document_id    || null,
+      document_title:     payload.document_title || null,
+      is_template_action: true,
+      action:             payload.action,
+      performed_by:       payload.performed_by   || {},
+      device:             payload.device         || {},
+      location:           payload.location       || {},
+      local_time:         payload.local_time     || null,
+    });
+  } catch (e) {
+    console.error('[AuditLog]', e.message);
+  }
 }
 
 // ── Safe emit socket ──────────────────────────────
@@ -1296,7 +1308,7 @@ const bossSign = asyncHandler(async (req, res) => {
       user_id: req.user._id,
       name:    req.user.full_name || req.user.name,
       email:   req.user.email,
-      role:    'owner',
+      role:    'boss',
     },
     device: {
       device_name: deviceInfo.device,
@@ -1684,6 +1696,7 @@ const employeeSign = asyncHandler(async (req, res) => {
       }
 
       // Audit log
+    
       safeAuditLog({
         action:         'employee_signed_template',
         document_id:    template._id,
@@ -1691,7 +1704,7 @@ const employeeSign = asyncHandler(async (req, res) => {
         performed_by: {
           name:  session.recipientName,
           email: session.recipientEmail,
-          role:  'signer',
+          role:  'employee',
         },
         device: {
           device_name: deviceInfo.device,

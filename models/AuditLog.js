@@ -167,12 +167,12 @@ const ccInfoSchema = new mongoose.Schema(
 const auditLogSchema = new mongoose.Schema(
   {
     // ── Document Reference ──────────────────────────────
-    document_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Document',
-      required: true,
-      index: true,
-    },
+  document_id: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'Document',
+  default: null,
+  index: true,
+},
     document_title: {
       type: String,
       maxlength: 200,
@@ -241,6 +241,8 @@ const auditLogSchema = new mongoose.Schema(
         // CC actions
         'cc_notified',
         'cc_final_sent',
+         'boss_signed_template',
+        'employee_signed_template',
       ],
       required: true,
       index: true,
