@@ -214,29 +214,27 @@ exports.googleAuth = async (req, res) => {
     const {
       name,
       email,
-      googleId,  // optional
-      avatar,
-      photoURL,  // frontend photoURL ও accept করবে
+      photoURL,
+      googleId,
     } = req.body;
 
-    // ✅ শুধু email required — googleId optional
+    // ✅ শুধু email required
     if (!email?.trim()) {
       return res.status(400).json({
         success: false,
         code:    'VALIDATION_ERROR',
-        message: 'Email is required for Google authentication.',
+        message: 'Email is required.',
       });
     }
 
     const cleanEmail        = email.toLowerCase().trim();
     const { ip, userAgent } = getRequestMeta(req);
-    const userAvatar        = avatar || photoURL || null;
+    const userAvatar        = photoURL || null;
 
-    // ── Find or create ─────────────────────────────────────
     let user = await User.findOne({ email: cleanEmail });
 
     if (!user) {
-      // ✅ New Google user — password ছাড়াই create
+      // ✅ New user — password ছাড়াই create
       const createData = {
         full_name:         name?.trim() ||
                            cleanEmail.split('@')[0] ||
@@ -247,14 +245,13 @@ exports.googleAuth = async (req, res) => {
         is_active:         true,
       };
 
-      // Optional fields
-      if (googleId)   createData.googleId = googleId;
-      if (userAvatar) createData.avatar   = userAvatar;
+      if (googleId)    createData.googleId = googleId;
+      if (userAvatar)  createData.avatar   = userAvatar;
 
       user = await User.create(createData);
 
     } else {
-      // ✅ Existing user — update info
+      // ✅ Existing user — update
       let changed = false;
 
       if (googleId && !user.googleId) {
@@ -269,20 +266,17 @@ exports.googleAuth = async (req, res) => {
         user.is_email_verified = true;
         changed = true;
       }
-
       if (changed) await user.save();
     }
 
-    // ── Account check ───────────────────────────────────────
     if (user.is_active === false) {
       return res.status(403).json({
         success: false,
         code:    'ACCOUNT_DISABLED',
-        message: 'Your account has been disabled. Contact support.',
+        message: 'Account disabled. Contact support.',
       });
     }
 
-    // ── Update last login ───────────────────────────────────
     user.last_login        = new Date();
     user.last_login_ip     = ip;
     user.last_login_device = userAgent.substring(0, 200);
@@ -298,15 +292,15 @@ exports.googleAuth = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('[authController] Google auth error:', err.message);
+    console.error('[googleAuth] Error:', err.message);
 
     // ✅ Duplicate key → still login
     if (err.code === 11000) {
       try {
         const cleanEmail = req.body.email?.toLowerCase().trim();
-        const user       = await User.findOne({ email: cleanEmail });
+        const user = await User.findOne({ email: cleanEmail });
 
-        if (user?.is_active !== false) {
+        if (user && user.is_active !== false) {
           user.last_login = new Date();
           await user.save();
           const token = generateToken(user);
@@ -317,21 +311,15 @@ exports.googleAuth = async (req, res) => {
             user:    userResponse(user),
           });
         }
-      } catch (innerErr) {
-        console.error('Duplicate recovery failed:', innerErr.message);
+      } catch (e) {
+        console.error('Recovery failed:', e.message);
       }
-
-      return res.status(409).json({
-        success: false,
-        code:    'EMAIL_EXISTS',
-        message: 'This email is already registered.',
-      });
     }
 
     return res.status(500).json({
       success: false,
       code:    'SERVER_ERROR',
-      message: 'Google authentication failed. Please try again.',
+      message: 'Google authentication failed.',
     });
   }
 };
