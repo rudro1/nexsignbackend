@@ -12,44 +12,20 @@
   "routes": [
     {
       "src": "/socket.io(.*)",
-      "dest": "index.js",
-      "headers": {
-        "Access-Control-Allow-Origin": "https://nexsignfrontend.vercel.app",
-        "Access-Control-Allow-Credentials": "true",
-        "Cache-Control": "no-store"
-      }
+      "dest": "index.js"
     },
     {
-      "src": "/api/documents/sign/(.*)/pdf",
-      "dest": "index.js",
-      "headers": {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization",
-        "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400"
-      }
-    },
-    {
-      "src": "/api/health",
-      "dest": "index.js",
-      "headers": {
-        "Cache-Control": "no-store"
-      }
-    },
-    {
-      "src": "/api/(.*)",
+      "src": "/(.*)",
       "dest": "index.js",
       "headers": {
         "Access-Control-Allow-Origin": "https://nexsignfrontend.vercel.app",
         "Access-Control-Allow-Credentials": "true",
         "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization",
+        "Access-Control-Allow-Headers": "X-CSRF-Token, X-Requested-With, Accept, Content-Type, Authorization",
+        "Cross-Origin-Opener-Policy": "unsafe-none",
+        "Cross-Origin-Embedder-Policy": "unsafe-none",
         "Cache-Control": "no-store, no-cache, must-revalidate"
       }
-    },
-    {
-      "src": "/(.*)",
-      "dest": "index.js"
     }
   ],
   "functions": {
