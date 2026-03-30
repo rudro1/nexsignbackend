@@ -29,7 +29,7 @@ const isAllowedOrigin = (origin) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
-// CORS — সবার আগে
+// CORS
 // ═══════════════════════════════════════════════════════════════
 const corsOptions = {
   origin: (origin, callback) => {
@@ -40,56 +40,55 @@ const corsOptions = {
       callback(new Error(`CORS blocked: ${origin}`));
     }
   },
-  credentials: true,
-  methods:     ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  credentials:    true,
+  methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: [
     'Content-Type', 'Authorization',
     'X-Requested-With', 'Accept',
     'X-CSRF-Token', 'X-Api-Version',
   ],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
-  maxAge: 86400,
+  maxAge:         86400,
 };
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 // ═══════════════════════════════════════════════════════════════
-// SECURITY HEADERS — সব override করো
+// SECURITY HEADERS
 // ═══════════════════════════════════════════════════════════════
-// ✅ Helmet আগে
 app.use(
   helmet({
-    crossOriginResourcePolicy:  { policy: 'cross-origin' },
-    contentSecurityPolicy:      false,
-    crossOriginEmbedderPolicy:  false,
-    crossOriginOpenerPolicy:    false, // helmet এর COOP বন্ধ
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    contentSecurityPolicy:     false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy:   false,
   }),
 );
 
-// ✅ তারপর manual override — এটা সবার পরে চলবে
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
-  // CORS headers
   if (isAllowedOrigin(origin)) {
-    res.setHeader('Access-Control-Allow-Origin',
-      origin || 'https://nexsignfrontend.vercel.app');
+    res.setHeader(
+      'Access-Control-Allow-Origin',
+      origin || 'https://nexsignfrontend.vercel.app',
+    );
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods',
-      'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers',
-      'Content-Type,Authorization,X-Requested-With,Accept,X-CSRF-Token');
+    res.setHeader(
+      'Access-Control-Allow-Methods',
+      'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+    );
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type,Authorization,X-Requested-With,Accept,X-CSRF-Token',
+    );
   }
 
-  // ✅ COOP fix — Firebase popup এর জন্য
   res.setHeader('Cross-Origin-Opener-Policy',   'unsafe-none');
   res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
 
-  // OPTIONS preflight — সাথে সাথে 200 দাও
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   next();
 });
@@ -101,7 +100,7 @@ app.use(express.json({       limit: '15mb' }));
 app.use(express.urlencoded({ limit: '15mb', extended: true }));
 
 // ═══════════════════════════════════════════════════════════════
-// SOCKET.IO dummy
+// SOCKET.IO dummy (Vercel serverless)
 // ═══════════════════════════════════════════════════════════════
 app.set('io', null);
 app.all('/socket.io*', (_req, res) => {
@@ -109,7 +108,7 @@ app.all('/socket.io*', (_req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// MONGODB
+// MONGODB — singleton connection
 // ═══════════════════════════════════════════════════════════════
 let isConnecting = false;
 
@@ -119,9 +118,8 @@ async function connectDB() {
     await new Promise(r => setTimeout(r, 500));
     return;
   }
-  if (!process.env.MONGO_URI) {
-    throw new Error('MONGO_URI is missing!');
-  }
+  if (!process.env.MONGO_URI) throw new Error('MONGO_URI is missing!');
+
   isConnecting = true;
   try {
     await mongoose.connect(process.env.MONGO_URI, {
@@ -167,6 +165,7 @@ app.get('/api/health', (_req, res) => {
 // ═══════════════════════════════════════════════════════════════
 app.use('/api/auth',      require('./routes/authRoutes'));
 app.use('/api/documents', require('./routes/documentRoutes'));
+app.use('/api/templates', require('./routes/templateRoutes')); // ✅ NEW
 app.use('/api/admin',     require('./routes/adminRoutes'));
 app.use('/api/feedback',  require('./routes/feedbackRoutes'));
 
@@ -189,7 +188,8 @@ app.use((err, req, res, _next) => {
 
   if (err.message?.startsWith('CORS blocked')) {
     return res.status(403).json({
-      success: false, message: err.message,
+      success: false,
+      message: err.message,
     });
   }
 
@@ -200,7 +200,7 @@ app.use((err, req, res, _next) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// LOCAL DEV
+// LOCAL DEV ONLY
 // ═══════════════════════════════════════════════════════════════
 if (process.env.NODE_ENV !== 'production') {
   const http       = require('http');
@@ -208,17 +208,17 @@ if (process.env.NODE_ENV !== 'production') {
   const server     = http.createServer(app);
 
   const io = new Server(server, {
-    cors: corsOptions,
+    cors:       corsOptions,
     transports: ['polling', 'websocket'],
   });
 
   app.set('io', io);
 
-  io.on('connection', (socket) => {
+  io.on('connection', socket => {
     console.log('🔌 Socket:', socket.id);
-    socket.on('join:document', (id) => socket.join(`doc:${id}`));
-    socket.on('join:owner',    (id) => socket.join(`owner:${id}`));
-    socket.on('disconnect',    ()   => console.log('🔌 Left:', socket.id));
+    socket.on('join:document', id => socket.join(`doc:${id}`));
+    socket.on('join:owner',    id => socket.join(`owner:${id}`));
+    socket.on('disconnect',    ()  => console.log('🔌 Left:', socket.id));
   });
 
   const PORT = process.env.PORT || 5000;
