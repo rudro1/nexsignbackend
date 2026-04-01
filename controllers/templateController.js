@@ -1285,1332 +1285,1984 @@
 //   resendEmail,
 //   getTemplatePdf,
 // };
+
+// 'use strict';
+
+// // ═══════════════════════════════════════════════════════════════
+// // templateController.js — NexSign Module 2 (One-to-Many)
+// //
+// // BUG FIXES:
+// // ✅ Bug 1: Employee fields now correctly embedded in PDF
+// //    - fieldsWithValues array preserves x/y/width/height as %
+// //    - pdfService.generateEmployeePdf receives correct % coords
+// // ✅ Bug 2: Boss redirect — after bossSign, response includes
+// //    redirectTo flag so frontend can show ThankYou page
+// // ✅ Bug 3: Field % coordinates preserved through all transformations
+// //    - field.toObject() called properly before spread
+// //    - coordinates not modified/lost during value merge
+// // ═══════════════════════════════════════════════════════════════
+
+// const mongoose        = require('mongoose');
+// const crypto          = require('crypto');
+// const { v2: cloudinary } = require('cloudinary');
+// const Template        = require('../models/Template');
+// const TemplateSession = require('../models/TemplateSession');
+// const User            = require('../models/User');
+// const AuditLog        = require('../models/AuditLog');
+
+// // ─── Safe imports ─────────────────────────────────────────────
+// let pdfService = null;
+// try {
+//   pdfService = require('../utils/pdfService');
+// } catch (e) {
+//   console.warn('[templateController] pdfService not found:', e.message);
+// }
+
+// let emailService = {};
+// try {
+//   emailService = require('../utils/emailService');
+// } catch (e) {
+//   console.warn('[templateController] emailService not found:', e.message);
+// }
+
+// const {
+//   sendBossApprovalEmail,
+//   sendEmployeeSigningEmail,
+//   sendCompletionEmail,
+//   sendCCEmail,
+//   sendDeclinedEmail,
+// } = emailService;
+
+// // ════════════════════════════════════════════════════════════════
+// // HELPERS
+// // ════════════════════════════════════════════════════════════════
+// const asyncHandler = fn => (req, res, next) =>
+//   Promise.resolve(fn(req, res, next)).catch(next);
+
+// const generateToken = () => crypto.randomBytes(32).toString('hex');
+
+// const getIP = req =>
+//   req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+//   req.headers['x-real-ip'] ||
+//   req.ip ||
+//   'Unknown';
+
+// function parseDevice(ua = '') {
+//   let device = 'Unknown', browser = 'Unknown',
+//       os = 'Unknown', deviceType = 'desktop';
+
+//   if      (/iPhone/.test(ua))   { device = 'iPhone';  os = 'iOS';     deviceType = 'mobile';  }
+//   else if (/iPad/.test(ua))     { device = 'iPad';    os = 'iPadOS';  deviceType = 'tablet';  }
+//   else if (/Android/.test(ua))  {
+//     device = ua.match(/Android[^;]*;\s*([^)]+)\)/)?.[1]?.trim() || 'Android';
+//     os     = `Android ${ua.match(/Android\s([\d.]+)/)?.[1] || ''}`.trim();
+//     deviceType = /Mobile/.test(ua) ? 'mobile' : 'tablet';
+//   }
+//   else if (/Windows/.test(ua))  { device = 'Windows PC'; os = 'Windows'; }
+//   else if (/Mac/.test(ua))      { device = 'Mac';         os = 'macOS';   }
+//   else if (/Linux/.test(ua))    { device = 'Linux PC';    os = 'Linux';   }
+
+//   if      (/Edg\//.test(ua))     browser = `Edge ${ua.match(/Edg\/([\d.]+)/)?.[1]       || ''}`.trim();
+//   else if (/OPR\//.test(ua))     browser = `Opera ${ua.match(/OPR\/([\d.]+)/)?.[1]      || ''}`.trim();
+//   else if (/Chrome\//.test(ua))  browser = `Chrome ${ua.match(/Chrome\/([\d.]+)/)?.[1]  || ''}`.trim();
+//   else if (/Firefox\//.test(ua)) browser = `Firefox ${ua.match(/Firefox\/([\d.]+)/)?.[1]|| ''}`.trim();
+//   else if (/Safari\//.test(ua))  browser = `Safari ${ua.match(/Version\/([\d.]+)/)?.[1] || ''}`.trim();
+
+//   return { device, browser, os, deviceType, isMobile: deviceType === 'mobile' };
+// }
+
+// async function getGeoInfo(ip) {
+//   try {
+//     const clean = (ip || '').replace('::ffff:', '').trim();
+//     if (!clean || clean === '127.0.0.1' || clean === '::1'
+//         || clean.startsWith('192.168.') || clean.startsWith('10.')) {
+//       return {
+//         city: 'Local', country: 'Dev',
+//         postalCode: '0000', timezone: 'UTC',
+//         region: '', display: 'Local Dev',
+//         latitude: '', longitude: '',
+//       };
+//     }
+
+//     // Primary: ipapi.co
+//     try {
+//       const ctrl = new AbortController();
+//       const tid  = setTimeout(() => ctrl.abort(), 4000);
+//       const res  = await fetch(`https://ipapi.co/${clean}/json/`, {
+//         signal: ctrl.signal,
+//         headers: { 'User-Agent': 'nexsign/1.0' },
+//       });
+//       clearTimeout(tid);
+//       if (res.ok) {
+//         const d = await res.json();
+//         if (!d.error) return {
+//           city:       d.city         || '',
+//           country:    d.country_name || '',
+//           postalCode: d.postal       || '',
+//           region:     d.region       || '',
+//           timezone:   d.timezone     || 'UTC',
+//           latitude:   String(d.latitude  || ''),
+//           longitude:  String(d.longitude || ''),
+//           display:    [d.city, d.country_name].filter(Boolean).join(', '),
+//         };
+//       }
+//     } catch {}
+
+//     // Fallback: ip-api.com
+//     try {
+//       const ctrl2 = new AbortController();
+//       const tid2  = setTimeout(() => ctrl2.abort(), 4000);
+//       const res2  = await fetch(
+//         `http://ip-api.com/json/${clean}?fields=status,city,regionName,country,zip,timezone,lat,lon`,
+//         { signal: ctrl2.signal },
+//       );
+//       clearTimeout(tid2);
+//       if (res2.ok) {
+//         const d2 = await res2.json();
+//         if (d2.status === 'success') return {
+//           city:       d2.city       || '',
+//           country:    d2.country    || '',
+//           postalCode: d2.zip        || '',
+//           region:     d2.regionName || '',
+//           timezone:   d2.timezone   || 'UTC',
+//           latitude:   String(d2.lat || ''),
+//           longitude:  String(d2.lon || ''),
+//           display:    [d2.city, d2.country].filter(Boolean).join(', '),
+//         };
+//       }
+//     } catch {}
+
+//     return {};
+//   } catch {
+//     return {};
+//   }
+// }
+
+// const FRONT = () =>
+//   (process.env.FRONTEND_URL || 'https://nexsignfrontend.vercel.app')
+//     .replace(/\/$/, '');
+
+// async function safeAuditLog(payload) {
+//   try {
+//     await AuditLog.create({
+//       document_id:        payload.document_id    || null,
+//       document_title:     payload.document_title || null,
+//       is_template_action: true,
+//       action:             payload.action,
+//       performed_by:       payload.performed_by   || {},
+//       device:             payload.device         || {},
+//       location:           payload.location       || {},
+//       local_time:         payload.local_time     || null,
+//     });
+//   } catch (e) {
+//     console.error('[AuditLog]', e.message);
+//   }
+// }
+
+// function emitSocket(req, event, data) {
+//   try {
+//     const io = req.app.get('io');
+//     if (io) io.emit(event, data);
+//   } catch {}
+// }
+
+// async function uploadSignaturePng(base64DataUrl, folder = 'nexsign/signatures') {
+//   return new Promise((resolve, reject) => {
+//     const stream = cloudinary.uploader.upload_stream(
+//       { resource_type: 'image', folder },
+//       (err, result) => err ? reject(err) : resolve(result),
+//     );
+//     const base64 = base64DataUrl.replace(/^data:image\/\w+;base64,/, '');
+//     stream.end(Buffer.from(base64, 'base64'));
+//   });
+// }
+
+// // ════════════════════════════════════════════════════════════════
+// // 1. CREATE TEMPLATE
+// // ════════════════════════════════════════════════════════════════
+// const createTemplate = asyncHandler(async (req, res) => {
+//   const {
+//     title, description,
+//     fileUrl, filePublicId, fileName, fileSize,
+//     fields,
+//     recipients, ccList,
+//     boss,
+//     signingConfig, totalPages,
+//     companyName, companyLogo, message,
+//   } = req.body;
+
+//   if (!title?.trim())
+//     return res.status(400).json({ success: false, message: 'Title is required.' });
+//   if (!fileUrl)
+//     return res.status(400).json({ success: false, message: 'PDF file is required.' });
+
+//   const parsedRecipients = Array.isArray(recipients) ? recipients : [];
+//   if (!parsedRecipients.length)
+//     return res.status(400).json({ success: false, message: 'At least one recipient is required.' });
+
+//   const emails = parsedRecipients.map(r => r.email?.toLowerCase().trim());
+//   if (new Set(emails).size !== emails.length)
+//     return res.status(400).json({ success: false, message: 'Duplicate recipient emails found.' });
+
+//   const parsedFields = Array.isArray(fields)  ? fields  : [];
+//   const parsedCC     = Array.isArray(ccList)   ? ccList   : [];
+//   const parsedConfig = signingConfig || {};
+//   const bossSignsFirst = parsedConfig.bossSignsFirst !== false;
+
+//   // ── Boss email from body or authenticated user ────────────
+//   const bossEmail       = boss?.email       || req.user.email;
+//   const bossName        = boss?.name        || req.user.full_name;
+//   const bossDesignation = boss?.designation || req.user.designation || '';
+
+//   const template = await Template.create({
+//     title:        title.trim(),
+//     description:  description || '',
+//     owner:        req.user._id,
+//     fileUrl,
+//     filePublicId: filePublicId || '',
+//     fileName:     fileName     || '',
+//     fileSize:     fileSize     || 0,
+//     fields:       parsedFields,
+//     recipients:   parsedRecipients,
+//     ccList:       parsedCC,
+//     companyName:  companyName  || '',
+//     companyLogo:  companyLogo  || '',
+//     message:      message      || '',
+//     signingConfig: {
+//       bossSignsFirst,
+//       expiryDays:   parsedConfig.expiryDays   || 30,
+//       allowDecline: parsedConfig.allowDecline !== false,
+//       reminderDays: parsedConfig.reminderDays || 3,
+//       emailSubject: parsedConfig.emailSubject || '',
+//       emailMessage: parsedConfig.emailMessage || '',
+//     },
+//     totalPages: Number(totalPages) || 1,
+//     status:     bossSignsFirst ? 'boss_pending' : 'active',
+//     stats: {
+//       totalRecipients: parsedRecipients.length,
+//       pending:         parsedRecipients.length,
+//       signed:          0, declined: 0, viewed: 0,
+//     },
+//   });
+
+//   // Send boss approval email
+//   if (bossSignsFirst) {
+//     try {
+//       await sendBossApprovalEmail?.({
+//         bossEmail,
+//         bossName,
+//         bossDesignation,
+//         documentTitle:  template.title,
+//         signingLink:    `${FRONT()}/templates/${template._id}`,
+//         employeeCount:  parsedRecipients.length,
+//         senderName:     req.user.full_name || 'Boss',
+//         companyName:    template.companyName || '',
+//         companyLogoUrl: template.companyLogo || '',
+//         message:        template.message || '',
+//       });
+//     } catch (e) {
+//       console.error('[createTemplate] Boss email failed:', e.message);
+//     }
+//   }
+
+//   return res.status(201).json({
+//     success:  true,
+//     message:  'Template created successfully.',
+//     template: template.toJSON(),
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 2. GET ALL TEMPLATES
+// // ════════════════════════════════════════════════════════════════
+// const getTemplates = asyncHandler(async (req, res) => {
+//   const { status, page = 1, limit = 10, search } = req.query;
+
+//   const filter = { owner: req.user._id, isDeleted: false };
+//   if (status && status !== 'all') filter.status = status;
+//   if (search) filter.title = { $regex: search.trim(), $options: 'i' };
+
+//   const pageNum  = Math.max(1, Number(page));
+//   const limitNum = Math.min(50, Math.max(1, Number(limit)));
+//   const skip     = (pageNum - 1) * limitNum;
+
+//   const [templates, total] = await Promise.all([
+//     Template.find(filter)
+//       .sort({ createdAt: -1 })
+//       .skip(skip)
+//       .limit(limitNum)
+//       .select('-fields -recipients')
+//       .lean({ virtuals: true }),
+//     Template.countDocuments(filter),
+//   ]);
+
+//   return res.json({
+//     success: true,
+//     templates,
+//     pagination: {
+//       total,
+//       page:       pageNum,
+//       limit:      limitNum,
+//       totalPages: Math.ceil(total / limitNum),
+//       hasMore:    pageNum * limitNum < total,
+//     },
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 3. GET SINGLE TEMPLATE
+// // ════════════════════════════════════════════════════════════════
+// const getTemplate = asyncHandler(async (req, res) => {
+//   const template = await Template.findOne({
+//     _id:       req.params.id,
+//     isDeleted: false,
+//   })
+//     .populate('owner', 'full_name email avatar')
+//     .lean({ virtuals: true });
+
+//   if (!template)
+//     return res.status(404).json({ success: false, message: 'Template not found.' });
+
+//   const isOwner = template.owner._id.toString() === req.user._id.toString();
+//   const isAdmin = ['admin', 'super_admin'].includes(req.user.role);
+//   if (!isOwner && !isAdmin)
+//     return res.status(403).json({ success: false, message: 'Access denied.' });
+
+//   const sessionStats = await TemplateSession.getTemplateStats(template._id);
+
+//   return res.json({
+//     success:  true,
+//     template: { ...template, sessionStats },
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 4. UPDATE TEMPLATE
+// // ════════════════════════════════════════════════════════════════
+// const updateTemplate = asyncHandler(async (req, res) => {
+//   const template = await Template.findOne({
+//     _id:       req.params.id,
+//     owner:     req.user._id,
+//     isDeleted: false,
+//   });
+
+//   if (!template)
+//     return res.status(404).json({ success: false, message: 'Template not found.' });
+
+//   if (!['draft', 'boss_pending'].includes(template.status))
+//     return res.status(400).json({
+//       success: false,
+//       message: 'Cannot edit an active or completed template.',
+//     });
+
+//   const ALLOWED = [
+//     'title', 'description', 'fields',
+//     'recipients', 'ccList', 'signingConfig',
+//     'totalPages', 'companyName', 'companyLogo', 'message',
+//   ];
+
+//   ALLOWED.forEach(key => {
+//     if (req.body[key] !== undefined) template[key] = req.body[key];
+//   });
+
+//   await template.save();
+
+//   return res.json({
+//     success:  true,
+//     message:  'Template updated.',
+//     template: template.toJSON(),
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 5. DELETE TEMPLATE
+// // ════════════════════════════════════════════════════════════════
+// const deleteTemplate = asyncHandler(async (req, res) => {
+//   const template = await Template.findOne({
+//     _id:       req.params.id,
+//     owner:     req.user._id,
+//     isDeleted: false,
+//   });
+
+//   if (!template)
+//     return res.status(404).json({ success: false, message: 'Template not found.' });
+
+//   if (template.status === 'active')
+//     return res.status(400).json({
+//       success: false,
+//       message: 'Cannot delete an active template. Archive it first.',
+//     });
+
+//   await template.softDelete();
+
+//   return res.json({ success: true, message: 'Template deleted.' });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 6. BOSS SIGN
+// // ✅ BUG 2 FIX: Returns redirectTo: 'thank_you' so frontend
+// //    can redirect boss to a thank you page instead of looping
+// // ════════════════════════════════════════════════════════════════
+// const bossSign = asyncHandler(async (req, res) => {
+//   const { signatureDataUrl, fieldValues } = req.body;
+
+//   if (!signatureDataUrl)
+//     return res.status(400).json({ success: false, message: 'Signature is required.' });
+
+//   const template = await Template.findOne({
+//     _id:       req.params.id,
+//     owner:     req.user._id,
+//     isDeleted: false,
+//   });
+
+//   if (!template)
+//     return res.status(404).json({ success: false, message: 'Template not found.' });
+
+//   if (!['boss_pending', 'draft'].includes(template.status))
+//     return res.status(400).json({
+//       success: false,
+//       message: 'Template is not awaiting boss signature.',
+//     });
+
+//   const ip         = getIP(req);
+//   const ua         = req.headers['user-agent'] || '';
+//   const geo        = await getGeoInfo(ip);
+//   const deviceInfo = parseDevice(ua);
+
+//   // ── Step 1: Upload boss signature PNG to Cloudinary ────────
+//   let signatureImageUrl      = null;
+//   let signatureImagePublicId = '';
+//   try {
+//     const uploaded        = await uploadSignaturePng(
+//       signatureDataUrl,
+//       'nexsign/boss-signatures',
+//     );
+//     signatureImageUrl      = uploaded.secure_url;
+//     signatureImagePublicId = uploaded.public_id;
+//   } catch (e) {
+//     console.error('[bossSign] Signature upload failed:', e.message);
+//     // Continue with null — embed from dataUrl directly
+//   }
+
+//   // ── Step 2: Embed boss signature into PDF ──────────────────
+//   let bossSignedFileUrl = template.fileUrl;
+//   if (pdfService?.embedBossSignature) {
+//     try {
+//       // ✅ BUG 3 FIX: Pass fields as plain objects (not Mongoose docs)
+//       // This preserves x/y/width/height percentage values exactly
+//       const bossFields = (template.fields || [])
+//         .filter(f => f.assignedTo === 'boss')
+//         .map(f => {
+//           // Convert Mongoose subdoc to plain object
+//           const plain = f.toObject ? f.toObject() : { ...f };
+//           return plain;
+//         });
+
+//       const mergedBytes = await Promise.race([
+//         pdfService.embedBossSignature({
+//           fileUrl:          template.fileUrl,
+//           signatureDataUrl,  // original base64 for embedding
+//           fields:           bossFields,
+//           fieldValues:      Array.isArray(fieldValues) ? fieldValues : [],
+//         }),
+//         new Promise((_, reject) =>
+//           setTimeout(() => reject(new Error('embedBossSignature timeout')), 25_000)
+//         ),
+//       ]);
+
+//       const pdfResult = await new Promise((resolve, reject) => {
+//         const stream = cloudinary.uploader.upload_stream(
+//           {
+//             resource_type: 'raw',
+//             folder:        'nexsign/boss-signed',
+//             public_id:     `boss_signed_${template._id}_${Date.now()}`,
+//             format:        'pdf',
+//           },
+//           (err, result) => err ? reject(err) : resolve(result),
+//         );
+//         stream.end(Buffer.from(mergedBytes));
+//       });
+
+//       bossSignedFileUrl             = pdfResult.secure_url;
+//       template.bossSignedFileUrl    = bossSignedFileUrl;
+//       template.bossSignedFilePublicId = pdfResult.public_id;
+
+//     } catch (e) {
+//       console.error('[bossSign] PDF embed failed, using original:', e.message);
+//       template.bossSignedFileUrl = template.fileUrl;
+//       bossSignedFileUrl          = template.fileUrl;
+//     }
+//   } else {
+//     template.bossSignedFileUrl = template.fileUrl;
+//     bossSignedFileUrl          = template.fileUrl;
+//   }
+
+//   // ── Step 3: Update template ────────────────────────────────
+//   template.bossSignature = {
+//     signatureImageUrl,
+//     signedAt:   new Date(),
+//     ipAddress:  ip,
+//     city:       geo.city    || '',
+//     country:    geo.country || '',
+//     device:     deviceInfo.device,
+//     browser:    deviceInfo.browser,
+//     os:         deviceInfo.os,
+//   };
+//   template.status  = 'active';
+//   template.sentAt  = new Date();
+//   await template.save();
+
+//   // ── Step 4: Create sessions for all recipients ─────────────
+//   const expiryDays = template.signingConfig?.expiryDays || 30;
+//   const expiresAt  = new Date(Date.now() + expiryDays * 86_400_000);
+
+//   const sessionDocs = template.recipients.map(r => ({
+//     template:             template._id,
+//     recipientName:        r.name,
+//     recipientEmail:       r.email,
+//     recipientDesignation: r.designation || '',
+//     token:                generateToken(),
+//     status:               'pending',
+//     expiresAt,
+//     sentAt:               new Date(),
+//     auditLog: [{
+//       action:    'link_sent',
+//       timestamp: new Date(),
+//       note:      `Sent by ${req.user.full_name || req.user.email}`,
+//     }],
+//   }));
+
+//   const sessions = await TemplateSession.insertMany(sessionDocs);
+
+//   // ── Step 5: Send emails to employees ──────────────────────
+//   const emailResults = await Promise.allSettled(
+//     sessions.map(session =>
+//       sendEmployeeSigningEmail?.({
+//         employeeEmail:   session.recipientEmail,
+//         employeeName:    session.recipientName,
+//         documentTitle:   template.title,
+//         signingLink:     `${FRONT()}/template-sign/${session.token}`,
+//         bossName:        req.user.full_name || req.user.name || 'Your Manager',
+//         bossDesignation: req.user.designation || '',
+//         companyName:     template.companyName || '',
+//         companyLogoUrl:  template.companyLogo || '',
+//       })
+//     )
+//   );
+
+//   const emailsSent   = emailResults.filter(r => r.status === 'fulfilled').length;
+//   const emailsFailed = emailResults.filter(r => r.status === 'rejected').length;
+//   if (emailsFailed > 0) console.error(`[bossSign] ${emailsFailed} emails failed`);
+
+//   // ── Step 6: Send boss confirmation email ───────────────────
+//   try {
+//     // Optional: notify boss that signing is complete and emails sent
+//     // sendBossConfirmEmail(...)
+//   } catch {}
+
+//   // ── Step 7: Emit socket ────────────────────────────────────
+//   emitSocket(req, 'template:activated', {
+//     templateId:  String(template._id),
+//     ownerId:     String(req.user._id),
+//     title:       template.title,
+//     totalCount:  sessions.length,
+//     emailsSent,
+//   });
+
+//   // ── Step 8: Audit log ──────────────────────────────────────
+//   safeAuditLog({
+//     action:         'boss_signed_template',
+//     document_id:    template._id,
+//     document_title: template.title,
+//     performed_by: {
+//       user_id: req.user._id,
+//       name:    req.user.full_name || req.user.name,
+//       email:   req.user.email,
+//       role:    'boss',
+//     },
+//     device: {
+//       device_name: deviceInfo.device,
+//       browser:     deviceInfo.browser,
+//       os:          deviceInfo.os,
+//     },
+//     location: {
+//       ip_address: ip,
+//       city:       geo.city,
+//       country:    geo.country,
+//       display:    geo.display,
+//     },
+//   });
+
+//   // ✅ BUG 2 FIX: Include redirectTo so frontend navigates away
+//   // from the signing page to a ThankYou/success page
+//   return res.json({
+//     success:       true,
+//     message:       `Boss signed! ${emailsSent}/${sessions.length} emails sent.`,
+//     sessionsCount: sessions.length,
+//     emailsSent,
+//     template:      template.toJSON(),
+//     // ✅ Frontend reads this and redirects to /templates/:id instead
+//     // of staying on the boss sign page (which would trigger re-sign loop)
+//     redirectTo:    'template_detail',
+//     redirectUrl:   `/templates/${template._id}`,
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 7. GET SESSIONS
+// // ════════════════════════════════════════════════════════════════
+// const getTemplateSessions = asyncHandler(async (req, res) => {
+//   const template = await Template.findOne({
+//     _id:       req.params.id,
+//     owner:     req.user._id,
+//     isDeleted: false,
+//   });
+
+//   if (!template)
+//     return res.status(404).json({ success: false, message: 'Template not found.' });
+
+//   const { status, page = 1, limit = 50, search } = req.query;
+
+//   const filter = {
+//     template:  template._id,
+//     isDeleted: { $ne: true },
+//   };
+//   if (status && status !== 'all') filter.status = status;
+//   if (search) {
+//     filter.$or = [
+//       { recipientName:  { $regex: search.trim(), $options: 'i' } },
+//       { recipientEmail: { $regex: search.trim(), $options: 'i' } },
+//     ];
+//   }
+
+//   const pageNum  = Math.max(1, Number(page));
+//   const limitNum = Math.min(100, Number(limit));
+//   const skip     = (pageNum - 1) * limitNum;
+
+//   const [sessions, total, stats] = await Promise.all([
+//     TemplateSession.find(filter)
+//       .sort({ createdAt: -1 })
+//       .skip(skip)
+//       .limit(limitNum)
+//       .select('-auditLog -fieldValues')
+//       .lean({ virtuals: true }),
+//     TemplateSession.countDocuments(filter),
+//     TemplateSession.getTemplateStats(template._id),
+//   ]);
+
+//   return res.json({
+//     success: true,
+//     sessions,
+//     stats,
+//     pagination: {
+//       total,
+//       page:       pageNum,
+//       limit:      limitNum,
+//       totalPages: Math.ceil(total / limitNum),
+//       hasMore:    pageNum * limitNum < total,
+//     },
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 8. VALIDATE SESSION TOKEN (public)
+// // ════════════════════════════════════════════════════════════════
+// const getSessionByToken = asyncHandler(async (req, res) => {
+//   const session = await TemplateSession.findByToken(req.params.token);
+
+//   if (!session)
+//     return res.status(404).json({
+//       success: false, code: 'INVALID_LINK',
+//       message: 'Invalid or expired signing link.',
+//     });
+
+//   if (new Date() > session.expiresAt) {
+//     if (!['expired', 'signed', 'declined'].includes(session.status)) {
+//       await session.markExpired();
+//     }
+//     return res.status(410).json({
+//       success: false, code: 'LINK_EXPIRED',
+//       message: 'This signing link has expired.',
+//     });
+//   }
+
+//   if (session.status === 'signed')
+//     return res.status(410).json({
+//       success: false, code: 'ALREADY_SIGNED',
+//       message: 'You have already signed this document.',
+//     });
+
+//   if (session.status === 'declined')
+//     return res.status(410).json({
+//       success: false, code: 'ALREADY_DECLINED',
+//       message: 'You have already declined this document.',
+//     });
+
+//   const ip         = getIP(req);
+//   const ua         = req.headers['user-agent'] || '';
+//   const geo        = await getGeoInfo(ip);
+//   const deviceInfo = parseDevice(ua);
+
+//   await session.markViewed({
+//     ipAddress:  ip,
+//     userAgent:  ua,
+//     location:   geo,
+//     deviceInfo,
+//     localTime:  new Date().toUTCString(),
+//   });
+
+//   const tmpl = session.template;
+//   const templateObj = typeof tmpl.toObject === 'function'
+//     ? tmpl.toObject({ virtuals: true })
+//     : { ...tmpl };
+
+//   // ✅ BUG 3 FIX: Return fields as plain objects with coordinates intact
+//   // Employee fields filter — only 'employee' assigned fields
+//   const employeeFields = (templateObj.fields || [])
+//     .filter(f => f.assignedTo === 'employee')
+//     .map(f => {
+//       // Ensure coordinates are numbers, not strings
+//       return {
+//         ...f,
+//         x:      Number(f.x      || 0),
+//         y:      Number(f.y      || 0),
+//         width:  Number(f.width  || 20),
+//         height: Number(f.height || 8),
+//         page:   Number(f.page   || 1),
+//       };
+//     });
+
+//   return res.json({
+//     success: true,
+//     session: {
+//       _id:                  String(session._id),
+//       recipientName:        session.recipientName,
+//       recipientEmail:       session.recipientEmail,
+//       recipientDesignation: session.recipientDesignation,
+//       status:               session.status,
+//       expiresAt:            session.expiresAt,
+//       viewedAt:             session.viewedAt,
+//     },
+//     template: {
+//       _id:          String(templateObj._id),
+//       title:        templateObj.title,
+//       description:  templateObj.description,
+//       companyName:  templateObj.companyName || '',
+//       companyLogo:  templateObj.companyLogo || '',
+//       message:      templateObj.message     || '',
+//       // ✅ Use boss-signed PDF — employees see boss signature already
+//       fileUrl:      templateObj.bossSignedFileUrl || templateObj.fileUrl,
+//       // ✅ Only employee fields with validated coordinates
+//       fields:       employeeFields,
+//       totalPages:   templateObj.totalPages   || 1,
+//       signingConfig: templateObj.signingConfig || {},
+//     },
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 9. EMPLOYEE SIGN (public)
+// // ✅ BUG 1 FIX: Fields properly built with % coordinates for PDF
+// // ✅ BUG 3 FIX: Coordinates preserved as numbers throughout
+// // ════════════════════════════════════════════════════════════════
+// const employeeSign = asyncHandler(async (req, res) => {
+//   const {
+//     signatureDataUrl, fieldValues,
+//     latitude, longitude, clientTime,
+//   } = req.body;
+
+//   const session = await TemplateSession.findByToken(req.params.token);
+
+//   if (!session)
+//     return res.status(404).json({
+//       success: false, code: 'INVALID_LINK',
+//       message: 'Invalid signing link.',
+//     });
+
+//   if (new Date() > session.expiresAt) {
+//     await session.markExpired();
+//     return res.status(410).json({
+//       success: false, code: 'LINK_EXPIRED',
+//       message: 'Signing link has expired.',
+//     });
+//   }
+
+//   if (session.status === 'signed')
+//     return res.status(409).json({
+//       success: false, code: 'ALREADY_SIGNED',
+//       message: 'Already signed.',
+//     });
+
+//   if (session.status === 'declined')
+//     return res.status(409).json({
+//       success: false, code: 'ALREADY_DECLINED',
+//       message: 'Already declined.',
+//     });
+
+//   const ip         = getIP(req);
+//   const ua         = req.headers['user-agent'] || '';
+//   const geo        = await getGeoInfo(ip);
+//   const deviceInfo = parseDevice(ua);
+//   const localTime  = clientTime || new Date().toUTCString();
+
+//   // ── Load template ──────────────────────────────────────────
+//   const template = await Template.findById(
+//     session.template._id || session.template
+//   );
+//   if (!template)
+//     return res.status(404).json({
+//       success: false,
+//       message: 'Template not found.',
+//     });
+
+//   // ── Employee fields (plain objects with % coordinates) ─────
+//   const employeeFields = (template.fields || [])
+//     .filter(f => f.assignedTo === 'employee')
+//     .map(f => {
+//       const plain = f.toObject ? f.toObject() : { ...f };
+//       return {
+//         ...plain,
+//         // ✅ Ensure coordinates are numbers for PDF service
+//         x:      Number(plain.x      || 0),
+//         y:      Number(plain.y      || 0),
+//         width:  Number(plain.width  || 20),
+//         height: Number(plain.height || 8),
+//         page:   Number(plain.page   || 1),
+//       };
+//     });
+
+//   // ── Required fields validation ─────────────────────────────
+//   const hasSignatureField = employeeFields.some(
+//     f => f.type === 'signature' || f.type === 'initial'
+//   );
+
+//   if (hasSignatureField && !signatureDataUrl) {
+//     return res.status(400).json({
+//       success: false,
+//       message: 'Signature is required.',
+//     });
+//   }
+
+//   const parsedFieldValues = Array.isArray(fieldValues) ? fieldValues : [];
+
+//   const missing = employeeFields.filter(f => {
+//     if (!f.required) return false;
+//     if (f.type === 'signature' || f.type === 'initial') {
+//       return !signatureDataUrl;
+//     }
+//     const fv = parsedFieldValues.find(v => v.fieldId === f.id);
+//     return !fv?.value;
+//   });
+
+//   if (missing.length > 0) {
+//     return res.status(400).json({
+//       success: false,
+//       message: `${missing.length} required field(s) incomplete.`,
+//       missingFields: missing.map(f => ({
+//         id: f.id, type: f.type, page: f.page,
+//       })),
+//     });
+//   }
+
+//   // ── Respond immediately (don't block user) ─────────────────
+//   res.json({
+//     success:  true,
+//     message:  'Document signed successfully! A copy will be emailed to you.',
+//     signedAt: new Date(),
+//   });
+
+//   // ════════════════════════════════════════════════════════════
+//   // BACKGROUND — PDF generation + emails
+//   // ════════════════════════════════════════════════════════════
+//   setImmediate(async () => {
+//     try {
+
+//       // ── Upload signature to Cloudinary ──────────────────────
+//       let signatureImageUrl      = null;
+//       let signatureImagePublicId = '';
+
+//       if (signatureDataUrl) {
+//         try {
+//           const uploaded        = await uploadSignaturePng(
+//             signatureDataUrl,
+//             'nexsign/employee-signatures',
+//           );
+//           signatureImageUrl      = uploaded.secure_url;
+//           signatureImagePublicId = uploaded.public_id;
+//         } catch (e) {
+//           console.error('[employeeSign] Signature upload failed:', e.message);
+//         }
+//       }
+
+//       // ── Mark session as signed ──────────────────────────────
+//       await session.markSigned({
+//         signatureImageUrl,
+//         signatureImagePublicId,
+//         fieldValues: parsedFieldValues,
+//         meta: {
+//           ipAddress:  ip,
+//           userAgent:  ua,
+//           location:   geo,
+//           deviceInfo,
+//           localTime,
+//         },
+//       });
+
+//       // ════════════════════════════════════════════════════════
+//       // ✅ BUG 1 FIX: Build fieldsWithValues correctly
+//       //
+//       // PROBLEM WAS: field spread was losing x/y/width/height
+//       // because Mongoose subdoc objects needed .toObject() first,
+//       // and the value merge was overwriting coordinate properties.
+//       //
+//       // SOLUTION: Convert each field to plain object FIRST,
+//       // then only set the 'value' property separately.
+//       // Coordinates (x, y, width, height) are NEVER touched.
+//       // ════════════════════════════════════════════════════════
+//       const fieldsWithValues = employeeFields.map(field => {
+//         // field is already a plain object from the map above
+//         // with validated numeric coordinates
+
+//         if (field.type === 'signature' || field.type === 'initial') {
+//           // ✅ Use original base64 dataUrl for PDF embedding
+//           // (Cloudinary URL won't work with pdf-lib embedPng)
+//           return {
+//             ...field,          // preserves x, y, width, height, page, type etc.
+//             value: signatureDataUrl || null,
+//           };
+//         }
+
+//         // Text/date/checkbox/number fields
+//         const fv = parsedFieldValues.find(v => v.fieldId === field.id);
+//         return {
+//           ...field,            // preserves all coordinates
+//           value: fv?.value || field.value || null,
+//         };
+//       });
+
+//       // ── Build sessionDoc for audit page ────────────────────
+//       let bossUser = null;
+//       try {
+//         bossUser = await User.findById(template.owner)
+//           .select('full_name email designation')
+//           .lean();
+//       } catch {}
+
+//       const sessionDoc = {
+//         _id:         template._id,
+//         title:       template.title,
+//         companyName: template.companyName || '',
+//         status:      'completed',
+//         completedAt: new Date(),
+//         ccList:      template.ccList || [],
+//         parties: [
+//           // Boss party
+//           {
+//             name:            bossUser?.full_name || 'Authoriser',
+//             email:           bossUser?.email     || '',
+//             designation:     bossUser?.designation || '',
+//             status:          'signed',
+//             signedAt:        template.bossSignature?.signedAt,
+//             ipAddress:       template.bossSignature?.ipAddress || '',
+//             city:            template.bossSignature?.city      || '',
+//             country:         template.bossSignature?.country   || '',
+//             device:          template.bossSignature?.device    || '',
+//             browser:         template.bossSignature?.browser   || '',
+//             os:              template.bossSignature?.os        || '',
+//             localSignedTime: template.bossSignature?.signedAt
+//                                ? new Date(template.bossSignature.signedAt).toUTCString()
+//                                : '',
+//           },
+//           // Employee party
+//           {
+//             name:            session.recipientName,
+//             email:           session.recipientEmail,
+//             designation:     session.recipientDesignation || '',
+//             status:          'signed',
+//             signedAt:        new Date(),
+//             ipAddress:       ip,
+//             city:            geo?.city     || '',
+//             country:         geo?.country  || '',
+//             region:          geo?.region   || '',
+//             postalCode:      geo?.postalCode || '',
+//             latitude:        geo?.latitude  || '',
+//             longitude:       geo?.longitude || '',
+//             timezone:        geo?.timezone  || '',
+//             device:          deviceInfo?.device  || '',
+//             browser:         deviceInfo?.browser || '',
+//             os:              deviceInfo?.os      || '',
+//             localSignedTime: localTime,
+//           },
+//         ],
+//       };
+
+//       // ── Generate PDF ────────────────────────────────────────
+//       let signedFileUrl = null;
+//       let pdfBuffer     = null;
+
+//       if (pdfService?.generateEmployeePdf) {
+//         try {
+//           // ✅ BUG 1 FIX: Pass fieldsWithValues which has:
+//           // - Correct % coordinates (x, y, width, height as 0-100 numbers)
+//           // - signature fields have base64 dataUrl as value
+//           // - text fields have string values
+//           // pdfService.generateEmployeePdf → mergeSignaturesIntoPDF →
+//           // renderField → fieldToAbsolute converts % → pts correctly
+//           console.log('[employeeSign] Generating PDF with fields:', 
+//             fieldsWithValues.map(f => ({
+//               id:     f.id,
+//               type:   f.type,
+//               page:   f.page,
+//               x:      f.x,
+//               y:      f.y,
+//               width:  f.width,
+//               height: f.height,
+//               hasValue: !!f.value,
+//             }))
+//           );
+
+//           const pdfBytes = await Promise.race([
+//             pdfService.generateEmployeePdf(
+//               template.bossSignedFileUrl || template.fileUrl,
+//               fieldsWithValues,
+//               sessionDoc,
+//             ),
+//             new Promise((_, reject) =>
+//               setTimeout(
+//                 () => reject(new Error('generateEmployeePdf timeout')),
+//                 25_000,
+//               )
+//             ),
+//           ]);
+
+//           pdfBuffer = Buffer.from(pdfBytes);
+
+//           const pdfResult = await new Promise((resolve, reject) => {
+//             const stream = cloudinary.uploader.upload_stream(
+//               {
+//                 resource_type: 'raw',
+//                 folder:        'nexsign/employee-signed',
+//                 public_id:     `employee_${session._id}_${Date.now()}`,
+//                 format:        'pdf',
+//               },
+//               (err, result) => err ? reject(err) : resolve(result),
+//             );
+//             stream.end(pdfBuffer);
+//           });
+
+//           signedFileUrl              = pdfResult.secure_url;
+//           session.signedFileUrl      = signedFileUrl;
+//           session.signedFilePublicId = pdfResult.public_id;
+//           await session.save();
+
+//         } catch (e) {
+//           console.error('[employeeSign] PDF generation failed:', e.message);
+//         }
+//       }
+
+//       // ── Update template stats ───────────────────────────────
+//       await template.recalculateStats();
+
+//       // ── Completion email to employee ────────────────────────
+//       try {
+//         await sendCompletionEmail?.({
+//           recipientEmail:       session.recipientEmail,
+//           recipientName:        session.recipientName,
+//           recipientDesignation: session.recipientDesignation || '',
+//           documentTitle:        template.title,
+//           pdfBuffer:            pdfBuffer || null,
+//           signedPdfUrl:         signedFileUrl || template.bossSignedFileUrl || '',
+//           companyName:          template.companyName || '',
+//           companyLogoUrl:       template.companyLogo || '',
+//           parties:              sessionDoc.parties,
+//         });
+//       } catch (e) {
+//         console.error('[employeeSign] Completion email failed:', e.message);
+//       }
+
+//       // ── If all signed → owner + CC emails ──────────────────
+//       const freshTemplate = await Template.findById(template._id);
+//       if (freshTemplate?.status === 'completed') {
+//         try {
+//           // Owner notification
+//           await sendCompletionEmail?.({
+//             recipientEmail:  bossUser?.email,
+//             recipientName:   bossUser?.full_name || 'Owner',
+//             documentTitle:   template.title,
+//             pdfBuffer:       null,
+//             signedPdfUrl:    signedFileUrl || '',
+//             companyName:     template.companyName || '',
+//             companyLogoUrl:  template.companyLogo || '',
+//             parties:         sessionDoc.parties,
+//           });
+
+//           // CC emails with PDF attachment
+//           await Promise.allSettled(
+//             (template.ccList || []).map(cc =>
+//               sendCompletionEmail?.({
+//                 recipientEmail:  cc.email,
+//                 recipientName:   cc.name  || cc.email,
+//                 documentTitle:   template.title,
+//                 pdfBuffer:       pdfBuffer || null,
+//                 signedPdfUrl:    signedFileUrl || '',
+//                 companyName:     template.companyName || '',
+//                 companyLogoUrl:  template.companyLogo || '',
+//                 isCC:            true,
+//                 parties:         sessionDoc.parties,
+//               })
+//             )
+//           );
+
+//         } catch (e) {
+//           console.error('[employeeSign] Owner/CC email failed:', e.message);
+//         }
+//       }
+
+//       // ── Audit log ───────────────────────────────────────────
+//       safeAuditLog({
+//         action:         'employee_signed_template',
+//         document_id:    template._id,
+//         document_title: template.title,
+//         performed_by: {
+//           name:  session.recipientName,
+//           email: session.recipientEmail,
+//           role:  'employee',
+//         },
+//         device: {
+//           device_name: deviceInfo.device,
+//           browser:     deviceInfo.browser,
+//           os:          deviceInfo.os,
+//         },
+//         location: {
+//           ip_address: ip,
+//           city:       geo?.city,
+//           country:    geo?.country,
+//           display:    geo?.display,
+//         },
+//         local_time: localTime,
+//       });
+
+//     } catch (err) {
+//       console.error('[employeeSign background]', err.message, err.stack);
+//     }
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 10. EMPLOYEE DECLINE (public)
+// // ════════════════════════════════════════════════════════════════
+// const employeeDecline = asyncHandler(async (req, res) => {
+//   const { reason = '' } = req.body;
+
+//   const session = await TemplateSession.findByToken(req.params.token);
+//   if (!session)
+//     return res.status(404).json({ success: false, message: 'Invalid signing link.' });
+
+//   if (['signed', 'declined', 'expired'].includes(session.status))
+//     return res.status(400).json({
+//       success: false,
+//       message: `This document is already ${session.status}.`,
+//     });
+
+//   const ip         = getIP(req);
+//   const ua         = req.headers['user-agent'] || '';
+//   const geo        = await getGeoInfo(ip);
+//   const deviceInfo = parseDevice(ua);
+
+//   await session.markDeclined(reason, {
+//     ipAddress: ip, userAgent: ua,
+//     location: geo, deviceInfo,
+//     localTime: new Date().toUTCString(),
+//   });
+
+//   const template = await Template.findById(
+//     session.template._id || session.template
+//   );
+//   if (template) {
+//     await template.recalculateStats();
+
+//     emitSocket({ app: { get: () => null } }, 'template:declined', {
+//       templateId:  String(template._id),
+//       ownerId:     String(template.owner),
+//       signerName:  session.recipientName,
+//       signerEmail: session.recipientEmail,
+//       reason,
+//     });
+
+//     try {
+//       const owner = await User.findById(template.owner);
+//       await sendDeclinedEmail?.({
+//         ownerEmail:  owner?.email,
+//         ownerName:   owner?.full_name || owner?.name,
+//         signerName:  session.recipientName,
+//         signerEmail: session.recipientEmail,
+//         title:       template.title,
+//         reason,
+//       });
+//     } catch (e) {
+//       console.error('[employeeDecline] Email failed:', e.message);
+//     }
+//   }
+
+//   return res.json({ success: true, message: 'Document declined.' });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 11. RESEND EMAIL
+// // ════════════════════════════════════════════════════════════════
+// const resendEmail = asyncHandler(async (req, res) => {
+//   const template = await Template.findOne({
+//     _id:       req.params.id,
+//     owner:     req.user._id,
+//     isDeleted: false,
+//   });
+
+//   if (!template)
+//     return res.status(404).json({ success: false, message: 'Template not found.' });
+
+//   const session = await TemplateSession.findOne({
+//     _id:       req.params.sessionId,
+//     template:  template._id,
+//     isDeleted: { $ne: true },
+//   });
+
+//   if (!session)
+//     return res.status(404).json({ success: false, message: 'Session not found.' });
+
+//   if (session.status === 'signed')
+//     return res.status(400).json({ success: false, message: 'Recipient has already signed.' });
+
+//   if (session.status === 'expired') {
+//     session.token     = generateToken();
+//     session.status    = 'pending';
+//     session.expiresAt = new Date(Date.now() + 7 * 86_400_000);
+//   } else {
+//     session.expiresAt = new Date(
+//       Math.max(session.expiresAt.getTime(), Date.now()) + 7 * 86_400_000,
+//     );
+//   }
+
+//   await session.addReminder({ note: `Reminder by ${req.user.email}` });
+//   await session.save();
+
+//   await sendEmployeeSigningEmail?.({
+//     employeeEmail:   session.recipientEmail,
+//     employeeName:    session.recipientName,
+//     documentTitle:   template.title,
+//     signingLink:     `${FRONT()}/template-sign/${session.token}`,
+//     bossName:        req.user.full_name || req.user.name || 'Your Manager',
+//     bossDesignation: req.user.designation || '',
+//     companyName:     template.companyName || '',
+//     companyLogoUrl:  template.companyLogo || '',
+//   });
+
+//   return res.json({
+//     success: true,
+//     message: `Reminder sent to ${session.recipientEmail}.`,
+//     reminderCount: session.reminderCount,
+//   });
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // 12. GET TEMPLATE PDF PROXY (public)
+// // ════════════════════════════════════════════════════════════════
+// const getTemplatePdf = asyncHandler(async (req, res) => {
+//   try {
+//     const session = await TemplateSession.findOne({
+//       token:     req.params.token,
+//       isDeleted: { $ne: true },
+//     }).populate('template', 'fileUrl bossSignedFileUrl title');
+
+//     if (!session)
+//       return res.status(404).send('Not found');
+
+//     const tmpl  = session.template;
+//     const url   = tmpl.bossSignedFileUrl || tmpl.fileUrl;
+
+//     if (!url) return res.status(404).send('PDF not available');
+
+//     const response = await fetch(url);
+//     if (!response.ok) return res.status(502).send('PDF fetch failed');
+
+//     const buffer = await response.arrayBuffer();
+//     res.setHeader('Content-Type', 'application/pdf');
+//     res.setHeader('Content-Disposition',
+//       `inline; filename="${tmpl.title || 'document'}.pdf"`);
+//     res.setHeader('Access-Control-Allow-Origin', '*');
+//     res.setHeader('Cache-Control', 'public, max-age=3600');
+//     return res.send(Buffer.from(buffer));
+
+//   } catch (err) {
+//     console.error('[getTemplatePdf]', err.message);
+//     return res.status(500).send(err.message);
+//   }
+// });
+
+// // ════════════════════════════════════════════════════════════════
+// // EXPORTS
+// // ════════════════════════════════════════════════════════════════
+// module.exports = {
+//   createTemplate,
+//   getTemplates,
+//   getTemplate,
+//   updateTemplate,
+//   deleteTemplate,
+//   bossSign,
+//   getTemplateSessions,
+//   getSessionByToken,
+//   employeeSign,
+//   employeeDecline,
+//   resendEmail,
+//   getTemplatePdf,
+// };
+
 'use strict';
+/**
+ * templateController.js — NexSign Module 2 Backend Controller
+ *
+ * Flow:
+ *  1. POST /templates                → createTemplate
+ *  2. POST /templates/:id/boss-sign  → bossSign   (embed boss sig, send to employees)
+ *  3. GET  /sign/template/:token     → getSession  (employee signing page)
+ *  4. POST /sign/template/:token     → employeeSign (embed employee fields, send PDF via email)
+ *  5. POST /sign/template/:token/decline → employeeDecline
+ *  6. POST /templates/:id/sessions/:sid/resend → resendEmail
+ */
 
-// ═══════════════════════════════════════════════════════════════
-// templateController.js — NexSign Module 2 (One-to-Many)
-//
-// BUG FIXES:
-// ✅ Bug 1: Employee fields now correctly embedded in PDF
-//    - fieldsWithValues array preserves x/y/width/height as %
-//    - pdfService.generateEmployeePdf receives correct % coords
-// ✅ Bug 2: Boss redirect — after bossSign, response includes
-//    redirectTo flag so frontend can show ThankYou page
-// ✅ Bug 3: Field % coordinates preserved through all transformations
-//    - field.toObject() called properly before spread
-//    - coordinates not modified/lost during value merge
-// ═══════════════════════════════════════════════════════════════
-
-const mongoose        = require('mongoose');
-const crypto          = require('crypto');
-const { v2: cloudinary } = require('cloudinary');
-const Template        = require('../models/Template');
+const crypto    = require('crypto');
+const cloudinary = require('cloudinary').v2;
+const Template       = require('../models/Template');
 const TemplateSession = require('../models/TemplateSession');
-const User            = require('../models/User');
-const AuditLog        = require('../models/AuditLog');
+const { embedBossSignature, generateEmployeePdf } = require('../services/pdfService');
+const { sendEmail, getDocumentSubtitle }          = require('../services/emailService');
 
-// ─── Safe imports ─────────────────────────────────────────────
-let pdfService = null;
-try {
-  pdfService = require('../utils/pdfService');
-} catch (e) {
-  console.warn('[templateController] pdfService not found:', e.message);
+const BASE_URL  = process.env.BASE_URL || 'http://localhost:5173';
+const TOKEN_EXP = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const ok  = (res, data = {}, status = 200) => res.status(status).json({ success: true,  ...data });
+const err = (res, msg, status = 400)       => res.status(status).json({ success: false, error: msg });
+
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
 }
 
-let emailService = {};
-try {
-  emailService = require('../utils/emailService');
-} catch (e) {
-  console.warn('[templateController] emailService not found:', e.message);
-}
-
-const {
-  sendBossApprovalEmail,
-  sendEmployeeSigningEmail,
-  sendCompletionEmail,
-  sendCCEmail,
-  sendDeclinedEmail,
-} = emailService;
-
-// ════════════════════════════════════════════════════════════════
-// HELPERS
-// ════════════════════════════════════════════════════════════════
-const asyncHandler = fn => (req, res, next) =>
-  Promise.resolve(fn(req, res, next)).catch(next);
-
-const generateToken = () => crypto.randomBytes(32).toString('hex');
-
-const getIP = req =>
-  req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-  req.headers['x-real-ip'] ||
-  req.ip ||
-  'Unknown';
-
-function parseDevice(ua = '') {
-  let device = 'Unknown', browser = 'Unknown',
-      os = 'Unknown', deviceType = 'desktop';
-
-  if      (/iPhone/.test(ua))   { device = 'iPhone';  os = 'iOS';     deviceType = 'mobile';  }
-  else if (/iPad/.test(ua))     { device = 'iPad';    os = 'iPadOS';  deviceType = 'tablet';  }
-  else if (/Android/.test(ua))  {
-    device = ua.match(/Android[^;]*;\s*([^)]+)\)/)?.[1]?.trim() || 'Android';
-    os     = `Android ${ua.match(/Android\s([\d.]+)/)?.[1] || ''}`.trim();
-    deviceType = /Mobile/.test(ua) ? 'mobile' : 'tablet';
-  }
-  else if (/Windows/.test(ua))  { device = 'Windows PC'; os = 'Windows'; }
-  else if (/Mac/.test(ua))      { device = 'Mac';         os = 'macOS';   }
-  else if (/Linux/.test(ua))    { device = 'Linux PC';    os = 'Linux';   }
-
-  if      (/Edg\//.test(ua))     browser = `Edge ${ua.match(/Edg\/([\d.]+)/)?.[1]       || ''}`.trim();
-  else if (/OPR\//.test(ua))     browser = `Opera ${ua.match(/OPR\/([\d.]+)/)?.[1]      || ''}`.trim();
-  else if (/Chrome\//.test(ua))  browser = `Chrome ${ua.match(/Chrome\/([\d.]+)/)?.[1]  || ''}`.trim();
-  else if (/Firefox\//.test(ua)) browser = `Firefox ${ua.match(/Firefox\/([\d.]+)/)?.[1]|| ''}`.trim();
-  else if (/Safari\//.test(ua))  browser = `Safari ${ua.match(/Version\/([\d.]+)/)?.[1] || ''}`.trim();
-
-  return { device, browser, os, deviceType, isMobile: deviceType === 'mobile' };
-}
-
-async function getGeoInfo(ip) {
-  try {
-    const clean = (ip || '').replace('::ffff:', '').trim();
-    if (!clean || clean === '127.0.0.1' || clean === '::1'
-        || clean.startsWith('192.168.') || clean.startsWith('10.')) {
-      return {
-        city: 'Local', country: 'Dev',
-        postalCode: '0000', timezone: 'UTC',
-        region: '', display: 'Local Dev',
-        latitude: '', longitude: '',
-      };
-    }
-
-    // Primary: ipapi.co
-    try {
-      const ctrl = new AbortController();
-      const tid  = setTimeout(() => ctrl.abort(), 4000);
-      const res  = await fetch(`https://ipapi.co/${clean}/json/`, {
-        signal: ctrl.signal,
-        headers: { 'User-Agent': 'nexsign/1.0' },
-      });
-      clearTimeout(tid);
-      if (res.ok) {
-        const d = await res.json();
-        if (!d.error) return {
-          city:       d.city         || '',
-          country:    d.country_name || '',
-          postalCode: d.postal       || '',
-          region:     d.region       || '',
-          timezone:   d.timezone     || 'UTC',
-          latitude:   String(d.latitude  || ''),
-          longitude:  String(d.longitude || ''),
-          display:    [d.city, d.country_name].filter(Boolean).join(', '),
-        };
-      }
-    } catch {}
-
-    // Fallback: ip-api.com
-    try {
-      const ctrl2 = new AbortController();
-      const tid2  = setTimeout(() => ctrl2.abort(), 4000);
-      const res2  = await fetch(
-        `http://ip-api.com/json/${clean}?fields=status,city,regionName,country,zip,timezone,lat,lon`,
-        { signal: ctrl2.signal },
-      );
-      clearTimeout(tid2);
-      if (res2.ok) {
-        const d2 = await res2.json();
-        if (d2.status === 'success') return {
-          city:       d2.city       || '',
-          country:    d2.country    || '',
-          postalCode: d2.zip        || '',
-          region:     d2.regionName || '',
-          timezone:   d2.timezone   || 'UTC',
-          latitude:   String(d2.lat || ''),
-          longitude:  String(d2.lon || ''),
-          display:    [d2.city, d2.country].filter(Boolean).join(', '),
-        };
-      }
-    } catch {}
-
-    return {};
-  } catch {
-    return {};
-  }
-}
-
-const FRONT = () =>
-  (process.env.FRONTEND_URL || 'https://nexsignfrontend.vercel.app')
-    .replace(/\/$/, '');
-
-async function safeAuditLog(payload) {
-  try {
-    await AuditLog.create({
-      document_id:        payload.document_id    || null,
-      document_title:     payload.document_title || null,
-      is_template_action: true,
-      action:             payload.action,
-      performed_by:       payload.performed_by   || {},
-      device:             payload.device         || {},
-      location:           payload.location       || {},
-      local_time:         payload.local_time     || null,
-    });
-  } catch (e) {
-    console.error('[AuditLog]', e.message);
-  }
-}
-
-function emitSocket(req, event, data) {
-  try {
-    const io = req.app.get('io');
-    if (io) io.emit(event, data);
-  } catch {}
-}
-
-async function uploadSignaturePng(base64DataUrl, folder = 'nexsign/signatures') {
+/**
+ * Upload bytes to Cloudinary, return secure_url.
+ */
+async function uploadPdfToCloud(buffer, folder = 'nexsign', filename = 'document') {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      { resource_type: 'image', folder },
-      (err, result) => err ? reject(err) : resolve(result),
+      { folder, public_id: filename, resource_type: 'raw', format: 'pdf' },
+      (error, result) => {
+        if (error) reject(error);
+        else resolve(result.secure_url);
+      },
     );
-    const base64 = base64DataUrl.replace(/^data:image\/\w+;base64,/, '');
-    stream.end(Buffer.from(base64, 'base64'));
+    stream.end(buffer);
   });
 }
 
-// ════════════════════════════════════════════════════════════════
-// 1. CREATE TEMPLATE
-// ════════════════════════════════════════════════════════════════
-const createTemplate = asyncHandler(async (req, res) => {
-  const {
-    title, description,
-    fileUrl, filePublicId, fileName, fileSize,
-    fields,
-    recipients, ccList,
-    boss,
-    signingConfig, totalPages,
-    companyName, companyLogo, message,
-  } = req.body;
+/**
+ * Parse user-agent string into a human-readable device string.
+ * e.g. "Chrome 120 / Windows 11"
+ */
+function parseUserAgent(ua = '') {
+  const browser =
+    ua.includes('Edg/')    ? `Edge ${(ua.match(/Edg\/([\d.]+)/) || [])[1] || ''}` :
+    ua.includes('Chrome/') ? `Chrome ${(ua.match(/Chrome\/([\d.]+)/) || [])[1] || ''}` :
+    ua.includes('Firefox/') ? `Firefox ${(ua.match(/Firefox\/([\d.]+)/) || [])[1] || ''}` :
+    ua.includes('Safari/') && !ua.includes('Chrome') ? `Safari ${(ua.match(/Version\/([\d.]+)/) || [])[1] || ''}` :
+    'Browser';
 
-  if (!title?.trim())
-    return res.status(400).json({ success: false, message: 'Title is required.' });
-  if (!fileUrl)
-    return res.status(400).json({ success: false, message: 'PDF file is required.' });
+  const os =
+    ua.includes('iPhone')  ? 'iPhone iOS' :
+    ua.includes('iPad')    ? 'iPad iOS' :
+    ua.includes('Android') ? 'Android' :
+    ua.includes('Windows') ? 'Windows' :
+    ua.includes('Mac')     ? 'macOS' :
+    ua.includes('Linux')   ? 'Linux' : 'Unknown OS';
 
-  const parsedRecipients = Array.isArray(recipients) ? recipients : [];
-  if (!parsedRecipients.length)
-    return res.status(400).json({ success: false, message: 'At least one recipient is required.' });
+  return `${browser} / ${os}`;
+}
 
-  const emails = parsedRecipients.map(r => r.email?.toLowerCase().trim());
-  if (new Set(emails).size !== emails.length)
-    return res.status(400).json({ success: false, message: 'Duplicate recipient emails found.' });
-
-  const parsedFields = Array.isArray(fields)  ? fields  : [];
-  const parsedCC     = Array.isArray(ccList)   ? ccList   : [];
-  const parsedConfig = signingConfig || {};
-  const bossSignsFirst = parsedConfig.bossSignsFirst !== false;
-
-  // ── Boss email from body or authenticated user ────────────
-  const bossEmail       = boss?.email       || req.user.email;
-  const bossName        = boss?.name        || req.user.full_name;
-  const bossDesignation = boss?.designation || req.user.designation || '';
-
-  const template = await Template.create({
-    title:        title.trim(),
-    description:  description || '',
-    owner:        req.user._id,
-    fileUrl,
-    filePublicId: filePublicId || '',
-    fileName:     fileName     || '',
-    fileSize:     fileSize     || 0,
-    fields:       parsedFields,
-    recipients:   parsedRecipients,
-    ccList:       parsedCC,
-    companyName:  companyName  || '',
-    companyLogo:  companyLogo  || '',
-    message:      message      || '',
-    signingConfig: {
-      bossSignsFirst,
-      expiryDays:   parsedConfig.expiryDays   || 30,
-      allowDecline: parsedConfig.allowDecline !== false,
-      reminderDays: parsedConfig.reminderDays || 3,
-      emailSubject: parsedConfig.emailSubject || '',
-      emailMessage: parsedConfig.emailMessage || '',
-    },
-    totalPages: Number(totalPages) || 1,
-    status:     bossSignsFirst ? 'boss_pending' : 'active',
-    stats: {
-      totalRecipients: parsedRecipients.length,
-      pending:         parsedRecipients.length,
-      signed:          0, declined: 0, viewed: 0,
-    },
-  });
-
-  // Send boss approval email
-  if (bossSignsFirst) {
-    try {
-      await sendBossApprovalEmail?.({
-        bossEmail,
-        bossName,
-        bossDesignation,
-        documentTitle:  template.title,
-        signingLink:    `${FRONT()}/templates/${template._id}`,
-        employeeCount:  parsedRecipients.length,
-        senderName:     req.user.full_name || 'Boss',
-        companyName:    template.companyName || '',
-        companyLogoUrl: template.companyLogo || '',
-        message:        template.message || '',
-      });
-    } catch (e) {
-      console.error('[createTemplate] Boss email failed:', e.message);
-    }
-  }
-
-  return res.status(201).json({
-    success:  true,
-    message:  'Template created successfully.',
-    template: template.toJSON(),
-  });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 2. GET ALL TEMPLATES
-// ════════════════════════════════════════════════════════════════
-const getTemplates = asyncHandler(async (req, res) => {
-  const { status, page = 1, limit = 10, search } = req.query;
-
-  const filter = { owner: req.user._id, isDeleted: false };
-  if (status && status !== 'all') filter.status = status;
-  if (search) filter.title = { $regex: search.trim(), $options: 'i' };
-
-  const pageNum  = Math.max(1, Number(page));
-  const limitNum = Math.min(50, Math.max(1, Number(limit)));
-  const skip     = (pageNum - 1) * limitNum;
-
-  const [templates, total] = await Promise.all([
-    Template.find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum)
-      .select('-fields -recipients')
-      .lean({ virtuals: true }),
-    Template.countDocuments(filter),
-  ]);
-
-  return res.json({
-    success: true,
-    templates,
-    pagination: {
-      total,
-      page:       pageNum,
-      limit:      limitNum,
-      totalPages: Math.ceil(total / limitNum),
-      hasMore:    pageNum * limitNum < total,
-    },
-  });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 3. GET SINGLE TEMPLATE
-// ════════════════════════════════════════════════════════════════
-const getTemplate = asyncHandler(async (req, res) => {
-  const template = await Template.findOne({
-    _id:       req.params.id,
-    isDeleted: false,
-  })
-    .populate('owner', 'full_name email avatar')
-    .lean({ virtuals: true });
-
-  if (!template)
-    return res.status(404).json({ success: false, message: 'Template not found.' });
-
-  const isOwner = template.owner._id.toString() === req.user._id.toString();
-  const isAdmin = ['admin', 'super_admin'].includes(req.user.role);
-  if (!isOwner && !isAdmin)
-    return res.status(403).json({ success: false, message: 'Access denied.' });
-
-  const sessionStats = await TemplateSession.getTemplateStats(template._id);
-
-  return res.json({
-    success:  true,
-    template: { ...template, sessionStats },
-  });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 4. UPDATE TEMPLATE
-// ════════════════════════════════════════════════════════════════
-const updateTemplate = asyncHandler(async (req, res) => {
-  const template = await Template.findOne({
-    _id:       req.params.id,
-    owner:     req.user._id,
-    isDeleted: false,
-  });
-
-  if (!template)
-    return res.status(404).json({ success: false, message: 'Template not found.' });
-
-  if (!['draft', 'boss_pending'].includes(template.status))
-    return res.status(400).json({
-      success: false,
-      message: 'Cannot edit an active or completed template.',
-    });
-
-  const ALLOWED = [
-    'title', 'description', 'fields',
-    'recipients', 'ccList', 'signingConfig',
-    'totalPages', 'companyName', 'companyLogo', 'message',
-  ];
-
-  ALLOWED.forEach(key => {
-    if (req.body[key] !== undefined) template[key] = req.body[key];
-  });
-
-  await template.save();
-
-  return res.json({
-    success:  true,
-    message:  'Template updated.',
-    template: template.toJSON(),
-  });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 5. DELETE TEMPLATE
-// ════════════════════════════════════════════════════════════════
-const deleteTemplate = asyncHandler(async (req, res) => {
-  const template = await Template.findOne({
-    _id:       req.params.id,
-    owner:     req.user._id,
-    isDeleted: false,
-  });
-
-  if (!template)
-    return res.status(404).json({ success: false, message: 'Template not found.' });
-
-  if (template.status === 'active')
-    return res.status(400).json({
-      success: false,
-      message: 'Cannot delete an active template. Archive it first.',
-    });
-
-  await template.softDelete();
-
-  return res.json({ success: true, message: 'Template deleted.' });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 6. BOSS SIGN
-// ✅ BUG 2 FIX: Returns redirectTo: 'thank_you' so frontend
-//    can redirect boss to a thank you page instead of looping
-// ════════════════════════════════════════════════════════════════
-const bossSign = asyncHandler(async (req, res) => {
-  const { signatureDataUrl, fieldValues } = req.body;
-
-  if (!signatureDataUrl)
-    return res.status(400).json({ success: false, message: 'Signature is required.' });
-
-  const template = await Template.findOne({
-    _id:       req.params.id,
-    owner:     req.user._id,
-    isDeleted: false,
-  });
-
-  if (!template)
-    return res.status(404).json({ success: false, message: 'Template not found.' });
-
-  if (!['boss_pending', 'draft'].includes(template.status))
-    return res.status(400).json({
-      success: false,
-      message: 'Template is not awaiting boss signature.',
-    });
-
-  const ip         = getIP(req);
-  const ua         = req.headers['user-agent'] || '';
-  const geo        = await getGeoInfo(ip);
-  const deviceInfo = parseDevice(ua);
-
-  // ── Step 1: Upload boss signature PNG to Cloudinary ────────
-  let signatureImageUrl      = null;
-  let signatureImagePublicId = '';
+/**
+ * Build local time string in signer's timezone.
+ * e.g. "15 Jan 2025, 10:32:45 AM (BST, UTC+6)"
+ */
+function formatLocalTime(isoDate, timezone) {
   try {
-    const uploaded        = await uploadSignaturePng(
-      signatureDataUrl,
-      'nexsign/boss-signatures',
-    );
-    signatureImageUrl      = uploaded.secure_url;
-    signatureImagePublicId = uploaded.public_id;
+    const d = new Date(isoDate);
+    const fmt = new Intl.DateTimeFormat('en-GB', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: true,
+      timeZone: timezone || 'UTC',
+      timeZoneName: 'short',
+    });
+    return fmt.format(d);
+  } catch {
+    return new Date(isoDate).toUTCString();
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 1. Create Template
+// POST /templates
+// ══════════════════════════════════════════════════════════════════════════════
+async function createTemplate(req, res) {
+  try {
+    const { title, companyName, companyLogo, message, fields, recipients, ccList } = req.body;
+    const fileUrl = req.body.fileUrl || req.file?.path;
+
+    if (!title || !fileUrl) return err(res, 'title and fileUrl are required.');
+    if (!recipients?.length) return err(res, 'At least one recipient required.');
+
+    const template = await Template.create({
+      title,
+      companyName,
+      companyLogo,
+      message,
+      fileUrl,
+      fields:     fields || [],
+      recipients: recipients || [],
+      ccList:     ccList    || [],
+      createdBy:  req.user?._id,
+      status:     'boss_pending',
+    });
+
+    return ok(res, { template }, 201);
   } catch (e) {
-    console.error('[bossSign] Signature upload failed:', e.message);
-    // Continue with null — embed from dataUrl directly
+    console.error('[createTemplate]', e);
+    return err(res, e.message, 500);
   }
+}
 
-  // ── Step 2: Embed boss signature into PDF ──────────────────
-  let bossSignedFileUrl = template.fileUrl;
-  if (pdfService?.embedBossSignature) {
-    try {
-      // ✅ BUG 3 FIX: Pass fields as plain objects (not Mongoose docs)
-      // This preserves x/y/width/height percentage values exactly
-      const bossFields = (template.fields || [])
-        .filter(f => f.assignedTo === 'boss')
-        .map(f => {
-          // Convert Mongoose subdoc to plain object
-          const plain = f.toObject ? f.toObject() : { ...f };
-          return plain;
-        });
-
-      const mergedBytes = await Promise.race([
-        pdfService.embedBossSignature({
-          fileUrl:          template.fileUrl,
-          signatureDataUrl,  // original base64 for embedding
-          fields:           bossFields,
-          fieldValues:      Array.isArray(fieldValues) ? fieldValues : [],
-        }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('embedBossSignature timeout')), 25_000)
-        ),
-      ]);
-
-      const pdfResult = await new Promise((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
-          {
-            resource_type: 'raw',
-            folder:        'nexsign/boss-signed',
-            public_id:     `boss_signed_${template._id}_${Date.now()}`,
-            format:        'pdf',
-          },
-          (err, result) => err ? reject(err) : resolve(result),
-        );
-        stream.end(Buffer.from(mergedBytes));
-      });
-
-      bossSignedFileUrl             = pdfResult.secure_url;
-      template.bossSignedFileUrl    = bossSignedFileUrl;
-      template.bossSignedFilePublicId = pdfResult.public_id;
-
-    } catch (e) {
-      console.error('[bossSign] PDF embed failed, using original:', e.message);
-      template.bossSignedFileUrl = template.fileUrl;
-      bossSignedFileUrl          = template.fileUrl;
-    }
-  } else {
-    template.bossSignedFileUrl = template.fileUrl;
-    bossSignedFileUrl          = template.fileUrl;
-  }
-
-  // ── Step 3: Update template ────────────────────────────────
-  template.bossSignature = {
-    signatureImageUrl,
-    signedAt:   new Date(),
-    ipAddress:  ip,
-    city:       geo.city    || '',
-    country:    geo.country || '',
-    device:     deviceInfo.device,
-    browser:    deviceInfo.browser,
-    os:         deviceInfo.os,
-  };
-  template.status  = 'active';
-  template.sentAt  = new Date();
-  await template.save();
-
-  // ── Step 4: Create sessions for all recipients ─────────────
-  const expiryDays = template.signingConfig?.expiryDays || 30;
-  const expiresAt  = new Date(Date.now() + expiryDays * 86_400_000);
-
-  const sessionDocs = template.recipients.map(r => ({
-    template:             template._id,
-    recipientName:        r.name,
-    recipientEmail:       r.email,
-    recipientDesignation: r.designation || '',
-    token:                generateToken(),
-    status:               'pending',
-    expiresAt,
-    sentAt:               new Date(),
-    auditLog: [{
-      action:    'link_sent',
-      timestamp: new Date(),
-      note:      `Sent by ${req.user.full_name || req.user.email}`,
-    }],
-  }));
-
-  const sessions = await TemplateSession.insertMany(sessionDocs);
-
-  // ── Step 5: Send emails to employees ──────────────────────
-  const emailResults = await Promise.allSettled(
-    sessions.map(session =>
-      sendEmployeeSigningEmail?.({
-        employeeEmail:   session.recipientEmail,
-        employeeName:    session.recipientName,
-        documentTitle:   template.title,
-        signingLink:     `${FRONT()}/template-sign/${session.token}`,
-        bossName:        req.user.full_name || req.user.name || 'Your Manager',
-        bossDesignation: req.user.designation || '',
-        companyName:     template.companyName || '',
-        companyLogoUrl:  template.companyLogo || '',
-      })
-    )
-  );
-
-  const emailsSent   = emailResults.filter(r => r.status === 'fulfilled').length;
-  const emailsFailed = emailResults.filter(r => r.status === 'rejected').length;
-  if (emailsFailed > 0) console.error(`[bossSign] ${emailsFailed} emails failed`);
-
-  // ── Step 6: Send boss confirmation email ───────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// 2. Boss Sign
+// POST /templates/:id/boss-sign
+// Body: { signatureDataUrl, fieldValues[], auditMeta }
+// ══════════════════════════════════════════════════════════════════════════════
+async function bossSign(req, res) {
   try {
-    // Optional: notify boss that signing is complete and emails sent
-    // sendBossConfirmEmail(...)
-  } catch {}
+    const template = await Template.findOne({ _id: req.params.id, createdBy: req.user._id });
+    if (!template)                           return err(res, 'Template not found.', 404);
+    if (template.status !== 'boss_pending')  return err(res, 'Template already signed.');
 
-  // ── Step 7: Emit socket ────────────────────────────────────
-  emitSocket(req, 'template:activated', {
-    templateId:  String(template._id),
-    ownerId:     String(req.user._id),
-    title:       template.title,
-    totalCount:  sessions.length,
-    emailsSent,
-  });
+    const { signatureDataUrl, fieldValues = [], auditMeta = {} } = req.body;
+    if (!signatureDataUrl) return err(res, 'Signature is required.');
 
-  // ── Step 8: Audit log ──────────────────────────────────────
-  safeAuditLog({
-    action:         'boss_signed_template',
-    document_id:    template._id,
-    document_title: template.title,
-    performed_by: {
-      user_id: req.user._id,
-      name:    req.user.full_name || req.user.name,
-      email:   req.user.email,
-      role:    'boss',
-    },
-    device: {
-      device_name: deviceInfo.device,
-      browser:     deviceInfo.browser,
-      os:          deviceInfo.os,
-    },
-    location: {
-      ip_address: ip,
-      city:       geo.city,
-      country:    geo.country,
-      display:    geo.display,
-    },
-  });
-
-  // ✅ BUG 2 FIX: Include redirectTo so frontend navigates away
-  // from the signing page to a ThankYou/success page
-  return res.json({
-    success:       true,
-    message:       `Boss signed! ${emailsSent}/${sessions.length} emails sent.`,
-    sessionsCount: sessions.length,
-    emailsSent,
-    template:      template.toJSON(),
-    // ✅ Frontend reads this and redirects to /templates/:id instead
-    // of staying on the boss sign page (which would trigger re-sign loop)
-    redirectTo:    'template_detail',
-    redirectUrl:   `/templates/${template._id}`,
-  });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 7. GET SESSIONS
-// ════════════════════════════════════════════════════════════════
-const getTemplateSessions = asyncHandler(async (req, res) => {
-  const template = await Template.findOne({
-    _id:       req.params.id,
-    owner:     req.user._id,
-    isDeleted: false,
-  });
-
-  if (!template)
-    return res.status(404).json({ success: false, message: 'Template not found.' });
-
-  const { status, page = 1, limit = 50, search } = req.query;
-
-  const filter = {
-    template:  template._id,
-    isDeleted: { $ne: true },
-  };
-  if (status && status !== 'all') filter.status = status;
-  if (search) {
-    filter.$or = [
-      { recipientName:  { $regex: search.trim(), $options: 'i' } },
-      { recipientEmail: { $regex: search.trim(), $options: 'i' } },
-    ];
-  }
-
-  const pageNum  = Math.max(1, Number(page));
-  const limitNum = Math.min(100, Number(limit));
-  const skip     = (pageNum - 1) * limitNum;
-
-  const [sessions, total, stats] = await Promise.all([
-    TemplateSession.find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum)
-      .select('-auditLog -fieldValues')
-      .lean({ virtuals: true }),
-    TemplateSession.countDocuments(filter),
-    TemplateSession.getTemplateStats(template._id),
-  ]);
-
-  return res.json({
-    success: true,
-    sessions,
-    stats,
-    pagination: {
-      total,
-      page:       pageNum,
-      limit:      limitNum,
-      totalPages: Math.ceil(total / limitNum),
-      hasMore:    pageNum * limitNum < total,
-    },
-  });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 8. VALIDATE SESSION TOKEN (public)
-// ════════════════════════════════════════════════════════════════
-const getSessionByToken = asyncHandler(async (req, res) => {
-  const session = await TemplateSession.findByToken(req.params.token);
-
-  if (!session)
-    return res.status(404).json({
-      success: false, code: 'INVALID_LINK',
-      message: 'Invalid or expired signing link.',
+    // ── Embed boss signature into PDF ────────────────────────────────────────
+    const bossSignedBytes = await embedBossSignature({
+      fileUrl:          template.fileUrl,
+      signatureDataUrl,
+      fields:           template.fields,
+      fieldValues,
     });
 
-  if (new Date() > session.expiresAt) {
-    if (!['expired', 'signed', 'declined'].includes(session.status)) {
-      await session.markExpired();
-    }
-    return res.status(410).json({
-      success: false, code: 'LINK_EXPIRED',
-      message: 'This signing link has expired.',
-    });
-  }
+    // ── Upload boss-signed PDF to Cloudinary ─────────────────────────────────
+    const bossSignedUrl = await uploadPdfToCloud(
+      bossSignedBytes,
+      'nexsign/boss-signed',
+      `template-${template._id}-boss-${Date.now()}`,
+    );
 
-  if (session.status === 'signed')
-    return res.status(410).json({
-      success: false, code: 'ALREADY_SIGNED',
-      message: 'You have already signed this document.',
-    });
+    // ── Build boss audit meta ────────────────────────────────────────────────
+    const signedAt     = new Date();
+    const bossAuditMeta = {
+      name:           req.user.name  || req.user.email,
+      email:          req.user.email,
+      role:           'Document Owner / Authoriser',
+      signedAt:       signedAt.toISOString(),
+      localSignedAt:  formatLocalTime(signedAt, auditMeta.timezone || 'UTC'),
+      ipAddress:      auditMeta.ip         || req.ip,
+      device:         auditMeta.device     || parseUserAgent(req.headers['user-agent']),
+      city:           auditMeta.city       || '',
+      region:         auditMeta.region     || '',
+      country:        auditMeta.country    || '',
+      postalCode:     auditMeta.postalCode || '',
+      latitude:       auditMeta.latitude   || '',
+      longitude:      auditMeta.longitude  || '',
+      timezone:       auditMeta.timezone   || 'UTC',
+      status:         'signed',
+    };
 
-  if (session.status === 'declined')
-    return res.status(410).json({
-      success: false, code: 'ALREADY_DECLINED',
-      message: 'You have already declined this document.',
-    });
+    // ── Update template ──────────────────────────────────────────────────────
+    template.bossSignedFileUrl = bossSignedUrl;
+    template.bossSignature     = bossAuditMeta;
+    template.status            = 'active';
+    await template.save();
 
-  const ip         = getIP(req);
-  const ua         = req.headers['user-agent'] || '';
-  const geo        = await getGeoInfo(ip);
-  const deviceInfo = parseDevice(ua);
+    // ── Create TemplateSession for each employee, send emails ─────────────────
+    const sessions = [];
+    for (const recipient of template.recipients) {
+      const token     = generateToken();
+      const expiresAt = new Date(Date.now() + TOKEN_EXP);
 
-  await session.markViewed({
-    ipAddress:  ip,
-    userAgent:  ua,
-    location:   geo,
-    deviceInfo,
-    localTime:  new Date().toUTCString(),
-  });
-
-  const tmpl = session.template;
-  const templateObj = typeof tmpl.toObject === 'function'
-    ? tmpl.toObject({ virtuals: true })
-    : { ...tmpl };
-
-  // ✅ BUG 3 FIX: Return fields as plain objects with coordinates intact
-  // Employee fields filter — only 'employee' assigned fields
-  const employeeFields = (templateObj.fields || [])
-    .filter(f => f.assignedTo === 'employee')
-    .map(f => {
-      // Ensure coordinates are numbers, not strings
-      return {
-        ...f,
-        x:      Number(f.x      || 0),
-        y:      Number(f.y      || 0),
-        width:  Number(f.width  || 20),
-        height: Number(f.height || 8),
-        page:   Number(f.page   || 1),
-      };
-    });
-
-  return res.json({
-    success: true,
-    session: {
-      _id:                  String(session._id),
-      recipientName:        session.recipientName,
-      recipientEmail:       session.recipientEmail,
-      recipientDesignation: session.recipientDesignation,
-      status:               session.status,
-      expiresAt:            session.expiresAt,
-      viewedAt:             session.viewedAt,
-    },
-    template: {
-      _id:          String(templateObj._id),
-      title:        templateObj.title,
-      description:  templateObj.description,
-      companyName:  templateObj.companyName || '',
-      companyLogo:  templateObj.companyLogo || '',
-      message:      templateObj.message     || '',
-      // ✅ Use boss-signed PDF — employees see boss signature already
-      fileUrl:      templateObj.bossSignedFileUrl || templateObj.fileUrl,
-      // ✅ Only employee fields with validated coordinates
-      fields:       employeeFields,
-      totalPages:   templateObj.totalPages   || 1,
-      signingConfig: templateObj.signingConfig || {},
-    },
-  });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 9. EMPLOYEE SIGN (public)
-// ✅ BUG 1 FIX: Fields properly built with % coordinates for PDF
-// ✅ BUG 3 FIX: Coordinates preserved as numbers throughout
-// ════════════════════════════════════════════════════════════════
-const employeeSign = asyncHandler(async (req, res) => {
-  const {
-    signatureDataUrl, fieldValues,
-    latitude, longitude, clientTime,
-  } = req.body;
-
-  const session = await TemplateSession.findByToken(req.params.token);
-
-  if (!session)
-    return res.status(404).json({
-      success: false, code: 'INVALID_LINK',
-      message: 'Invalid signing link.',
-    });
-
-  if (new Date() > session.expiresAt) {
-    await session.markExpired();
-    return res.status(410).json({
-      success: false, code: 'LINK_EXPIRED',
-      message: 'Signing link has expired.',
-    });
-  }
-
-  if (session.status === 'signed')
-    return res.status(409).json({
-      success: false, code: 'ALREADY_SIGNED',
-      message: 'Already signed.',
-    });
-
-  if (session.status === 'declined')
-    return res.status(409).json({
-      success: false, code: 'ALREADY_DECLINED',
-      message: 'Already declined.',
-    });
-
-  const ip         = getIP(req);
-  const ua         = req.headers['user-agent'] || '';
-  const geo        = await getGeoInfo(ip);
-  const deviceInfo = parseDevice(ua);
-  const localTime  = clientTime || new Date().toUTCString();
-
-  // ── Load template ──────────────────────────────────────────
-  const template = await Template.findById(
-    session.template._id || session.template
-  );
-  if (!template)
-    return res.status(404).json({
-      success: false,
-      message: 'Template not found.',
-    });
-
-  // ── Employee fields (plain objects with % coordinates) ─────
-  const employeeFields = (template.fields || [])
-    .filter(f => f.assignedTo === 'employee')
-    .map(f => {
-      const plain = f.toObject ? f.toObject() : { ...f };
-      return {
-        ...plain,
-        // ✅ Ensure coordinates are numbers for PDF service
-        x:      Number(plain.x      || 0),
-        y:      Number(plain.y      || 0),
-        width:  Number(plain.width  || 20),
-        height: Number(plain.height || 8),
-        page:   Number(plain.page   || 1),
-      };
-    });
-
-  // ── Required fields validation ─────────────────────────────
-  const hasSignatureField = employeeFields.some(
-    f => f.type === 'signature' || f.type === 'initial'
-  );
-
-  if (hasSignatureField && !signatureDataUrl) {
-    return res.status(400).json({
-      success: false,
-      message: 'Signature is required.',
-    });
-  }
-
-  const parsedFieldValues = Array.isArray(fieldValues) ? fieldValues : [];
-
-  const missing = employeeFields.filter(f => {
-    if (!f.required) return false;
-    if (f.type === 'signature' || f.type === 'initial') {
-      return !signatureDataUrl;
-    }
-    const fv = parsedFieldValues.find(v => v.fieldId === f.id);
-    return !fv?.value;
-  });
-
-  if (missing.length > 0) {
-    return res.status(400).json({
-      success: false,
-      message: `${missing.length} required field(s) incomplete.`,
-      missingFields: missing.map(f => ({
-        id: f.id, type: f.type, page: f.page,
-      })),
-    });
-  }
-
-  // ── Respond immediately (don't block user) ─────────────────
-  res.json({
-    success:  true,
-    message:  'Document signed successfully! A copy will be emailed to you.',
-    signedAt: new Date(),
-  });
-
-  // ════════════════════════════════════════════════════════════
-  // BACKGROUND — PDF generation + emails
-  // ════════════════════════════════════════════════════════════
-  setImmediate(async () => {
-    try {
-
-      // ── Upload signature to Cloudinary ──────────────────────
-      let signatureImageUrl      = null;
-      let signatureImagePublicId = '';
-
-      if (signatureDataUrl) {
-        try {
-          const uploaded        = await uploadSignaturePng(
-            signatureDataUrl,
-            'nexsign/employee-signatures',
-          );
-          signatureImageUrl      = uploaded.secure_url;
-          signatureImagePublicId = uploaded.public_id;
-        } catch (e) {
-          console.error('[employeeSign] Signature upload failed:', e.message);
-        }
-      }
-
-      // ── Mark session as signed ──────────────────────────────
-      await session.markSigned({
-        signatureImageUrl,
-        signatureImagePublicId,
-        fieldValues: parsedFieldValues,
-        meta: {
-          ipAddress:  ip,
-          userAgent:  ua,
-          location:   geo,
-          deviceInfo,
-          localTime,
-        },
+      const session = await TemplateSession.create({
+        templateId:          template._id,
+        token,
+        expiresAt,
+        recipientName:       recipient.name,
+        recipientEmail:      recipient.email,
+        recipientDesignation: recipient.designation || '',
+        status:              'pending',
+        sentAt:              new Date(),
       });
 
-      // ════════════════════════════════════════════════════════
-      // ✅ BUG 1 FIX: Build fieldsWithValues correctly
-      //
-      // PROBLEM WAS: field spread was losing x/y/width/height
-      // because Mongoose subdoc objects needed .toObject() first,
-      // and the value merge was overwriting coordinate properties.
-      //
-      // SOLUTION: Convert each field to plain object FIRST,
-      // then only set the 'value' property separately.
-      // Coordinates (x, y, width, height) are NEVER touched.
-      // ════════════════════════════════════════════════════════
-      const fieldsWithValues = employeeFields.map(field => {
-        // field is already a plain object from the map above
-        // with validated numeric coordinates
+      sessions.push(session);
 
-        if (field.type === 'signature' || field.type === 'initial') {
-          // ✅ Use original base64 dataUrl for PDF embedding
-          // (Cloudinary URL won't work with pdf-lib embedPng)
-          return {
-            ...field,          // preserves x, y, width, height, page, type etc.
-            value: signatureDataUrl || null,
-          };
-        }
+      // Send signing request email (fire and forget — don't await in loop)
+      const signingUrl = `${BASE_URL}/sign/template/${token}`;
+      sendEmail('signing_request', {
+        to:          recipient.email,
+        signerName:  recipient.name,
+        docTitle:    template.title,
+        docSubtitle: getDocumentSubtitle(template.title),
+        senderName:  req.user.name || req.user.email,
+        senderEmail: req.user.email,
+        companyName: template.companyName || 'NexSign',
+        companyLogo: template.companyLogo || '',
+        actionUrl:   signingUrl,
+        expiryDate:  expiresAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      }).catch(e => console.error('[bossSign] Email error for', recipient.email, e.message));
+    }
 
-        // Text/date/checkbox/number fields
-        const fv = parsedFieldValues.find(v => v.fieldId === field.id);
+    // ── Confirm email to boss ─────────────────────────────────────────────────
+    sendEmail('boss_signed_confirm', {
+      to:             req.user.email,
+      bossName:       req.user.name || req.user.email,
+      docTitle:       template.title,
+      companyName:    template.companyName || 'NexSign',
+      companyLogo:    template.companyLogo || '',
+      senderName:     req.user.name || req.user.email,
+      senderEmail:    req.user.email,
+      recipientCount: template.recipients.length,
+    }).catch(e => console.error('[bossSign] Boss confirm email error:', e.message));
+
+    return ok(res, {
+      template: { ...template.toObject(), sessions: sessions.map(s => s.toObject()) },
+      sessionsCreated: sessions.length,
+    });
+
+  } catch (e) {
+    console.error('[bossSign]', e);
+    return err(res, e.message, 500);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 3. Get Session (employee signing page data)
+// GET /sign/template/:token
+// ══════════════════════════════════════════════════════════════════════════════
+async function getSession(req, res) {
+  try {
+    const { token } = req.params;
+    const session   = await TemplateSession.findOne({ token });
+
+    if (!session)              return err(res, 'Invalid signing link.', 404);
+    if (session.status === 'signed')   return err(res, 'Already signed.',       409, { code: 'ALREADY_SIGNED' });
+    if (session.status === 'declined') return err(res, 'Already declined.',     409, { code: 'ALREADY_DECLINED' });
+    if (session.expiresAt < new Date()) return err(res, 'Link has expired.',    410, { code: 'LINK_EXPIRED' });
+
+    const template = await Template.findById(session.templateId);
+    if (!template)             return err(res, 'Template not found.',   404);
+
+    // Mark as viewed
+    if (!session.viewedAt) {
+      session.viewedAt = new Date();
+      session.status   = 'viewed';
+      await session.save();
+    }
+
+    // Return template + session info (only employee-assigned fields + boss-signed PDF url)
+    const employeeFields = (template.fields || []).filter(
+      f => f.assignedTo === 'employee' || f.partyIndex === 1,
+    );
+
+    return ok(res, {
+      session: {
+        _id:                  session._id,
+        recipientName:        session.recipientName,
+        recipientEmail:       session.recipientEmail,
+        recipientDesignation: session.recipientDesignation,
+        status:               session.status,
+      },
+      template: {
+        _id:          template._id,
+        title:        template.title,
+        companyName:  template.companyName,
+        companyLogo:  template.companyLogo,
+        message:      template.message,
+        fields:       employeeFields,
+        totalPages:   template.totalPages || 1,
+        // The PDF served here is the BOSS-SIGNED version (boss sig already visible)
+        // The frontend fetches this via the proxy endpoint
+        signingConfig: template.signingConfig || { allowDecline: true },
+      },
+    });
+
+  } catch (e) {
+    console.error('[getSession]', e);
+    return err(res, e.message, 500);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 4. Employee Sign
+// POST /sign/template/:token
+// Body: { signatureDataUrl, fieldValues[], clientTime, auditMeta }
+// ══════════════════════════════════════════════════════════════════════════════
+async function employeeSign(req, res) {
+  try {
+    const { token } = req.params;
+    const session   = await TemplateSession.findOne({ token });
+
+    if (!session)               return err(res, 'Invalid signing link.', 404);
+    if (session.status === 'signed')    return err(res, 'Already signed.',      409);
+    if (session.status === 'declined')  return err(res, 'Already declined.',    409);
+    if (session.expiresAt < new Date()) return err(res, 'Link has expired.',    410);
+
+    const template = await Template.findById(session.templateId);
+    if (!template)              return err(res, 'Template not found.',  404);
+
+    const { signatureDataUrl, fieldValues = [], clientTime, auditMeta = {} } = req.body;
+    if (!signatureDataUrl) return err(res, 'Signature is required.');
+
+    // ── Build audit meta for this employee ───────────────────────────────────
+    const signedAt        = new Date(clientTime || Date.now());
+    const employeeAudit   = {
+      name:          session.recipientName,
+      email:         session.recipientEmail,
+      role:          session.recipientDesignation || 'Signatory',
+      signedAt:      signedAt.toISOString(),
+      localSignedAt: formatLocalTime(signedAt, auditMeta.timezone || 'UTC'),
+      ipAddress:     auditMeta.ip         || req.ip,
+      device:        auditMeta.device     || parseUserAgent(req.headers['user-agent']),
+      city:          auditMeta.city       || '',
+      region:        auditMeta.region     || '',
+      country:       auditMeta.country    || '',
+      postalCode:    auditMeta.postalCode || '',
+      latitude:      auditMeta.latitude   || '',
+      longitude:     auditMeta.longitude  || '',
+      timezone:      auditMeta.timezone   || 'UTC',
+      status:        'signed',
+    };
+
+    // ── Build employee fields array for PDF ───────────────────────────────────
+    const allSessions    = await TemplateSession.find({ templateId: template._id });
+    const employeeFields = (template.fields || [])
+      .filter(f => f.assignedTo === 'employee' || f.partyIndex === 1)
+      .map(field => {
+        const fv = fieldValues.find(v => v.fieldId === field.id);
         return {
-          ...field,            // preserves all coordinates
-          value: fv?.value || field.value || null,
+          ...field.toObject ? field.toObject() : field,
+          value: (field.type === 'signature' || field.type === 'initial')
+            ? signatureDataUrl
+            : (fv?.value ?? ''),
         };
       });
 
-      // ── Build sessionDoc for audit page ────────────────────
-      let bossUser = null;
-      try {
-        bossUser = await User.findById(template.owner)
-          .select('full_name email designation')
-          .lean();
-      } catch {}
+    // ── Generate final PDF: boss-signed + employee fields + audit page ────────
+    const docForAudit = {
+      _id:         template._id,
+      title:       template.title,
+      companyName: template.companyName,
+      bossName:    template.bossSignature?.name || 'Authoriser',
+      completedAt: new Date().toISOString(),
+      // parties[] = boss + this employee (for the audit page)
+      parties: [
+        { ...template.bossSignature, name: template.bossSignature?.name || 'Boss', status: 'signed' },
+        { ...employeeAudit, name: session.recipientName },
+      ],
+      ccList: template.ccList || [],
+    };
 
-      const sessionDoc = {
-        _id:         template._id,
-        title:       template.title,
-        companyName: template.companyName || '',
-        status:      'completed',
-        completedAt: new Date(),
-        ccList:      template.ccList || [],
-        parties: [
-          // Boss party
-          {
-            name:            bossUser?.full_name || 'Authoriser',
-            email:           bossUser?.email     || '',
-            designation:     bossUser?.designation || '',
-            status:          'signed',
-            signedAt:        template.bossSignature?.signedAt,
-            ipAddress:       template.bossSignature?.ipAddress || '',
-            city:            template.bossSignature?.city      || '',
-            country:         template.bossSignature?.country   || '',
-            device:          template.bossSignature?.device    || '',
-            browser:         template.bossSignature?.browser   || '',
-            os:              template.bossSignature?.os        || '',
-            localSignedTime: template.bossSignature?.signedAt
-                               ? new Date(template.bossSignature.signedAt).toUTCString()
-                               : '',
-          },
-          // Employee party
-          {
-            name:            session.recipientName,
-            email:           session.recipientEmail,
-            designation:     session.recipientDesignation || '',
-            status:          'signed',
-            signedAt:        new Date(),
-            ipAddress:       ip,
-            city:            geo?.city     || '',
-            country:         geo?.country  || '',
-            region:          geo?.region   || '',
-            postalCode:      geo?.postalCode || '',
-            latitude:        geo?.latitude  || '',
-            longitude:       geo?.longitude || '',
-            timezone:        geo?.timezone  || '',
-            device:          deviceInfo?.device  || '',
-            browser:         deviceInfo?.browser || '',
-            os:              deviceInfo?.os      || '',
-            localSignedTime: localTime,
-          },
-        ],
-      };
-
-      // ── Generate PDF ────────────────────────────────────────
-      let signedFileUrl = null;
-      let pdfBuffer     = null;
-
-      if (pdfService?.generateEmployeePdf) {
-        try {
-          // ✅ BUG 1 FIX: Pass fieldsWithValues which has:
-          // - Correct % coordinates (x, y, width, height as 0-100 numbers)
-          // - signature fields have base64 dataUrl as value
-          // - text fields have string values
-          // pdfService.generateEmployeePdf → mergeSignaturesIntoPDF →
-          // renderField → fieldToAbsolute converts % → pts correctly
-          console.log('[employeeSign] Generating PDF with fields:', 
-            fieldsWithValues.map(f => ({
-              id:     f.id,
-              type:   f.type,
-              page:   f.page,
-              x:      f.x,
-              y:      f.y,
-              width:  f.width,
-              height: f.height,
-              hasValue: !!f.value,
-            }))
-          );
-
-          const pdfBytes = await Promise.race([
-            pdfService.generateEmployeePdf(
-              template.bossSignedFileUrl || template.fileUrl,
-              fieldsWithValues,
-              sessionDoc,
-            ),
-            new Promise((_, reject) =>
-              setTimeout(
-                () => reject(new Error('generateEmployeePdf timeout')),
-                25_000,
-              )
-            ),
-          ]);
-
-          pdfBuffer = Buffer.from(pdfBytes);
-
-          const pdfResult = await new Promise((resolve, reject) => {
-            const stream = cloudinary.uploader.upload_stream(
-              {
-                resource_type: 'raw',
-                folder:        'nexsign/employee-signed',
-                public_id:     `employee_${session._id}_${Date.now()}`,
-                format:        'pdf',
-              },
-              (err, result) => err ? reject(err) : resolve(result),
-            );
-            stream.end(pdfBuffer);
-          });
-
-          signedFileUrl              = pdfResult.secure_url;
-          session.signedFileUrl      = signedFileUrl;
-          session.signedFilePublicId = pdfResult.public_id;
-          await session.save();
-
-        } catch (e) {
-          console.error('[employeeSign] PDF generation failed:', e.message);
-        }
-      }
-
-      // ── Update template stats ───────────────────────────────
-      await template.recalculateStats();
-
-      // ── Completion email to employee ────────────────────────
-      try {
-        await sendCompletionEmail?.({
-          recipientEmail:       session.recipientEmail,
-          recipientName:        session.recipientName,
-          recipientDesignation: session.recipientDesignation || '',
-          documentTitle:        template.title,
-          pdfBuffer:            pdfBuffer || null,
-          signedPdfUrl:         signedFileUrl || template.bossSignedFileUrl || '',
-          companyName:          template.companyName || '',
-          companyLogoUrl:       template.companyLogo || '',
-          parties:              sessionDoc.parties,
-        });
-      } catch (e) {
-        console.error('[employeeSign] Completion email failed:', e.message);
-      }
-
-      // ── If all signed → owner + CC emails ──────────────────
-      const freshTemplate = await Template.findById(template._id);
-      if (freshTemplate?.status === 'completed') {
-        try {
-          // Owner notification
-          await sendCompletionEmail?.({
-            recipientEmail:  bossUser?.email,
-            recipientName:   bossUser?.full_name || 'Owner',
-            documentTitle:   template.title,
-            pdfBuffer:       null,
-            signedPdfUrl:    signedFileUrl || '',
-            companyName:     template.companyName || '',
-            companyLogoUrl:  template.companyLogo || '',
-            parties:         sessionDoc.parties,
-          });
-
-          // CC emails with PDF attachment
-          await Promise.allSettled(
-            (template.ccList || []).map(cc =>
-              sendCompletionEmail?.({
-                recipientEmail:  cc.email,
-                recipientName:   cc.name  || cc.email,
-                documentTitle:   template.title,
-                pdfBuffer:       pdfBuffer || null,
-                signedPdfUrl:    signedFileUrl || '',
-                companyName:     template.companyName || '',
-                companyLogoUrl:  template.companyLogo || '',
-                isCC:            true,
-                parties:         sessionDoc.parties,
-              })
-            )
-          );
-
-        } catch (e) {
-          console.error('[employeeSign] Owner/CC email failed:', e.message);
-        }
-      }
-
-      // ── Audit log ───────────────────────────────────────────
-      safeAuditLog({
-        action:         'employee_signed_template',
-        document_id:    template._id,
-        document_title: template.title,
-        performed_by: {
-          name:  session.recipientName,
-          email: session.recipientEmail,
-          role:  'employee',
-        },
-        device: {
-          device_name: deviceInfo.device,
-          browser:     deviceInfo.browser,
-          os:          deviceInfo.os,
-        },
-        location: {
-          ip_address: ip,
-          city:       geo?.city,
-          country:    geo?.country,
-          display:    geo?.display,
-        },
-        local_time: localTime,
-      });
-
-    } catch (err) {
-      console.error('[employeeSign background]', err.message, err.stack);
-    }
-  });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 10. EMPLOYEE DECLINE (public)
-// ════════════════════════════════════════════════════════════════
-const employeeDecline = asyncHandler(async (req, res) => {
-  const { reason = '' } = req.body;
-
-  const session = await TemplateSession.findByToken(req.params.token);
-  if (!session)
-    return res.status(404).json({ success: false, message: 'Invalid signing link.' });
-
-  if (['signed', 'declined', 'expired'].includes(session.status))
-    return res.status(400).json({
-      success: false,
-      message: `This document is already ${session.status}.`,
-    });
-
-  const ip         = getIP(req);
-  const ua         = req.headers['user-agent'] || '';
-  const geo        = await getGeoInfo(ip);
-  const deviceInfo = parseDevice(ua);
-
-  await session.markDeclined(reason, {
-    ipAddress: ip, userAgent: ua,
-    location: geo, deviceInfo,
-    localTime: new Date().toUTCString(),
-  });
-
-  const template = await Template.findById(
-    session.template._id || session.template
-  );
-  if (template) {
-    await template.recalculateStats();
-
-    emitSocket({ app: { get: () => null } }, 'template:declined', {
-      templateId:  String(template._id),
-      ownerId:     String(template.owner),
-      signerName:  session.recipientName,
-      signerEmail: session.recipientEmail,
-      reason,
-    });
-
-    try {
-      const owner = await User.findById(template.owner);
-      await sendDeclinedEmail?.({
-        ownerEmail:  owner?.email,
-        ownerName:   owner?.full_name || owner?.name,
-        signerName:  session.recipientName,
-        signerEmail: session.recipientEmail,
-        title:       template.title,
-        reason,
-      });
-    } catch (e) {
-      console.error('[employeeDecline] Email failed:', e.message);
-    }
-  }
-
-  return res.json({ success: true, message: 'Document declined.' });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 11. RESEND EMAIL
-// ════════════════════════════════════════════════════════════════
-const resendEmail = asyncHandler(async (req, res) => {
-  const template = await Template.findOne({
-    _id:       req.params.id,
-    owner:     req.user._id,
-    isDeleted: false,
-  });
-
-  if (!template)
-    return res.status(404).json({ success: false, message: 'Template not found.' });
-
-  const session = await TemplateSession.findOne({
-    _id:       req.params.sessionId,
-    template:  template._id,
-    isDeleted: { $ne: true },
-  });
-
-  if (!session)
-    return res.status(404).json({ success: false, message: 'Session not found.' });
-
-  if (session.status === 'signed')
-    return res.status(400).json({ success: false, message: 'Recipient has already signed.' });
-
-  if (session.status === 'expired') {
-    session.token     = generateToken();
-    session.status    = 'pending';
-    session.expiresAt = new Date(Date.now() + 7 * 86_400_000);
-  } else {
-    session.expiresAt = new Date(
-      Math.max(session.expiresAt.getTime(), Date.now()) + 7 * 86_400_000,
+    const finalPdfBuffer = await generateEmployeePdf(
+      template.bossSignedFileUrl,   // boss-signed PDF (from Cloudinary)
+      employeeFields,
+      docForAudit,
     );
+
+    // ── Upload final signed PDF ───────────────────────────────────────────────
+    const finalPdfUrl = await uploadPdfToCloud(
+      finalPdfBuffer,
+      'nexsign/signed',
+      `session-${session._id}-signed-${Date.now()}`,
+    );
+
+    // ── Update session ────────────────────────────────────────────────────────
+    session.status          = 'signed';
+    session.signedAt        = signedAt;
+    session.signatureDataUrl = signatureDataUrl;
+    session.fieldValues     = fieldValues;
+    session.signedFileUrl   = finalPdfUrl;
+    session.auditMeta       = employeeAudit;
+    await session.save();
+
+    // ── Check if ALL employees have signed → send CC emails ──────────────────
+    const allSigned     = allSessions.every(s =>
+      s._id.toString() === session._id.toString()
+        ? true  // current session just signed
+        : s.status === 'signed',
+    );
+
+    const templateFinalStatus = allSigned ? 'completed' : 'active';
+    if (allSigned) {
+      template.status      = 'completed';
+      template.completedAt = new Date();
+      await template.save();
+    }
+
+    // ── Send completion email to this employee with signed PDF attached ───────
+    const pdfAttachment = {
+      filename:    `${template.title.replace(/[^a-z0-9]/gi, '_')}_signed.pdf`,
+      content:     finalPdfBuffer,
+      contentType: 'application/pdf',
+    };
+
+    // Email to this employee (with their personal signed copy)
+    sendEmail('signing_complete_signer', {
+      to:          session.recipientEmail,
+      signerName:  session.recipientName,
+      docTitle:    template.title,
+      docSubtitle: getDocumentSubtitle(template.title),
+      senderName:  template.bossSignature?.name || 'Authoriser',
+      senderEmail: '',
+      companyName: template.companyName || 'NexSign',
+      companyLogo: template.companyLogo || '',
+    }, [pdfAttachment]).catch(e => console.error('[employeeSign] Employee email error:', e.message));
+
+    // Email to CC recipients if all signed
+    if (allSigned && template.ccList?.length) {
+      for (const cc of template.ccList) {
+        sendEmail('signing_complete_cc', {
+          to:          cc.email,
+          ccName:      cc.name,
+          signerName:  cc.name,
+          docTitle:    template.title,
+          docSubtitle: getDocumentSubtitle(template.title),
+          senderName:  template.bossSignature?.name || 'Authoriser',
+          companyName: template.companyName || 'NexSign',
+          companyLogo: template.companyLogo || '',
+        }, [pdfAttachment]).catch(e => console.error('[employeeSign] CC email error for', cc.email, e.message));
+      }
+    }
+
+    return ok(res, {
+      message:        'Document signed successfully.',
+      signedFileUrl:  finalPdfUrl,
+      templateStatus: templateFinalStatus,
+      // Send back updated session stats for optimistic dashboard update
+      sessionStats: {
+        sessionId: session._id,
+        status:    'signed',
+        signedAt:  signedAt.toISOString(),
+      },
+    });
+
+  } catch (e) {
+    console.error('[employeeSign]', e);
+    return err(res, e.message, 500);
   }
+}
 
-  await session.addReminder({ note: `Reminder by ${req.user.email}` });
-  await session.save();
-
-  await sendEmployeeSigningEmail?.({
-    employeeEmail:   session.recipientEmail,
-    employeeName:    session.recipientName,
-    documentTitle:   template.title,
-    signingLink:     `${FRONT()}/template-sign/${session.token}`,
-    bossName:        req.user.full_name || req.user.name || 'Your Manager',
-    bossDesignation: req.user.designation || '',
-    companyName:     template.companyName || '',
-    companyLogoUrl:  template.companyLogo || '',
-  });
-
-  return res.json({
-    success: true,
-    message: `Reminder sent to ${session.recipientEmail}.`,
-    reminderCount: session.reminderCount,
-  });
-});
-
-// ════════════════════════════════════════════════════════════════
-// 12. GET TEMPLATE PDF PROXY (public)
-// ════════════════════════════════════════════════════════════════
-const getTemplatePdf = asyncHandler(async (req, res) => {
+// ══════════════════════════════════════════════════════════════════════════════
+// 5. Employee Decline
+// POST /sign/template/:token/decline
+// Body: { reason }
+// ══════════════════════════════════════════════════════════════════════════════
+async function employeeDecline(req, res) {
   try {
-    const session = await TemplateSession.findOne({
-      token:     req.params.token,
-      isDeleted: { $ne: true },
-    }).populate('template', 'fileUrl bossSignedFileUrl title');
+    const { token } = req.params;
+    const session   = await TemplateSession.findOne({ token });
 
-    if (!session)
-      return res.status(404).send('Not found');
+    if (!session)               return err(res, 'Invalid link.', 404);
+    if (session.status === 'signed')    return err(res, 'Already signed.', 409);
+    if (session.status === 'declined')  return err(res, 'Already declined.', 409);
 
-    const tmpl  = session.template;
-    const url   = tmpl.bossSignedFileUrl || tmpl.fileUrl;
+    session.status     = 'declined';
+    session.declinedAt = new Date();
+    session.declineReason = req.body.reason || '';
+    await session.save();
 
-    if (!url) return res.status(404).send('PDF not available');
-
-    const response = await fetch(url);
-    if (!response.ok) return res.status(502).send('PDF fetch failed');
-
-    const buffer = await response.arrayBuffer();
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition',
-      `inline; filename="${tmpl.title || 'document'}.pdf"`);
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    return res.send(Buffer.from(buffer));
-
-  } catch (err) {
-    console.error('[getTemplatePdf]', err.message);
-    return res.status(500).send(err.message);
+    return ok(res, { message: 'Document declined.' });
+  } catch (e) {
+    console.error('[employeeDecline]', e);
+    return err(res, e.message, 500);
   }
-});
+}
 
-// ════════════════════════════════════════════════════════════════
-// EXPORTS
-// ════════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════════════════
+// 6. Resend Email to Single Employee
+// POST /templates/:id/sessions/:sid/resend
+// ══════════════════════════════════════════════════════════════════════════════
+async function resendEmail(req, res) {
+  try {
+    const template = await Template.findOne({ _id: req.params.id, createdBy: req.user._id });
+    if (!template) return err(res, 'Template not found.', 404);
+
+    const session = await TemplateSession.findOne({ _id: req.params.sid, templateId: template._id });
+    if (!session)  return err(res, 'Session not found.', 404);
+
+    // Invalidate old token, generate new one
+    const newToken   = generateToken();
+    const expiresAt  = new Date(Date.now() + TOKEN_EXP);
+
+    session.token    = newToken;
+    session.expiresAt = expiresAt;
+    session.status   = 'pending';
+    session.fieldValues = [];
+    session.reminderCount  = (session.reminderCount || 0) + 1;
+    session.lastReminderAt = new Date();
+    await session.save();
+
+    const signingUrl = `${BASE_URL}/sign/template/${newToken}`;
+    await sendEmail('resend_request', {
+      to:          session.recipientEmail,
+      signerName:  session.recipientName,
+      docTitle:    template.title,
+      docSubtitle: getDocumentSubtitle(template.title),
+      senderName:  req.user.name || req.user.email,
+      senderEmail: req.user.email,
+      companyName: template.companyName || 'NexSign',
+      companyLogo: template.companyLogo || '',
+      actionUrl:   signingUrl,
+      expiryDate:  expiresAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+    });
+
+    return ok(res, { message: 'Reminder sent.', session: session.toObject() });
+  } catch (e) {
+    console.error('[resendEmail]', e);
+    return err(res, e.message, 500);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 7. PDF Proxy (serves boss-signed PDF through backend to avoid Cloudinary CORS)
+// GET /sign/template/:token/pdf
+// ══════════════════════════════════════════════════════════════════════════════
+async function getPdfProxy(req, res) {
+  try {
+    const session  = await TemplateSession.findOne({ token: req.params.token });
+    if (!session)  return res.status(404).send('Not found');
+
+    const template = await Template.findById(session.templateId);
+    if (!template) return res.status(404).send('Not found');
+
+    const pdfUrl = template.bossSignedFileUrl || template.fileUrl;
+    const fetch  = require('node-fetch');
+    const resp   = await fetch(pdfUrl);
+    if (!resp.ok) return res.status(502).send('Upstream error');
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    resp.body.pipe(res);
+  } catch (e) {
+    console.error('[getPdfProxy]', e);
+    res.status(500).send(e.message);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 8. Get Templates list (with stats) — for dashboard
+// GET /templates
+// ══════════════════════════════════════════════════════════════════════════════
+async function getTemplates(req, res) {
+  try {
+    const { status, limit = 50, page = 1 } = req.query;
+
+    const filter = { createdBy: req.user._id };
+    if (status && status !== 'all') filter.status = status;
+
+    const [templates, total] = await Promise.all([
+      Template.find(filter)
+        .sort({ updatedAt: -1 })
+        .limit(Number(limit))
+        .skip((Number(page) - 1) * Number(limit))
+        .lean(),
+      Template.countDocuments(filter),
+    ]);
+
+    // Attach session stats to each template
+    const templateIds   = templates.map(t => t._id);
+    const allSessions   = await TemplateSession.find({ templateId: { $in: templateIds } }).lean();
+
+    const enriched = templates.map(t => {
+      const sesh    = allSessions.filter(s => String(s.templateId) === String(t._id));
+      const signed  = sesh.filter(s => s.status === 'signed').length;
+      const declined = sesh.filter(s => s.status === 'declined').length;
+      const pending  = sesh.length - signed - declined;
+      return {
+        ...t,
+        stats: { totalRecipients: sesh.length, signed, declined, pending },
+      };
+    });
+
+    // Overview stats for dashboard header
+    const allOwn   = await Template.find({ createdBy: req.user._id }).lean();
+    const statCounts = {
+      total:        allOwn.length,
+      boss_pending: allOwn.filter(t => t.status === 'boss_pending').length,
+      active:       allOwn.filter(t => t.status === 'active').length,
+      completed:    allOwn.filter(t => t.status === 'completed').length,
+      draft:        allOwn.filter(t => t.status === 'draft').length,
+    };
+
+    return ok(res, { templates: enriched, stats: statCounts, total, page: Number(page) });
+  } catch (e) {
+    console.error('[getTemplates]', e);
+    return err(res, e.message, 500);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 9. Get Single Template with Sessions
+// GET /templates/:id
+// ══════════════════════════════════════════════════════════════════════════════
+async function getTemplate(req, res) {
+  try {
+    const template = await Template.findOne({ _id: req.params.id, createdBy: req.user._id }).lean();
+    if (!template) return err(res, 'Not found.', 404);
+
+    const sessions     = await TemplateSession.find({ templateId: template._id }).sort({ createdAt: 1 }).lean();
+    const signed       = sessions.filter(s => s.status === 'signed').length;
+    const declined     = sessions.filter(s => s.status === 'declined').length;
+    const sessionStats = { total: sessions.length, signed, declined, pending: sessions.length - signed - declined };
+
+    return ok(res, { template, sessions, sessionStats });
+  } catch (e) {
+    console.error('[getTemplate]', e);
+    return err(res, e.message, 500);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 10. Delete Template
+// DELETE /templates/:id
+// ══════════════════════════════════════════════════════════════════════════════
+async function deleteTemplate(req, res) {
+  try {
+    const template = await Template.findOneAndDelete({ _id: req.params.id, createdBy: req.user._id });
+    if (!template) return err(res, 'Not found.', 404);
+    await TemplateSession.deleteMany({ templateId: req.params.id });
+    return ok(res, { message: 'Deleted.' });
+  } catch (e) {
+    console.error('[deleteTemplate]', e);
+    return err(res, e.message, 500);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 module.exports = {
   createTemplate,
-  getTemplates,
-  getTemplate,
-  updateTemplate,
-  deleteTemplate,
   bossSign,
-  getTemplateSessions,
-  getSessionByToken,
+  getSession,
   employeeSign,
   employeeDecline,
   resendEmail,
-  getTemplatePdf,
+  getPdfProxy,
+  getTemplates,
+  getTemplate,
+  deleteTemplate,
 };
