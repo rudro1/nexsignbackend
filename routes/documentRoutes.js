@@ -656,36 +656,39 @@ router.post(
       });
 
       const first = doc.parties[0];
-      await sendSigningEmail({
-        recipientEmail:       first.email,
-        recipientName:        first.name,
-        recipientDesignation: first.designation,
-        senderName:           req.user.full_name,
-        senderDesignation:    req.user.designation,
-        documentTitle:        doc.title,
-        signingLink:          `${FRONT()}/sign/${firstToken}`,
-        companyLogoUrl:       doc.companyLogo,
-        companyName:          doc.companyName,
-        partyNumber:          1,
-        totalParties:         parsedParties.length,
-        message:              doc.message,
-        ccList:               parsedCC,
-      });
+      try {
+        await sendSigningEmail({
+          recipientEmail:       first.email,
+          recipientName:        first.name,
+          recipientDesignation: first.designation,
+          senderName:           req.user.full_name,
+          senderDesignation:    req.user.designation,
+          documentTitle:        doc.title,
+          signingLink:          `${FRONT()}/sign/${firstToken}`,
+          companyLogoUrl:       doc.companyLogo,
+          companyName:          doc.companyName,
+          partyNumber:          1,
+          totalParties:         parsedParties.length,
+          message:              doc.message,
+          ccList:               parsedCC,
+        });
+      } catch (emailErr) {
+        console.error('[upload-and-send] First email failed:', emailErr.message);
+      }
 
-      Promise.allSettled(
-        parsedCC.map(cc =>
-          sendCCEmail({
-            recipientEmail:       cc.email,
-            recipientName:        cc.name,
-            recipientDesignation: cc.designation,
-            documentTitle:        doc.title,
-            senderName:           req.user.full_name,
-            senderDesignation:    req.user.designation,
-            companyLogoUrl:       doc.companyLogo,
-            companyName:          doc.companyName,
-            parties:              parsedParties,
-          })
-        )
+      // Send CC emails without blocking the response
+      parsedCC.map(cc =>
+        sendCCEmail({
+          recipientEmail:       cc.email,
+          recipientName:        cc.name,
+          recipientDesignation: cc.designation,
+          documentTitle:        doc.title,
+          senderName:           req.user.full_name,
+          senderDesignation:    req.user.designation,
+          companyLogoUrl:       doc.companyLogo,
+          companyName:          doc.companyName,
+          parties:              parsedParties,
+        }).catch(e => console.error('[upload-and-send] CC email failed:', e.message))
       );
 
       emitSocket(req, 'document:created', {
@@ -990,21 +993,25 @@ router.post('/sign/submit', async (req, res) => {
       });
 
       const nextParty = doc.parties[nextIdx];
-      await sendSigningEmail({
-        recipientEmail:       nextParty.email,
-        recipientName:        nextParty.name,
-        recipientDesignation: nextParty.designation,
-        senderName:           party.name,
-        senderDesignation:    party.designation,
-        documentTitle:        doc.title,
-        signingLink:          `${FRONT()}/sign/${nextToken}`,
-        companyLogoUrl:       doc.companyLogo,
-        companyName:          doc.companyName,
-        partyNumber:          nextIdx + 1,
-        totalParties:         doc.parties.length,
-        message:              doc.message,
-        ccList:               doc.ccList,
-      });
+      try {
+        await sendSigningEmail({
+          recipientEmail:       nextParty.email,
+          recipientName:        nextParty.name,
+          recipientDesignation: nextParty.designation,
+          senderName:           party.name,
+          senderDesignation:    party.designation,
+          documentTitle:        doc.title,
+          signingLink:          `${FRONT()}/sign/${nextToken}`,
+          companyLogoUrl:       doc.companyLogo,
+          companyName:          doc.companyName,
+          partyNumber:          nextIdx + 1,
+          totalParties:         doc.parties.length,
+          message:              doc.message,
+          ccList:               doc.ccList,
+        });
+      } catch (emailErr) {
+        console.error('[sign/submit] Next signer email failed:', emailErr.message);
+      }
 
       emitSocket(req, 'document:party_signed', {
         documentId: String(doc._id),

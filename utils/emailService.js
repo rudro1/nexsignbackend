@@ -2379,12 +2379,15 @@ const nodemailer = require('nodemailer');
 // ─── Transport (configure via env) ───────────────────────────────────────────
 const transporter = nodemailer.createTransport({
   host:   process.env.SMTP_HOST   || 'smtp.gmail.com',
-  port:   parseInt(process.env.SMTP_PORT || '587'),
-  secure: process.env.SMTP_SECURE === 'true',
+  port:   parseInt(process.env.SMTP_PORT || '465'),
+  secure: process.env.SMTP_SECURE !== 'false', // Default to true for port 465
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
+  pool: true, // Use pooling for better performance on Vercel
+  maxConnections: 3,
+  maxMessages: 10,
 });
 
 // ─── Document subtitle auto-detection ────────────────────────────────────────
@@ -2418,7 +2421,7 @@ const EMAIL_CONFIG = {
     hasPdf:      false,
   },
 
-  signing_complete_signer: {
+  completion: {
     subject:     d => `"${d.docTitle}" has been fully signed — Your copy is attached`,
     heroIcon:    'check',
     iconBg:      '#F0FDF4',
@@ -2428,7 +2431,7 @@ const EMAIL_CONFIG = {
     hasPdf:      true,
   },
 
-  signing_complete_cc: {
+  cc_notification: {
     subject:     d => `[Copy] "${d.docTitle}" — Fully executed document`,
     heroIcon:    'copy',
     iconBg:      '#FAF5FF',
@@ -2743,16 +2746,74 @@ async function sendEmail(type, data, attachments = []) {
 
   const subject = config.subject(data);
 
-  await transporter.sendMail({
-    from:        `"${data.companyName || 'NexSign'} via NexSign" <${process.env.SMTP_FROM || 'noreply@nexsign.app'}>`,
-    replyTo:     data.senderEmail || undefined,
-    to:          data.to,
-    subject,
-    html,
-    attachments,
-  });
-
-  console.log(`[emailService] Sent '${type}' to ${data.to} | Subject: ${subject}`);
+  try {
+    await transporter.sendMail({
+      from:        `"${data.companyName || 'NexSign'} via NexSign" <${process.env.SMTP_USER || process.env.SMTP_FROM || 'noreply@nexsign.app'}>`,
+      replyTo:     data.senderEmail || undefined,
+      to:          data.to,
+      subject,
+      html,
+      attachments,
+    });
+    console.log(`[emailService] Sent '${type}' to ${data.to} | Subject: ${subject}`);
+  } catch (err) {
+    console.error(`[emailService] ERROR sending '${type}' to ${data.to}:`, err.message);
+    // Don't rethrow to avoid crashing Vercel functions if one email fails
+  }
 }
 
-module.exports = { sendEmail, EMAIL_CONFIG, getDocumentSubtitle, buildEmailHtml };
+// ════════════════════════════════════════════════════════════════
+// WRAPPER FUNCTIONS (Used by Routes)
+// ════════════════════════════════════════════════════════════════
+
+async function sendSigningEmail(data) {
+  return sendEmail('signing_request', {
+    to:           data.recipientEmail,
+    recipientName: data.recipientName,
+    senderName:    data.senderName,
+    documentTitle: data.documentTitle,
+    signingLink:   data.signingLink,
+    companyLogo:   data.companyLogoUrl,
+    companyName:   data.companyName,
+  });
+}
+
+async function sendCompletionEmail(data) {
+  const attachments = [];
+  if (data.pdfBuffer) {
+    attachments.push({
+      filename: `${data.documentTitle || 'document'}_signed.pdf`,
+      content:  data.pdfBuffer,
+    });
+  }
+
+  return sendEmail(data.isCC ? 'cc_notification' : 'completion', {
+    to:           data.recipientEmail,
+    recipientName: data.recipientName,
+    documentTitle: data.documentTitle,
+    signedPdfUrl:  data.signedPdfUrl,
+    companyLogo:   data.companyLogoUrl,
+    companyName:   data.companyName,
+  }, attachments);
+}
+
+async function sendCCEmail(data) {
+  return sendEmail('cc_notification', {
+    to:           data.recipientEmail,
+    recipientName: data.recipientName,
+    senderName:    data.senderName,
+    documentTitle: data.documentTitle,
+    companyLogo:   data.companyLogoUrl,
+    companyName:   data.companyName,
+  });
+}
+
+module.exports = { 
+  sendEmail, 
+  sendSigningEmail,
+  sendCompletionEmail,
+  sendCCEmail,
+  EMAIL_CONFIG, 
+  getDocumentSubtitle, 
+  buildEmailHtml 
+};
